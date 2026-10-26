@@ -149,6 +149,106 @@ def cmd_get(args):
                 f.write(updated)
             print_banner(f"Recorded dependency in \033[1;32mube.mod\033[0m")
 
+# --- Subcommand: ube vendor ---
+def cmd_vendor(args):
+    """
+    Copies all dependencies from the global cache (~/.ube/pkg) into ./vendor/.
+    Once ./vendor/ exists, ubec reads exclusively from it — zero internet required.
+    Safe to commit into your own repository for fully reproducible/offline builds.
+    """
+    if not os.path.exists("ube.mod"):
+        print_error("No ube.mod found. Run this command from the root of a Ube project.")
+        return
+
+    with open("ube.mod", "r") as f:
+        content = f.read()
+
+    # Parse all entries inside require ( ... )
+    m = re.search(r"require\s*\(([^)]*)\)", content, re.DOTALL)
+    if not m:
+        print_banner("No dependencies found in ube.mod.")
+        return
+
+    deps = [line.strip() for line in m.group(1).splitlines() if line.strip()]
+    if not deps:
+        print_banner("Dependency list is empty — nothing to vendor.")
+        return
+
+    vendor_dir = os.path.join(os.getcwd(), "vendor")
+    os.makedirs(vendor_dir, exist_ok=True)
+
+    import shutil
+    for dep in deps:
+        rel_path = sanitize_pkg_path(dep)
+        src = os.path.join(CACHE_DIR, rel_path)
+        dst = os.path.join(vendor_dir, rel_path)
+
+        if not os.path.exists(src):
+            print_error(f"Package not in cache: {dep}")
+            print(f"  Run: \033[1;33mube get {dep}\033[0m first.")
+            continue
+
+        if os.path.exists(dst):
+            shutil.rmtree(dst)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copytree(src, dst)
+        print_banner(f"Vendored \033[1;32m{rel_path}\033[0m -> vendor/{rel_path}")
+
+    print_banner(f"All dependencies vendored to \033[1;32m./vendor/\033[0m")
+    print("  Tip: commit ./vendor/ to your repo for fully offline, reproducible builds.")
+
+# --- Subcommand: ube clean ---
+def cmd_clean(args):
+    """
+    Cache management:
+      --dry-run   Show cache size without deleting anything.
+      --cache     Delete the entire global package cache (~/.ube/pkg).
+    """
+    import shutil
+
+    dry_run = "--dry-run" in args
+    wipe_cache = "--cache" in args
+
+    if not dry_run and not wipe_cache:
+        print(
+            "Usage:\n"
+            "  \033[1;32mube clean --dry-run\033[0m   Show cache size without deleting\n"
+            "  \033[1;32mube clean --cache\033[0m     Wipe the global package cache\n"
+        )
+        return
+
+    # Calculate cache size
+    total_bytes = 0
+    pkg_count = 0
+    if os.path.exists(CACHE_DIR):
+        for dirpath, dirnames, filenames in os.walk(CACHE_DIR):
+            for fname in filenames:
+                total_bytes += os.path.getsize(os.path.join(dirpath, fname))
+        # Count top-level package entries (depth = host/user/repo = 3 levels)
+        for root, dirs, _ in os.walk(CACHE_DIR):
+            depth = root.replace(CACHE_DIR, "").count(os.sep)
+            if depth == 2:
+                pkg_count += len(dirs)
+
+    size_mb = total_bytes / (1024 * 1024)
+
+    if dry_run:
+        print_banner(
+            f"Global cache: \033[1;33m{size_mb:.1f} MB\033[0m "
+            f"across \033[1;33m{pkg_count}\033[0m package(s) in \033[1;30m{CACHE_DIR}\033[0m"
+        )
+        print("  Run \033[1;32mube clean --cache\033[0m to free this space.")
+        return
+
+    if wipe_cache:
+        if os.path.exists(CACHE_DIR):
+            shutil.rmtree(CACHE_DIR)
+            print_banner(
+                f"Cleared \033[1;32m{size_mb:.1f} MB\033[0m from global cache \033[1;30m{CACHE_DIR}\033[0m"
+            )
+        else:
+            print_banner("Cache is already empty.")
+
 # --- Subcommand: ube run [file.ube] ---
 def cmd_run(args):
     target = args[0] if args else "main.ube"
@@ -214,10 +314,13 @@ def main():
     if len(sys.argv) < 2:
         print("""\033[1;35m🍠 Ube Programming Language Toolchain\033[0m
 Commands:
-  \033[1;32mube new <name>\033[0m       Create a new project
-  \033[1;32mube run [file]\033[0m       Compile and run instantly
-  \033[1;32mube build [options]\033[0m  Build a native static binary (-o <bin>, --static)
-  \033[1;32mube get <package>\033[0m    Download decentralized Git package
+  \033[1;32mube new <name>\033[0m           Create a new project
+  \033[1;32mube run [file]\033[0m           Compile and run instantly
+  \033[1;32mube build [options]\033[0m      Build a native static binary (-o <bin>, --static)
+  \033[1;32mube get <package>\033[0m        Download package to global cache (~/.ube/pkg)
+  \033[1;32mube vendor\033[0m               Copy all deps into ./vendor/ for offline builds
+  \033[1;32mube clean --dry-run\033[0m      Show global cache disk usage
+  \033[1;32mube clean --cache\033[0m        Wipe the global package cache
 """)
         return
 
@@ -232,6 +335,10 @@ Commands:
         cmd_build(args)
     elif subcmd == "get":
         cmd_get(args)
+    elif subcmd == "vendor":
+        cmd_vendor(args)
+    elif subcmd == "clean":
+        cmd_clean(args)
     else:
         print_error(f"Unknown command '{subcmd}'")
 

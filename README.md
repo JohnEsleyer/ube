@@ -596,7 +596,10 @@ The `ube` script (in the repo root) is a single-file CLI tool — the modern, un
 | `ube new <name>` | Scaffold a new project with `ube.mod` and `main.ube` |
 | `ube run [file]` | Transpile and execute instantly (cleans up after itself) |
 | `ube build [opts]` | Build a native binary (`-o <name>`, `--static`) |
-| `ube get <pkg>` | Download a decentralized Git package |
+| `ube get <pkg>` | Download a package to the global cache (`~/.ube/pkg`) |
+| `ube vendor` | Copy all deps into `./vendor/` for offline/reproducible builds |
+| `ube clean --dry-run` | Show global cache disk usage without deleting anything |
+| `ube clean --cache` | Wipe the global package cache to free disk space |
 
 #### Quick Setup
 ```bash
@@ -618,6 +621,9 @@ ube run
 
 # 4. Ship a single static binary
 ube build --static -o my_app
+
+# 5. Vendor all deps for offline/reproducible builds
+ube vendor
 ```
 
 ---
@@ -635,6 +641,73 @@ import "git.mycompany.com/embedded/sensor-driver"
 import "alice.dev/vector-math"
 import "mycompany.io/telemetry"
 ```
+
+#### Package Storage: Global Cache by Default
+
+By default, `ube get` stores packages in a **shared machine-wide cache** — the same proven model used by Cargo (`~/.cargo/registry`) and Go (`~/go/pkg/mod`):
+
+```
+~/.ube/pkg/
+├── github.com/
+│   └── raysan5/
+│       └── raylib-ube/          ← shared across all projects
+└── codeberg.org/
+    └── developer/
+        └── fast-json/
+```
+
+Your project directory stays **clean and tiny** (under 10 KB):
+
+```
+my_game/
+├── ube.mod        ← human-readable dependency list
+├── ube.lock       ← exact Git commit hashes for reproducible builds
+├── main.ube
+└── player.ube
+```
+
+Ten projects using the same library consume **zero extra disk space**. If you already have a package cached from another project, `ube run` starts immediately with no download.
+
+#### `ube vendor` — Offline & Reproducible Builds
+
+For game studios, aerospace teams, and CI pipelines that cannot rely on external internet access, one command localises all dependencies:
+
+```bash
+ube vendor
+```
+
+This copies the exact source of every dependency from `~/.ube/pkg` into a local `./vendor/` folder:
+
+```
+my_game/
+├── ube.mod
+├── ube.lock
+├── main.ube
+└── vendor/                            ← everything copied locally
+    ├── github.com/raysan5/raylib-ube/
+    └── codeberg.org/developer/fast-json/
+```
+
+When a `./vendor/` folder is present, `ubec` reads **exclusively from it** and ignores the internet completely. Commit `./vendor/` to your private repository and the project will build on a fully offline machine — even 20 years from now.
+
+#### Cache Management
+
+```bash
+# Show how much disk space the global cache is using
+ube clean --dry-run
+
+# Free disk space by wiping the global cache
+ube clean --cache
+```
+
+#### Comparison Across Languages
+
+| Language | Default package location | Vendoring? | Duplicate disk waste? |
+| :--- | :--- | :--- | :--- |
+| **Node.js** | `./node_modules` (local) | No | **Severe** (gigabytes of duplicates) |
+| **Rust (Cargo)** | `~/.cargo/registry` (global) | Yes (`cargo vendor`) | None |
+| **Go** | `~/go/pkg/mod` (global) | Yes (`go mod vendor`) | None |
+| **🍠 Ube** | **`~/.ube/pkg` (global)** | **Yes (`ube vendor`)** | **None** |
 
 #### Resolution Decision Tree
 
@@ -664,7 +737,7 @@ import "mycompany.io/telemetry"
 
 #### Vanity Domain Support
 
-If you own a domain, you can brand your packages cleanly without hosting a custom server. Add one `<meta>` tag to your page's `<head>`:
+If you own a domain, brand your packages cleanly without hosting a custom server — just add one `<meta>` tag:
 
 ```html
 <!-- https://alice.dev/vector-math -->
