@@ -411,9 +411,17 @@ class UbeTranspiler:
 
     # --- main lowering -------------------------------------------------
     def compile(self):
-        lines = [strip_line_comment(line).strip()
-                 for line in self.source.splitlines()]
-        lines = [line for line in lines if line]
+        raw_lines = self.source.splitlines()
+        lines = []
+        for raw in raw_lines:
+            # Keep the tuber scope marker: comments are stripped below, but
+            # this one changes code generation (it emits the watermark restore).
+            if re.match(r"^\s*}\s*//\s*tuber\b", raw):
+                lines.append("} // tuber")
+                continue
+            line = strip_line_comment(raw).strip()
+            if line:
+                lines.append(line)
 
         # Ube is direct-style only: reject colored concurrency outright.
         for line in lines:
@@ -555,7 +563,17 @@ class UbeTranspiler:
                 i += 1
                 continue
 
-            # 9. match <enum> { Variant(bind, ..) => stmt, ... }
+            # 9. Loop control
+            if line == "break":
+                self.emit("break;")
+                i += 1
+                continue
+            if line == "continue":
+                self.emit("continue;")
+                i += 1
+                continue
+
+            # 10. match <enum> { Variant(bind, ..) => stmt, ... }
             m_match = re.match(r"match\s+(\w+)\s*\{$", line)
             if m_match:
                 mvar = m_match.group(1)
@@ -917,6 +935,14 @@ class UbeTranspiler:
                 i += 1
                 continue
 
+            # while <cond> {
+            m_while = re.match(r"while\s+(.+?)\s*\{$", line)
+            if m_while:
+                self.emit("while (%s) {" % m_while.group(1).strip())
+                self.indent += 1
+                i += 1
+                continue
+
             # 22. if <cond> {
             m_if = re.match(r"if\s+(.+?)\s*\{$", line)
             if m_if:
@@ -962,6 +988,15 @@ class UbeTranspiler:
                 else:
                     self.emit("int32_t %s = %s;" % (var_name, expr))
                     self.var_types[var_name] = "i32"
+            elif re.match(r"^\w+\s*(\+=|-=|\*=|/=|%=)\s*.+$", line):
+                m = re.match(
+                    r"^(\w+)\s*(\+=|-=|\*=|/=|%=)\s*(.+)$", line)
+                if m:
+                    self.emit("%s %s %s;"
+                              % (m.group(1), m.group(2), m.group(3)))
+            elif re.match(r"^\w+\s*=(?!=)\s*.+$", line):
+                var_name, _, expr = line.partition("=")
+                self.emit("%s = %s;" % (var_name.strip(), expr.strip()))
             elif ".push(" in line:
                 m = re.match(r"(\w+)\.push\((.*)\)", line)
                 if m:

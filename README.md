@@ -63,6 +63,8 @@ tuber.top = watermark; // All memory reclaimed instantly!
 In Rust, calling `vec.push()` invalidates all existing references into that vector.  
 In Ube, arrays grow monotonically inside the Tuber without moving existing items. **References to elements inside an array remain valid even as you push more items to it.**
 
+> **Prototype note:** the current compiler only implements `[]i32` slices and does not yet expose reference types (`&T`). This subsection describes the intended invariant, not a feature you can use today.
+
 ### 3. Caller-Allocated Returns
 Instead of using escape analysis to dump returned values onto a GC heap (like Go does), Ube’s compiler automatically redirects function return allocations into the **caller's Tuber**. Returning dynamic collections is 100% zero-copy.
 
@@ -242,7 +244,67 @@ Cancellation is explicit rather than an implicit future drop: spawn the work, th
 
 ---
 
-## 6. Architectural Pipeline
+## 6. Game Development: Frame Arenas and Flat Data
+
+Ube’s memory model maps onto the scratchpad pattern used by game engines: allocate temporary data for one frame, then reclaim all of it with a single store. There is no collector to trigger a hitch, and no per-frame `malloc`/`free` when the data is built inside a `tuber` block.
+
+```ube
+fn simulate_particles(frame: i32) -> i32 {
+    let mut particles = []i32{}
+    let mut i = 0
+    while i < 4 {
+        particles.push(frame * 10 + i)
+        i = i + 1
+    }
+    let mut total = 0
+    for p in particles {
+        total = total + p
+    }
+    return total
+}
+
+fn main() {
+    let mut frame = 0
+    while frame < 3 {
+        tuber {
+            let total = simulate_particles(frame)
+            println(total)
+        } // tuber: the whole frame scratchpad is reclaimed here
+        frame = frame + 1
+    }
+}
+```
+
+This is the runnable `test_game_loop.ube`. The generated C saves a watermark on entering the `tuber` block and restores it on exit — one pointer write, no scanning.
+
+### What works today
+
+| Capability | Status |
+| :--- | :--- |
+| Per-frame arenas via `tuber { ... }` | **Yes** — save/restore watermark |
+| Contiguous dynamic arrays | **Yes** for `[]i32` |
+| `while` loops, assignment, `break`, `continue` | **Yes** |
+| Flat structs, enums, and `match` | **Yes** |
+| Bounded, predictable frame cost (no GC) | **Yes** — no collector exists |
+| Generic slices `[]T` for structs/floats | **No** — roadmap |
+| `extern fn`, pointer types, `.ptr` | **No** — roadmap |
+| `Pool[T]` / generational slot pools | **No** — design/library stage |
+| References into a growing array | **Not exposed** — design intent only |
+| Real windowing/input/event loop | **No** — pthread prototype only |
+
+The demo uses `[]i32` as the particle buffer because generic `[]T` is not implemented yet. The essay’s `[]Particle`, `[]Enemy`, and `Pool[Entity]` examples are the target design, not current syntax.
+
+### C interop is a target, not a shipped feature
+
+Generated Ube code is C99/GNU-C, so the data model is compatible with C libraries. But there is currently no `extern fn`, `*u8`, or string `.ptr`, so the raylib/SDL2 example cannot be compiled by this prototype. When the FFI surface lands, flat structs and slices should cross the boundary without marshaling; until then, treat those snippets as design targets.
+
+### An honest comparison
+
+Ube’s advantage is not that other languages cannot make games. C++ and Rust also achieve no-GC frame arenas; C# and Go can avoid most GC hitches with pooling and careful allocation. Ube’s bet is that the arena pattern is the **default memory model** instead of a hand-rolled subsystem, with a smaller, Go-like surface than C++ or Rust. The remaining gap is implementation: generic slices, FFI, references, slot pools, and a non-pthread scheduler.
+
+---
+
+## 7. Architectural Pipeline
 
 Ube uses a high-velocity transpiler architecture targeting ANSI C99 as universal intermediate representation:
 
@@ -276,19 +338,21 @@ Ube uses a high-velocity transpiler architecture targeting ANSI C99 as universal
 
 ---
 
-## 7. Implementation Roadmap
+## 8. Implementation Roadmap
 
 ### Phase 1: The Core Foundation (Current Milestone)
 - [x] Minimal Tuber runtime (`ube_runtime.h`) with watermark save/restore.
 - [x] End-to-end prototype compiler emitting C (`ubec.py`).
 - [x] Basic types: `i32`, `bool`, and dynamic slices `[]i32`.
 - [x] Monotone `push()` semantics and `tuber { ... }` scoped memory resets.
+- [x] `while` loops, assignment/compound assignment, `break`, and `continue`.
 
 ### Phase 2: Ergonomics & Object Model
 - [x] Go-style receiver functions: `fn (s Slice) sum() -> i32`.
 - [x] Struct declarations and field access.
 - [x] Tuber-allocated `string` values: literals, `+` concatenation, printing.
 - [x] Implicit caller-allocated return values (`fn make_list() -> []i32`).
+- [ ] Generic slices `[]T` for structs, floats, and other element types.
 
 ### Phase 3: Error Handling & Modern Types
 - [x] Result types (`i32 ! string`) with error bubbling via the `?` operator.
@@ -315,7 +379,7 @@ Ube uses a high-velocity transpiler architecture targeting ANSI C99 as universal
 
 ---
 
-## 8. Quickstart (Testing the Prototype)
+## 9. Quickstart (Testing the Prototype)
 
 ### Prerequisites
 * Python 3.8+ (for running the compiler prototype)
@@ -335,7 +399,8 @@ Also try `demo.ube` (slices and Tuber scopes), `test_strings.ube`
 (Tuber-allocated strings and concatenation), `test_v3.ube`
 (tagged enums, `match`, and zero-GC dynamic returns), `test_v4.ube`
 (Vines, `Chan[T]`, and `spawn`), `test_optionals.ube` (optionals,
-`if let`, and optional `or_else`), and `test_full.ube` (the grand tour:
+`if let`, and optional `or_else`), `test_game_loop.ube` (per-frame
+`tuber` arenas), and `test_full.ube` (the grand tour:
 concurrency, optionals, `or_else`, enums, and `match`):
 
 ```bash
@@ -353,7 +418,7 @@ with `-pthread`.
 
 ---
 
-## 9. Guiding Principles
+## 10. Guiding Principles
 
 1. **Pragmatism Over Purity:** If a feature makes the compiler slightly more complex but saves the developer hours of frustration, we implement it.
 2. **Explicit Intent, Implicit Safety:** Mutability is explicit (`let mut`), but memory cleanup is implicit and guaranteed.
@@ -363,6 +428,6 @@ with `-pthread`.
 
 ---
 
-## 10. License
+## 11. License
 
 Ube is open-source software licensed under the [MIT License](LICENSE).

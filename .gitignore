@@ -10,6 +10,8 @@ ube_v4_enum
 ube_v5_opt
 ube_optionals
 ube_full
+ube_game_loop
+ube_while
 ube_prose
 ube_strings
 ube_err
