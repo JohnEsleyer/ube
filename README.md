@@ -624,29 +624,100 @@ ube build --static -o my_app
 
 ### 11.3 Decentralized Package Management
 
-Ube uses **direct Git imports** — no central package registry required. Packages are referenced by their URL path and fetched with `ube get`:
+Ube uses **direct Git imports** — no central package registry required. Packages are referenced by their URL path and fetched with `ube get`. The resolver supports **any Git host on Earth**: GitHub, GitLab, Codeberg, Sourcehut, Gitea, Forgejo, corporate intranet servers, and custom vanity domains.
 
 ```ube
-// Direct Git repository imports
-import "github.com/raysan5/raylib-ube"
-import "std/fmt"
+// Any public forge or self-hosted server
+import "codeberg.org/developer/game-engine"
+import "git.mycompany.com/embedded/sensor-driver"
+
+// Custom vanity domains
+import "alice.dev/vector-math"
+import "mycompany.io/telemetry"
 ```
 
-The `ube.mod` manifest tracks dependencies:
+#### Resolution Decision Tree
+
+```
+[ Import path: "mydomain.dev/fast-json" ]
+                      │
+                      ▼
+         Is it an explicit Git/SSH URL?
+        (git@..., ssh://..., https://...)
+               │              │
+              YES              NO
+               │              ▼
+               │   Query https://mydomain.dev/fast-json?ube-get=1
+               │   Check for <meta name="ube-import">
+               │              │
+               │        ┌─────┴─────┐
+               │       YES           NO
+               │        │            │
+               │        ▼            ▼
+               │   Use clone URL   Fallback:
+               │   from meta tag   https://mydomain.dev/fast-json.git
+               └────────┬──────────┘
+                        │
+                        ▼
+           git clone -> ~/.ube/pkg/mydomain.dev/fast-json
+```
+
+#### Vanity Domain Support
+
+If you own a domain, you can brand your packages cleanly without hosting a custom server. Add one `<meta>` tag to your page's `<head>`:
+
+```html
+<!-- https://alice.dev/vector-math -->
+<head>
+    <meta name="ube-import" content="alice.dev/vector-math git https://gitlab.com/alice/vector-math-repo.git">
+</head>
+```
+
+> **Go vanity URLs work too.** Because Ube also accepts `<meta name="go-import">`, every existing Go package vanity domain works in Ube immediately with zero changes.
+
+#### Private & Self-Hosted Authentication
+
+Git's native credential system handles authentication transparently. Ube never touches or logs secrets.
+
+```bash
+# SSH key (via ssh-agent) — enterprise/private repos
+ube get git@git.corp.internal:engine/physics.git
+
+# HTTPS with credential helper / ~/.netrc — Gitea, Forgejo, corporate GitLab
+ube get git.mycompany.com/embedded/firmware-core
+```
+
+#### Concrete Examples
+
+```bash
+# Any public forge
+ube get codeberg.org/ziglings/core
+ube get gitlab.com/libeigen/eigen
+ube get git.sr.ht/~sircmpwn/openring
+
+# Self-hosted Gitea/Forgejo on a private network (custom port supported)
+ube get gitea.homelab.local:3000/games/retro-renderer
+
+# Direct SSH for private enterprise repos
+ube get git@git.mycompany.com:backend/payment-api.git
+
+# Custom vanity domain
+ube get mydomain.io/physics
+```
+
+The `ube.mod` manifest tracks all dependencies:
 
 ```ini
 module game_app
 
 require (
     github.com/raysan5/raylib-ube
-    gitlab.com/embedded/sensor-driver
+    codeberg.org/developer/game-engine
+    git@git.mycompany.com:backend/payment-api.git
 )
 ```
 
-Under the hood, `ube get github.com/user/repo`:
-1. Clones the repo to `~/.ube/pkg/github.com/user/repo` (shallow clone, fast).
-2. Records it in the local `ube.mod`.
-3. On build, `ubec` resolves the import to the cached source and inlines it into the final static binary — **no ABI mismatches, no version lock-in hell**.
+All fetched packages land in `~/.ube/pkg/` and are inlined by `ubec` into the final static binary — **no ABI mismatches, no registry downtime, no version lock-in**.
 
 ---
 
