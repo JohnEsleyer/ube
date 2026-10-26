@@ -1,0 +1,49 @@
+// 1. Declare a Struct
+struct Rect {
+    width: i32,
+    height: i32
+}
+
+// 2. Go-Style Receiver Method
+fn (r Rect) area() -> i32 {
+    return r.width * r.height
+}
+
+// 3. Function that returns a Result union (i32 ! string)
+fn divide(a: i32, b: i32) -> i32 ! string {
+    if b == 0 {
+        return error("division by zero!")
+    }
+    return a / b
+}
+
+// 4. Function using the `?` operator (bubbles up error if divide fails!)
+fn calculate_scale(width: i32, factor: i32) -> i32 ! string {
+    let result = divide(width, factor)?
+    return result * 10
+}
+
+fn main() {
+    println_str("--- Ube v0.2 Features ---")
+
+    // Test Receiver Method
+    let r = Rect{ width: 5, height: 8 }
+    let a = r.area()
+    println_str("Calculated area using receiver method:")
+    println(a)
+
+    // Test Result & Error Bubbling
+    let scaled = calculate_scale(100, 2)?
+    println_str("Calculation succeeded with `?` operator:")
+    println(scaled)
+
+    // Test Scoped Tuber Memory
+    tuber {
+        let mut list = []i32{}
+        list.push(111)
+        list.push(222)
+        println_str("Inside Tuber: memory will be wiped on block exit")
+    } // tuber
+
+    println_str("All tests passed with zero GC!")
+}

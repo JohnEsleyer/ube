@@ -1,8 +1,14 @@
 # ubec compiler output
 output.c
 
-# Built binary
+# Built binaries
 ube_app
+ube_v1_demo
+ube_strings
+ube_err
+
+# Object files
+*.o
 
 # Editor cruft
 *.swp

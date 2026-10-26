@@ -1,0 +1,15 @@
+fn main() {
+    println_str("--- Ube Strings on Tubers ---")
+
+    let first = "Ube"
+    let second = "language"
+    let msg = first + " is a " + second
+    println_str(msg)
+
+    tuber {
+        let tmp = "scratch " + "memory"
+        println_str(tmp)
+    } // tuber
+
+    println_str("concatenation allocations were freed by one store")
+}

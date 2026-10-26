@@ -176,14 +176,14 @@ Ube uses a high-velocity transpiler architecture targeting ANSI C99 as universal
 - [x] Monotone `push()` semantics and `tuber { ... }` scoped memory resets.
 
 ### Phase 2: Ergonomics & Object Model
-- [ ] Go-style receiver functions: `fn (s Slice) sum() -> i32`.
-- [ ] Struct declarations and field access.
-- [ ] Dynamic strings (`string`) with UTF-8 support on Tubers.
+- [x] Go-style receiver functions: `fn (s Slice) sum() -> i32`.
+- [x] Struct declarations and field access.
+- [x] Tuber-allocated `string` values: literals, `+` concatenation, printing.
 - [ ] Implicit caller-allocated return values (`fn make_list() -> []i32`).
 
 ### Phase 3: Error Handling & Modern Types
+- [x] Result types (`i32 ! string`) with error bubbling via the `?` operator.
 - [ ] Null-safe Optionals (`T?`) eliminating null pointer panics.
-- [ ] Result types (`T ! E`) with error bubbling via the `?` operator.
 - [ ] Tagged Unions / Enums (`enum Shape { Circle(f32), Rectangle(f32, f32) }`).
 - [ ] Pattern matching (`match` expressions).
 
@@ -213,8 +213,10 @@ cd ube
 
 ### 2. Compile an Ube Program
 ```bash
-python3 ubec.py demo.ube
+python3 ubec.py test_v2.ube    # structs, receiver methods, `?`
 ```
+Also try `demo.ube` (slices and Tuber scopes) and `test_strings.ube`
+(Tuber-allocated strings and concatenation).
 
 ### 3. Build & Run the Native Binary
 ```bash

@@ -5,8 +5,8 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 
-// 64 KB default Tuber page (Matches WASM page size!)
 #define UBE_TUBER_PAGE_SIZE (64 * 1024)
 
 typedef struct {
@@ -15,7 +15,6 @@ typedef struct {
     size_t capacity;
 } UbeTuber;
 
-// Global thread/task Tuber scratchpad
 static UbeTuber global_tuber;
 
 static inline void ube_init() {
@@ -24,7 +23,6 @@ static inline void ube_init() {
     global_tuber.top = 0;
 }
 
-// Scoped watermarking: Freeing memory is just restoring `top`
 static inline size_t ube_tuber_save() {
     return global_tuber.top;
 }
@@ -33,10 +31,8 @@ static inline void ube_tuber_restore(size_t watermark) {
     global_tuber.top = watermark;
 }
 
-// Bump-allocate raw bytes
 static inline void* ube_bump_alloc(size_t size) {
-    // 8-byte alignment
-    size = (size + 7) & ~7;
+    size = (size + 7) & ~7; // 8-byte alignment
     if (global_tuber.top + size > global_tuber.capacity) {
         fprintf(stderr, "[Ube Panic]: Tuber scratchpad out of memory!\n");
         exit(1);
@@ -46,25 +42,77 @@ static inline void* ube_bump_alloc(size_t size) {
     return ptr;
 }
 
-// --- Dynamic Slice for i32: []i32 ---
+// --- Dynamic Slice for i32 ---
 typedef struct {
     int32_t* data;
     size_t len;
 } UbeSlice_i32;
 
 static inline UbeSlice_i32 ube_slice_i32_new() {
-    // Starts pointing to the current top of the Tuber
     UbeSlice_i32 s;
+    // A slice owns the top of the Tuber: its elements are written
+    // contiguously from here, so align the *base* once.
+    global_tuber.top = (global_tuber.top + 7) & ~(size_t)7;
     s.data = (int32_t*)&global_tuber.buffer[global_tuber.top];
     s.len = 0;
     return s;
 }
 
-// Pushing is a simple pointer bump! References into it NEVER invalidate.
 static inline void ube_slice_i32_push(UbeSlice_i32* s, int32_t val) {
-    int32_t* slot = (int32_t*)ube_bump_alloc(sizeof(int32_t));
-    *slot = val;
+    // Elements are contiguous (4-byte stride). The slice is the growing
+    // value on top of the Tuber, so nothing else may allocate here while
+    // it grows. Growth is one pointer bump; nothing ever moves.
+    if (global_tuber.top + sizeof(int32_t) > global_tuber.capacity) {
+        fprintf(stderr, "[Ube Panic]: Tuber scratchpad out of memory!\n");
+        exit(1);
+    }
+    s->data[s->len] = val;
+    global_tuber.top += sizeof(int32_t);
     s->len++;
+}
+
+// --- Strings (Zero GC, lives on Tuber) ---
+typedef struct {
+    const char* data;
+    size_t len;
+} string;
+
+static inline string ube_str_lit(const char* lit) {
+    string s = { lit, strlen(lit) };
+    return s;
+}
+
+static inline string ube_str_concat(string a, string b) {
+    size_t total = a.len + b.len;
+    char* dest = (char*)ube_bump_alloc(total + 1);
+    memcpy(dest, a.data, a.len);
+    memcpy(dest + a.len, b.data, b.len);
+    dest[total] = '\0';
+    string s = { dest, total };
+    return s;
+}
+
+// --- Result Type: i32 ! string ---
+typedef struct {
+    bool ok;
+    union {
+        int32_t val;
+        string err;
+    };
+} UbeResult_i32;
+
+static inline UbeResult_i32 ube_ok_i32(int32_t val) {
+    UbeResult_i32 r;
+    r.ok = true;
+    r.val = val;
+    return r;
+}
+
+static inline UbeResult_i32 ube_err_i32(string err) {
+    UbeResult_i32 r;
+    r.ok = false;
+    r.err = err;
+    return r;
 }
 
 #endif // UBE_RUNTIME_H
