@@ -5,11 +5,18 @@ output.c
 ube_app
 ube_v1_demo
 ube_v2
+ube_v4
+ube_v4_enum
 ube_strings
 ube_err
+ube_*_chk
 
 # Object files
 *.o
+
+# Python bytecode
+__pycache__/
+*.pyc
 
 # Editor cruft
 *.swp

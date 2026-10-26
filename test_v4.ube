@@ -1,0 +1,45 @@
+// v0.4: shared-nothing Vines with private Tubers and flat channels.
+// The worker Vine receives flat Job values by memcpy, computes on its own
+// Tuber, and sends flat i32 results back. No pointer ever crosses a Vine.
+
+struct Job {
+    id: i32,
+    weight: i32
+}
+
+fn worker(jobs: Chan[Job], results: Chan[i32]) {
+    let a = jobs.recv()
+    results.send(a.id * a.weight)
+
+    let b = jobs.recv()
+    results.send(b.id * b.weight)
+
+    let c = jobs.recv()
+    results.send(c.id * c.weight)
+}
+
+fn main() {
+    println_str("--- Ube v0.4: Vines & Flat Channels ---")
+
+    let jobs = Chan[Job].new(8)
+    let results = Chan[i32].new(8)
+
+    // Each Vine gets its own Tuber on its own OS thread.
+    spawn worker(jobs, results)
+
+    jobs.send(Job{ id: 1, weight: 10 })
+    jobs.send(Job{ id: 2, weight: 20 })
+    jobs.send(Job{ id: 3, weight: 30 })
+    jobs.close()
+
+    let r1 = results.recv()
+    let r2 = results.recv()
+    let r3 = results.recv()
+    results.close()
+
+    println(r1)
+    println(r2)
+    println(r3)
+
+    println_str("All Vines done; main Tuber reclaimed in one store.")
+}

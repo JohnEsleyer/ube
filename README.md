@@ -70,6 +70,40 @@ A callee that returns `[]i32` simply does not restore its watermark: everything 
 
 > **Prototype limit:** only one slice may be growing on a Tuber at a time. While a slice returned from a callee is live, do not `push` to another slice in the same scope; the production design enforces this invariant at compile time.
 
+### 4. Vines: Shared-Nothing Concurrency
+
+A **Vine** is Ube’s unit of concurrency. Every Vine owns a **private Tuber**, reached through thread-local storage, so no Vine can ever hold a pointer into another Vine’s scratch memory. Data crosses Vine boundaries only through typed channels:
+
+```ube
+struct Job { id: i32, weight: i32 }
+
+fn worker(jobs: Chan[Job], results: Chan[i32]) {
+    let job = jobs.recv()
+    results.send(job.id * job.weight)
+}
+
+fn main() {
+    let jobs = Chan[Job].new(8)
+    let results = Chan[i32].new(8)
+
+    spawn worker(jobs, results)
+
+    jobs.send(Job{ id: 1, weight: 10 })
+    jobs.close()
+    println(results.recv())
+}
+```
+
+A channel copies each value with `memcpy` into a runtime-owned ring buffer, and the receiving Vine reads its own bytes into its own Tuber. `Chan[T]` is therefore restricted at compile time to **flat** types: primitives, channel handles, and structs or enums built only from flat fields. `string`, slices, and borrowed references are rejected before any C is generated:
+
+```text
+[ubec]: error: cannot pass non-flat type 'string' across Vines (Chan[string])
+```
+
+That single rule replaces Rust’s `Send`/`Sync` trait machinery: with no pointers crossing the boundary, data races are impossible by construction. The prototype backend maps each spawned Vine to a detached pthread with its own TLS Tuber. `select`, channel timeouts, and alternative schedulers (WASM event loop, cooperative fibers or FreeRTOS tasks on microcontrollers) are roadmap items.
+
+> **Prototype limits:** `recv` is blocking and yields a zero value after `close`; the optional/`while let` machinery for clean closed-channel loops is not implemented yet. Channel ring buffers are never freed, and a detached Vine must be kept alive by the program’s own send/receive handshake.
+
 ---
 
 ## 4. Syntax at a Glance
@@ -194,7 +228,10 @@ Ube uses a high-velocity transpiler architecture targeting ANSI C99 as universal
 ### Phase 4: Standard Library & Concurrency
 - [ ] Standard I/O, File System, and Math modules.
 - [ ] Zero-copy C foreign function interface (`extern fn`).
-- [ ] Vines (lightweight coroutines/fibers) with thread-safe flat channel queues.
+- [x] Vines (lightweight coroutines/fibers) with private per-Vine Tubers.
+- [x] Typed flat channels (`Chan[T]`) with `new`, `send`, `recv`, and `close`.
+- [x] `spawn fn(args)` and the compile-time flat-only rule for payloads and arguments.
+- [ ] `select` multiplexing, channel timeouts, and non-pthread backends.
 
 ### Phase 5: Self-Hosting & Native Tooling
 - [ ] Rewrite `ubec` in Ube itself (Self-hosting compiler).
@@ -220,14 +257,22 @@ cd ube
 python3 ubec.py test_v2.ube    # structs, receiver methods, `?`
 ```
 Also try `demo.ube` (slices and Tuber scopes), `test_strings.ube`
-(Tuber-allocated strings and concatenation) and `test_v3.ube`
-(tagged enums, `match`, and zero-GC dynamic returns).
+(Tuber-allocated strings and concatenation), `test_v3.ube`
+(tagged enums, `match`, and zero-GC dynamic returns), and `test_v4.ube`
+(Vines, `Chan[T]`, and `spawn`):
+
+```bash
+python3 ubec.py test_v4.ube
+```
 
 ### 3. Build & Run the Native Binary
 ```bash
-gcc -O2 output.c -o ube_app
+gcc -O2 -pthread output.c -o ube_app
 ./ube_app
 ```
+
+Concurrency uses the pthreads backend in this prototype, so builds are linked
+with `-pthread`.
 
 ---
 

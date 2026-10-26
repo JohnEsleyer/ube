@@ -1,8 +1,10 @@
 import sys
 import re
 
-# v0.3: tagged unions (enum) + match, and caller-allocated dynamic returns.
-# Keeps the v0.2 features: structs/receivers, strings, Result + `?`.
+# v0.4: shared-nothing Vines with private per-thread Tubers, typed flat
+# channels (Chan[T] with new/send/recv/close) and `spawn`.
+# Keeps v0.1-v0.3: slices/Tuber scopes, structs/receivers, strings,
+# Result + `?`, enums + match, caller-allocated returns.
 
 TYPE_MAP = {
     "i32": "int32_t",
@@ -17,9 +19,16 @@ TYPE_MAP = {
     "[]i32": "UbeSlice_i32",
 }
 
+# Types that may cross a Vine boundary by memcpy.
+FLAT_SCALARS = {"i32", "i64", "u32", "u64", "u8", "f32", "f64", "bool"}
+
 
 def ctype(t):
+    if not t:
+        return "void"
     t = t.strip()
+    if re.match(r"^Chan\[.+\]$", t):
+        return "UbeChan"
     return TYPE_MAP.get(t, t)
 
 
@@ -50,17 +59,40 @@ def strip_line_comment(line):
     return line
 
 
+def split_top(text):
+    """Split on top-level commas, ignoring commas inside [] () {}."""
+    parts, cur, depth = [], "", 0
+    for ch in text:
+        if ch in "[({":
+            depth += 1
+        elif ch in "])}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        parts.append(cur)
+    return [p.strip() for p in parts if p.strip()]
+
+
 class UbeTranspiler:
     def __init__(self, source):
         self.source = source
         self.output = []
         self.indent = 0
         # semantic tables
-        self.structs = {}       # struct name -> [(field, ctype)]
+        self.structs = {}       # struct name -> [(field, ube type)]
         self.enums = {}         # enum name -> [(variant, [field types])]
+        self.type_order = []    # declaration order of ("struct"|"enum", name)
         self.var_types = {}     # variable -> type text
-        self.fn_rets = {}       # function -> return type text
+        self.chan_elem = {}     # channel variable -> element type text
+        self.fn_rets = {}       # function -> return type text (None = void)
+        self.fn_params = {}     # function -> [(param, type)]
         self.methods = {}       # (struct, method) -> return type text
+        self.spawn_targets = set()
+        self.spawn_order = []
         self.current_fn_return_type = None
 
     def emit(self, line):
@@ -68,6 +100,8 @@ class UbeTranspiler:
 
     # --- type helpers -------------------------------------------------
     def c_ret(self, ret_type):
+        if not ret_type:
+            return "void"
         parts = result_parts(ret_type)
         if parts:
             if ctype(parts[0]) != "int32_t":
@@ -78,19 +112,89 @@ class UbeTranspiler:
         return ctype(ret_type)
 
     def val_type(self, ret_type):
+        if not ret_type:
+            return "void"
         parts = result_parts(ret_type)
         return ctype(parts[0]) if parts else ctype(ret_type)
 
     def param_list(self, params, record=False):
         out = []
         if params.strip():
-            for p in params.split(","):
-                pname, ptype = p.split(":")
+            for p in split_top(params):
+                pname, sep, ptype = p.partition(":")
+                if not sep:
+                    continue
                 pname, ptype = pname.strip(), ptype.strip()
                 out.append("%s %s" % (ctype(ptype), pname))
                 if record:
                     self.var_types[pname] = ptype
+                    m_chan = re.match(r"^Chan\[(.+)\]$", ptype)
+                    if m_chan:
+                        elem = m_chan.group(1).strip()
+                        self.chan_elem[pname] = elem
+                        self.check_flat(elem, "channel parameter '%s'" % pname)
         return out
+
+    # --- flat-only rule -----------------------------------------------
+    def is_flat(self, t, seen=None):
+        """True if t may be copied by memcpy across a Vine boundary."""
+        if not t:
+            return False
+        t = t.strip()
+        if t in FLAT_SCALARS:
+            return True
+        if re.match(r"^Chan\[.+\]$", t):
+            return True
+        if t.startswith("&") or t.startswith("*"):
+            return False
+        if t in ("string", "[]i32"):
+            return False
+        if seen is None:
+            seen = set()
+        if t in seen:
+            return False
+        seen = seen | {t}
+        if t in self.structs:
+            return all(self.is_flat(ft, seen) for _, ft in self.structs[t])
+        if t in self.enums:
+            return all(self.is_flat(ft, seen)
+                       for _, payload in self.enums[t] for ft in payload)
+        return False
+
+    def check_flat(self, t, context):
+        if not self.is_flat(t):
+            sys.stderr.write(
+                "[ubec]: error: cannot pass non-flat type '%s' across Vines "
+                "(%s)\n        channels and spawn arguments may only carry "
+                "flat data: primitives, channel handles, flat structs, and "
+                "flat enums\n" % (t, context))
+            sys.exit(1)
+
+    def expr_type(self, expr):
+        expr = expr.strip()
+        if expr in self.var_types:
+            return self.var_types[expr]
+        if self.is_string_literal(expr):
+            return "string"
+        m = re.match(r"(\w+)\s*\{", expr)
+        if m and (m.group(1) in self.structs or m.group(1) in self.enums):
+            return m.group(1)
+        m = re.match(r"(\w+)\.(\w+)\s*\(", expr)
+        if m and m.group(1) in self.enums:
+            return m.group(1)
+        if re.match(r"^-?\d+$", expr):
+            return "i32"
+        m = re.match(r"(\w+)\.(\w+)$", expr)
+        if m and m.group(1) in self.var_types:
+            stype = self.var_types[m.group(1)]
+            for fname, ftype in self.structs.get(stype, []):
+                if fname == m.group(2):
+                    return ftype
+        ret = self.call_ret(expr)
+        if ret:
+            parts = result_parts(ret)
+            return parts[0] if parts else ret
+        return None
 
     # --- string expressions -------------------------------------------
     @staticmethod
@@ -130,42 +234,98 @@ class UbeTranspiler:
             return self.fn_rets.get(m.group(1))
         return None
 
-    def compile(self):
-        self.emit('#include "ube_runtime.h"')
-        self.emit("")
+    # --- struct literals ----------------------------------------------
+    def struct_init_literal(self, expr):
+        """Lower `Job{ id: 1, weight: 2 }` to a C compound literal."""
+        m = re.match(r"(\w+)\s*\{(.*)\}\s*$", expr)
+        if not m or m.group(1) not in self.structs:
+            return None
+        tname, vals = m.group(1), m.group(2)
+        inits = []
+        for part in split_top(vals):
+            fname, sep, fval = part.partition(":")
+            if not sep:
+                return None
+            inits.append(".%s = %s" % (fname.strip(), fval.strip()))
+        return "(%s){ %s }" % (ctype(tname), ", ".join(inits))
 
-        lines = [strip_line_comment(line).strip()
-                 for line in self.source.splitlines()]
-        lines = [line for line in lines if line]
+    # --- pre-scan: signatures, spawn targets, type declarations -------
+    @staticmethod
+    def parse_params(text):
+        out = []
+        if not text.strip():
+            return out
+        for p in split_top(text):
+            name, sep, ptype = p.partition(":")
+            if sep:
+                out.append((name.strip(), ptype.strip()))
+        return out
 
+    def prescan(self, lines):
         i = 0
         while i < len(lines):
             line = lines[i]
 
-            # 1. Enum declaration: enum Shape { Circle(i32), Point }
             if line.startswith("enum ") and line.endswith("{"):
                 ename = line.split()[1]
                 variants = []
                 i += 1
                 while i < len(lines) and lines[i] != "}":
                     m_v = re.match(r"(\w+)\s*(?:\((.*?)\))?\s*,?$", lines[i])
-                    v_name = m_v.group(1)
-                    v_types = ([t.strip() for t in m_v.group(2).split(",")]
-                               if m_v.group(2) else [])
-                    variants.append((v_name, v_types))
+                    if m_v:
+                        v_types = ([t.strip() for t in split_top(m_v.group(2))]
+                                   if m_v.group(2) else [])
+                        variants.append((m_v.group(1), v_types))
                     i += 1
                 self.enums[ename] = variants
+                self.type_order.append(("enum", ename))
+                i += 1
+                continue
 
+            if line.startswith("struct ") and line.endswith("{"):
+                sname = line.split()[1]
+                fields = []
+                i += 1
+                while i < len(lines) and lines[i] != "}":
+                    parts = lines[i].rstrip(",").split(":")
+                    if len(parts) >= 2:
+                        fields.append((parts[0].strip(), parts[1].strip()))
+                    i += 1
+                self.structs[sname] = fields
+                self.type_order.append(("struct", sname))
+                i += 1
+                continue
+
+            m_fn = re.match(
+                r"fn\s+(\w+)\s*\((.*?)\)\s*(?:->\s*(.+?))?\s*\{$", line)
+            if m_fn and m_fn.group(1) != "main":
+                fname = m_fn.group(1)
+                self.fn_params[fname] = self.parse_params(m_fn.group(2))
+                self.fn_rets[fname] = (m_fn.group(3).strip()
+                                       if m_fn.group(3) else None)
+
+            m_spawn = re.match(r"spawn\s+(\w+)\s*\(", line)
+            if m_spawn and m_spawn.group(1) not in self.spawn_targets:
+                self.spawn_targets.add(m_spawn.group(1))
+                self.spawn_order.append(m_spawn.group(1))
+
+            i += 1
+
+    # --- declaration emission (types first, so code can use them) -----
+    def emit_types(self):
+        for kind, name in self.type_order:
+            if kind == "enum":
+                variants = self.enums[name]
                 self.emit("typedef enum {")
                 self.indent += 1
                 for v_name, _ in variants:
-                    self.emit("%s_%s," % (ename, v_name))
+                    self.emit("%s_%s," % (name, v_name))
                 self.indent -= 1
-                self.emit("} %s_Tag;" % ename)
+                self.emit("} %s_Tag;" % name)
                 self.emit("")
                 self.emit("typedef struct {")
                 self.indent += 1
-                self.emit("%s_Tag tag;" % ename)
+                self.emit("%s_Tag tag;" % name)
                 self.emit("union {")
                 self.indent += 1
                 for v_name, v_types in variants:
@@ -176,29 +336,88 @@ class UbeTranspiler:
                 self.indent -= 1
                 self.emit("} as;")
                 self.indent -= 1
-                self.emit("} %s;" % ename)
+                self.emit("} %s;" % name)
                 self.emit("")
-                i += 1
-                continue
-
-            # 2. Struct declaration
-            if line.startswith("struct ") and line.endswith("{"):
-                sname = line.split()[1]
-                self.emit("typedef struct %s %s;" % (sname, sname))
-                self.emit("struct %s {" % sname)
+            else:
+                self.emit("typedef struct %s %s;" % (name, name))
+                self.emit("struct %s {" % name)
                 self.indent += 1
-                i += 1
-                fields = []
-                while i < len(lines) and lines[i] != "}":
-                    parts = lines[i].rstrip(",").split(":")
-                    fname, ftype = parts[0].strip(), ctype(parts[1])
-                    self.emit("%s %s;" % (ftype, fname))
-                    fields.append((fname, ftype))
-                    i += 1
+                for fname, ftype in self.structs[name]:
+                    self.emit("%s %s;" % (ctype(ftype), fname))
                 self.indent -= 1
                 self.emit("};")
                 self.emit("")
-                self.structs[sname] = fields
+
+    def emit_spawn_structs(self):
+        for fname in self.spawn_order:
+            params = self.fn_params.get(fname)
+            if params is None:
+                sys.stderr.write(
+                    "[ubec]: error: spawn of unknown function '%s'\n" % fname)
+                sys.exit(1)
+            self.emit("typedef struct {")
+            self.indent += 1
+            for pname, ptype in params:
+                self.check_flat(
+                    ptype, "parameter '%s' of spawned function '%s'"
+                    % (pname, fname))
+                self.emit("%s p_%s;" % (ctype(ptype), pname))
+            self.indent -= 1
+            self.emit("} UbeSpawn_%s;" % fname)
+            self.emit("")
+
+    def emit_trampolines(self):
+        for fname in self.spawn_order:
+            params = self.fn_params[fname]
+            self.emit("static void* ube_tramp_%s(void* p) {" % fname)
+            self.indent += 1
+            self.emit("UbeSpawn_%s* a = (UbeSpawn_%s*)p;" % (fname, fname))
+            self.emit("ube_thread_init();")
+            self.emit("%s(%s);" % (
+                fname, ", ".join("a->p_%s" % p for p, _ in params)))
+            self.emit("ube_thread_shutdown();")
+            self.emit("free(a);")
+            self.emit("return NULL;")
+            self.indent -= 1
+            self.emit("}")
+            self.emit("")
+
+    # --- main lowering -------------------------------------------------
+    def compile(self):
+        lines = [strip_line_comment(line).strip()
+                 for line in self.source.splitlines()]
+        lines = [line for line in lines if line]
+        self.prescan(lines)
+
+        self.emit('#include "ube_runtime.h"')
+        self.emit("")
+        for fname in self.spawn_order:
+            self.emit("static void* ube_tramp_%s(void* p);" % fname)
+        if self.spawn_order:
+            self.emit("")
+        self.emit_types()
+        self.emit_spawn_structs()
+
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+
+            # 1. Type declarations were emitted by prescan/emit_types.
+            if (line.startswith("enum ") or line.startswith("struct ")) \
+                    and line.endswith("{"):
+                i += 1
+                while i < len(lines) and lines[i] != "}":
+                    i += 1
+                i += 1
+                continue
+
+            # 2. Entry point (before the generic function matcher).
+            if line.startswith("fn main()"):
+                self.emit("int main() {")
+                self.indent += 1
+                self.emit("ube_init();")
+                self.emit("size_t __watermark = ube_tuber_save();")
+                self.current_fn_return_type = "main"
                 i += 1
                 continue
 
@@ -220,10 +439,12 @@ class UbeTranspiler:
                 i += 1
                 continue
 
-            # 4. Standard function
-            m_fn = re.match(r"fn\s+(\w+)\s*\((.*?)\)\s*->\s*(.+?)\s*\{$", line)
+            # 4. Standard function, possibly void: fn worker(...) { }
+            m_fn = re.match(
+                r"fn\s+(\w+)\s*\((.*?)\)\s*(?:->\s*(.+?))?\s*\{$", line)
             if m_fn:
-                fn_name, params, ret_type = m_fn.groups()
+                fn_name, params = m_fn.group(1), m_fn.group(2)
+                ret_type = m_fn.group(3).strip() if m_fn.group(3) else None
                 self.current_fn_return_type = ret_type
                 self.fn_rets[fn_name] = ret_type
                 self.emit("%s %s(%s) {" % (self.c_ret(ret_type), fn_name,
@@ -232,22 +453,12 @@ class UbeTranspiler:
                 self.indent += 1
                 # A caller-allocated return keeps everything above the
                 # caller's watermark: no restore inside this frame.
-                if ctype(ret_type) != "UbeSlice_i32":
+                if ret_type is not None and ctype(ret_type) != "UbeSlice_i32":
                     self.emit("size_t __watermark = ube_tuber_save();")
                 i += 1
                 continue
 
-            # 5. Entry point
-            if line.startswith("fn main()"):
-                self.emit("int main() {")
-                self.indent += 1
-                self.emit("ube_init();")
-                self.emit("size_t __watermark = ube_tuber_save();")
-                self.current_fn_return_type = "main"
-                i += 1
-                continue
-
-            # 6. Scoped Tuber reset close
+            # 5. Scoped Tuber reset close
             if line == "} // tuber":
                 self.emit("ube_tuber_restore(__watermark_scope);")
                 self.indent -= 1
@@ -255,7 +466,7 @@ class UbeTranspiler:
                 i += 1
                 continue
 
-            # 7. Block close
+            # 6. Block close
             if line == "}":
                 if self.indent == 1 and self.current_fn_return_type == "main":
                     self.emit("ube_tuber_restore(__watermark);")
@@ -265,7 +476,7 @@ class UbeTranspiler:
                 i += 1
                 continue
 
-            # 8. Scoped Tuber reset open
+            # 7. Scoped Tuber reset open
             if line == "tuber {":
                 self.emit("{")
                 self.indent += 1
@@ -273,7 +484,7 @@ class UbeTranspiler:
                 i += 1
                 continue
 
-            # 9. Return statements
+            # 8. Return statements
             if line.startswith("return "):
                 ret_val = line[7:].strip()
                 if self.current_fn_return_type == "main":
@@ -295,7 +506,7 @@ class UbeTranspiler:
                 i += 1
                 continue
 
-            # 10. match <enum> { Variant(bind, ..) => stmt, ... }
+            # 9. match <enum> { Variant(bind, ..) => stmt, ... }
             m_match = re.match(r"match\s+(\w+)\s*\{$", line)
             if m_match:
                 mvar = m_match.group(1)
@@ -360,7 +571,7 @@ class UbeTranspiler:
                 i += 1
                 continue
 
-            # 11. Enum instantiation: let s = Shape.Circle(10)
+            # 10. Enum instantiation: let s = Shape.Circle(10)
             m_enum_inst = re.match(
                 r"let\s+(?:mut\s+)?(\w+)\s*=\s*(\w+)\.(\w+)\s*(?:\((.*?)\))?\s*$",
                 line)
@@ -369,14 +580,143 @@ class UbeTranspiler:
                 self.emit("%s %s;" % (enum_type, var_name))
                 self.emit("%s.tag = %s_%s;" % (var_name, enum_type, v_name))
                 if args:
-                    for idx, arg in enumerate(a.strip() for a in args.split(",")):
+                    for idx, arg in enumerate(
+                            a.strip() for a in split_top(args)):
                         self.emit("%s.as.%s._%d = %s;"
                                   % (var_name, v_name, idx, arg))
                 self.var_types[var_name] = enum_type
                 i += 1
                 continue
 
-            # 12. The `?` operator: let val = call(...)?
+            # 11. Channel creation: let ch = Chan[Job].new(8)
+            m_chan_new = re.match(
+                r"let\s+(?:mut\s+)?(\w+)\s*=\s*Chan\[(.+?)\]\.new\((.*?)\)\s*$",
+                line)
+            if m_chan_new:
+                var_name, elem, cap = m_chan_new.groups()
+                elem = elem.strip()
+                self.check_flat(elem, "Chan[%s]" % elem)
+                self.emit("UbeChan %s = ube_chan_new(sizeof(%s), %s);"
+                          % (var_name, ctype(elem), cap.strip() or "1"))
+                self.var_types[var_name] = "Chan[%s]" % elem
+                self.chan_elem[var_name] = elem
+                i += 1
+                continue
+
+            # 12. Channel receive: let job = jobs.recv()
+            m_recv = re.match(
+                r"let\s+(?:mut\s+)?(\w+)\s*=\s*(\w+)\.recv\(\)\s*\??\s*$", line)
+            if m_recv:
+                var_name, ch = m_recv.groups()
+                elem = self.chan_elem.get(ch)
+                if elem is None:
+                    sys.stderr.write(
+                        "[ubec]: error: '%s' is not a known channel\n" % ch)
+                    sys.exit(1)
+                self.emit("%s %s;" % (ctype(elem), var_name))
+                self.emit("ube_chan_recv(%s, &%s);" % (ch, var_name))
+                self.var_types[var_name] = elem
+                i += 1
+                continue
+
+            # 13. Channel send: ch.send(value)
+            m_send = re.match(r"(\w+)\.send\((.*)\)\s*$", line)
+            if m_send:
+                ch, expr = m_send.group(1), m_send.group(2).strip()
+                elem = self.chan_elem.get(ch)
+                if elem is None:
+                    sys.stderr.write(
+                        "[ubec]: error: '%s' is not a known channel\n" % ch)
+                    sys.exit(1)
+                self.check_flat(elem, "send on '%s'" % ch)
+                sent_type = self.expr_type(expr)
+                if sent_type is not None:
+                    self.check_flat(sent_type, "sent on '%s'" % ch)
+                m_enum_lit = re.match(
+                    r"(\w+)\.(\w+)\s*(?:\((.*?)\))?\s*$", expr)
+                init = self.struct_init_literal(expr)
+                if m_enum_lit and m_enum_lit.group(1) in self.enums:
+                    enum_type, v_name = m_enum_lit.group(1), m_enum_lit.group(2)
+                    args = m_enum_lit.group(3)
+                    tmp = "__chan_val"
+                    self.emit("%s %s;" % (enum_type, tmp))
+                    self.emit("%s.tag = %s_%s;" % (tmp, enum_type, v_name))
+                    if args:
+                        for idx, arg in enumerate(split_top(args)):
+                            self.emit("%s.as.%s._%d = %s;"
+                                      % (tmp, v_name, idx, arg))
+                    self.emit("ube_chan_send(%s, &%s);" % (ch, tmp))
+                elif init is not None:
+                    self.emit("ube_chan_send(%s, &%s);" % (ch, init))
+                elif expr.isidentifier() and sent_type == elem:
+                    self.emit("ube_chan_send(%s, &%s);" % (ch, expr))
+                else:
+                    self.emit("ube_chan_send(%s, &(%s){ %s });"
+                              % (ch, ctype(elem), expr))
+                i += 1
+                continue
+
+            # 14. Channel close: ch.close()
+            m_chan_close = re.match(r"(\w+)\.close\(\)\s*$", line)
+            if m_chan_close and m_chan_close.group(1) in self.chan_elem:
+                self.emit("ube_chan_close(%s);" % m_chan_close.group(1))
+                i += 1
+                continue
+
+            # 15. Spawn a Vine: spawn worker(jobs, results)
+            m_spawn = re.match(r"spawn\s+(\w+)\s*\((.*)\)\s*$", line)
+            if m_spawn:
+                fname, args_text = m_spawn.group(1), m_spawn.group(2)
+                params = self.fn_params.get(fname)
+                if params is None:
+                    sys.stderr.write(
+                        "[ubec]: error: spawn of unknown function '%s'\n"
+                        % fname)
+                    sys.exit(1)
+                args = split_top(args_text)
+                if len(args) != len(params):
+                    sys.stderr.write(
+                        "[ubec]: error: spawn %s expects %d argument(s), "
+                        "got %d\n" % (fname, len(params), len(args)))
+                    sys.exit(1)
+                for (pname, ptype), arg in zip(params, args):
+                    self.check_flat(
+                        ptype, "parameter '%s' of spawned function '%s'"
+                        % (pname, fname))
+                    arg_type = self.expr_type(arg)
+                    if arg_type is not None:
+                        self.check_flat(arg_type,
+                                        "spawn argument '%s'" % arg)
+                self.emit("{")
+                self.indent += 1
+                self.emit("UbeSpawn_%s* __a = (UbeSpawn_%s*)calloc(1, "
+                          "sizeof(UbeSpawn_%s));" % (fname, fname, fname))
+                for (pname, _), arg in zip(params, args):
+                    m_enum_lit = re.match(
+                        r"(\w+)\.(\w+)\s*(?:\((.*?)\))?\s*$", arg)
+                    if m_enum_lit and m_enum_lit.group(1) in self.enums:
+                        enum_type, v_name = (m_enum_lit.group(1),
+                                             m_enum_lit.group(2))
+                        tmp = "__e_%s" % pname
+                        self.emit("%s %s;" % (enum_type, tmp))
+                        self.emit("%s.tag = %s_%s;"
+                                  % (tmp, enum_type, v_name))
+                        if m_enum_lit.group(3):
+                            for idx, a in enumerate(
+                                    split_top(m_enum_lit.group(3))):
+                                self.emit("%s.as.%s._%d = %s;"
+                                          % (tmp, v_name, idx, a))
+                        arg_expr = tmp
+                    else:
+                        arg_expr = self.struct_init_literal(arg) or arg
+                    self.emit("__a->p_%s = %s;" % (pname, arg_expr))
+                self.emit("ube_spawn(ube_tramp_%s, __a);" % fname)
+                self.indent -= 1
+                self.emit("}")
+                i += 1
+                continue
+
+            # 16. The `?` operator: let val = call(...)?
             m_try = re.match(r"let\s+(\w+)\s*=\s*(.+?)\?\s*$", line)
             if m_try:
                 var_name, call_expr = m_try.group(1), m_try.group(2).strip()
@@ -413,7 +753,7 @@ class UbeTranspiler:
                 i += 1
                 continue
 
-            # 13. Receiver method call: let a = r.area()
+            # 17. Receiver method call: let a = r.area()
             m_call = re.match(
                 r"let\s+(?:mut\s+)?(\w+)\s*=\s*(\w+)\.(\w+)\s*\((.*?)\)\s*$",
                 line)
@@ -434,7 +774,7 @@ class UbeTranspiler:
                 i += 1
                 continue
 
-            # 14. for x in slice {
+            # 18. for x in slice {
             m_for = re.match(r"for\s+(\w+)\s+in\s+(\w+)\s*\{$", line)
             if m_for:
                 var, slice_var = m_for.groups()
@@ -445,7 +785,7 @@ class UbeTranspiler:
                 i += 1
                 continue
 
-            # 15. if <cond> {
+            # 19. if <cond> {
             m_if = re.match(r"if\s+(.+?)\s*\{$", line)
             if m_if:
                 self.emit("if (%s) {" % m_if.group(1).strip())
@@ -453,7 +793,7 @@ class UbeTranspiler:
                 i += 1
                 continue
 
-            # 16. Declarations and statements
+            # 20. Declarations and statements
             if line.startswith("let mut ") and "[]i32{}" in line:
                 var_name = line.split()[2]
                 self.emit("UbeSlice_i32 %s = ube_slice_i32_new();" % var_name)
@@ -464,10 +804,10 @@ class UbeTranspiler:
                 if m_st:
                     var, sname, vals = m_st.groups()
                     inits = []
-                    for part in vals.split(","):
-                        if not part.strip():
+                    for part in split_top(vals):
+                        fname, sep, fval = part.partition(":")
+                        if not sep:
                             continue
-                        fname, _, fval = part.partition(":")
                         inits.append(".%s = %s" % (fname.strip(),
                                                    fval.strip()))
                     self.emit("%s %s = { %s };"
@@ -511,6 +851,8 @@ class UbeTranspiler:
 
             i += 1
 
+        self.emit("")
+        self.emit_trampolines()
         return "\n".join(self.output)
 
 
