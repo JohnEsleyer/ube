@@ -1,0 +1,75 @@
+// The grand tour: Vines + channels, optionals, or_else, enums, and match.
+// Everything here is zero-GC: scratch data lives on each Vine's own Tuber.
+
+// 1. Tagged enum
+enum Event {
+    Data(i32),
+    Stop
+}
+
+// 2. Fallible function (returns i32 ! string)
+fn parse_number(code: i32) -> i32 ! string {
+    if code == 0 {
+        return error("invalid zero code")
+    }
+    return code * 10
+}
+
+// 3. Worker Vine: its own OS thread and its own private Tuber
+fn worker_vine(ch: Chan[i32], done: Chan[i32]) {
+    println_str("Worker Vine active on background thread!")
+    let val = ch.recv()
+    println_str("Worker received value from channel:")
+    println(val)
+    done.send(1)
+    return
+}
+
+fn main() {
+    println_str("=== 🍠 Complete Ube Feature Test ===")
+
+    // Feature 1: concurrency (Vines and typed channels)
+    let channel = Chan[i32].new(5)
+    let done = Chan[i32].new(1)
+
+    println_str("Main Vine sending 42 to worker...")
+    spawn worker_vine(channel, done)
+    channel.send(42)
+
+    // Wait for the worker to finish printing before continuing, so the
+    // demonstration output is deterministic.
+    let finished = done.recv()
+    done.close()
+    channel.close()
+
+    // Feature 2: fallback operator (or_else)
+    let good = parse_number(5) or_else 999
+    let bad = parse_number(0) or_else 999
+
+    println_str("Testing `or_else` on success (expected 50):")
+    println(good)
+    println_str("Testing `or_else` on error (expected fallback 999):")
+    println(bad)
+
+    // Feature 3: null safety (T? and if let)
+    let present: i32? = 777
+    let missing: i32? = null
+
+    if let val = present {
+        println_str("Safely unpacked present optional:")
+        println(val)
+    }
+
+    if let val = missing {
+        println_str("This will never print because it was null!")
+    }
+
+    // Feature 4: tagged enums and match
+    let evt = Event.Data(1234)
+    match evt {
+        Data(x) => println(x),
+        Stop => println_str("Stopped")
+    }
+
+    println_str("=== All features ran with zero GC! ===")
+}

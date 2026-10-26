@@ -120,6 +120,39 @@ static inline string ube_str_concat(string a, string b) {
     return s;
 }
 
+// --- Optionals: T? (no null pointers, no GC) ---
+//
+// An optional is a tagged value: `has_val` plus the value itself. `null`
+// becomes `has_val = false`; `if let x = opt { ... }` checks the tag before
+// reading the value, so there is no way to dereference a null.
+#define UBE_DEFINE_OPTION(suffix, ctype_)                                  \
+    typedef struct {                                                       \
+        bool has_val;                                                      \
+        ctype_ val;                                                        \
+    } UbeOption_##suffix;                                                  \
+    static inline UbeOption_##suffix ube_some_##suffix(ctype_ v) {         \
+        UbeOption_##suffix o;                                              \
+        o.has_val = true;                                                  \
+        o.val = v;                                                         \
+        return o;                                                          \
+    }                                                                      \
+    static inline UbeOption_##suffix ube_none_##suffix(void) {             \
+        UbeOption_##suffix o;                                              \
+        o.has_val = false;                                                 \
+        o.val = (ctype_){ 0 };                                             \
+        return o;                                                          \
+    }
+
+UBE_DEFINE_OPTION(i32, int32_t)
+UBE_DEFINE_OPTION(i64, int64_t)
+UBE_DEFINE_OPTION(u32, uint32_t)
+UBE_DEFINE_OPTION(u64, uint64_t)
+UBE_DEFINE_OPTION(u8, uint8_t)
+UBE_DEFINE_OPTION(f32, float)
+UBE_DEFINE_OPTION(f64, double)
+UBE_DEFINE_OPTION(bool, bool)
+UBE_DEFINE_OPTION(string, string)
+
 // --- Result Type: i32 ! string ---
 typedef struct {
     bool ok;

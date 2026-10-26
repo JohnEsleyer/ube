@@ -162,12 +162,29 @@ fn load_config(path: string) -> Config ! fs.Error {
 }
 
 fn main() {
-    let cfg = load_config("config.json") or_else {
-        fmt.println("Using default configuration")
-        return Config.default()
-    }
+    // Inline fallback: use a default when the result is an error.
+    let cfg = load_config("config.json") or_else Config.default()
 }
 ```
+
+### Null Safety Without Null Pointers
+
+```ube
+let present: i32? = 777
+let missing: i32? = null
+
+if let val = present {
+    println(val)                 // runs only when a value exists
+}
+
+if let val = missing {
+    println(val)                 // never runs
+}
+
+let safe = missing or_else 0     // unwrap with a default
+```
+
+`T?` is a tagged value (`has_val` plus the value), not a pointer, so there is no `nil` to dereference. The prototype supports scalar optionals (`i32`, `i64`, `u32`, `u64`, `u8`, `f32`, `f64`, `bool`) and `string?`. Optional function return types and `if let ... else` chains remain roadmap items.
 
 ---
 
@@ -275,7 +292,9 @@ Ube uses a high-velocity transpiler architecture targeting ANSI C99 as universal
 
 ### Phase 3: Error Handling & Modern Types
 - [x] Result types (`i32 ! string`) with error bubbling via the `?` operator.
-- [ ] Null-safe Optionals (`T?`) eliminating null pointer panics.
+- [x] `or_else` inline fallback defaults for results and optionals.
+- [x] Null-safe Optionals (`T?`) with `null` and `if let val = opt` unwrapping.
+- [ ] Optionals as function return values and `if let ... else` chains.
 - [x] Tagged Unions / Enums (`enum Shape { Circle(f32), Rectangle(f32, f32) }`).
 - [x] Pattern matching (`match` expressions).
 
@@ -314,11 +333,13 @@ python3 ubec.py test_v2.ube    # structs, receiver methods, `?`
 ```
 Also try `demo.ube` (slices and Tuber scopes), `test_strings.ube`
 (Tuber-allocated strings and concatenation), `test_v3.ube`
-(tagged enums, `match`, and zero-GC dynamic returns), and `test_v4.ube`
-(Vines, `Chan[T]`, and `spawn`):
+(tagged enums, `match`, and zero-GC dynamic returns), `test_v4.ube`
+(Vines, `Chan[T]`, and `spawn`), `test_optionals.ube` (optionals,
+`if let`, and optional `or_else`), and `test_full.ube` (the grand tour:
+concurrency, optionals, `or_else`, enums, and `match`):
 
 ```bash
-python3 ubec.py test_v4.ube
+python3 ubec.py test_full.ube
 ```
 
 ### 3. Build & Run the Native Binary

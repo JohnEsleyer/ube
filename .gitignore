@@ -7,6 +7,9 @@ ube_v1_demo
 ube_v2
 ube_v4
 ube_v4_enum
+ube_v5_opt
+ube_optionals
+ube_full
 ube_prose
 ube_strings
 ube_err

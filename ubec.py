@@ -22,11 +22,17 @@ TYPE_MAP = {
 # Types that may cross a Vine boundary by memcpy.
 FLAT_SCALARS = {"i32", "i64", "u32", "u64", "u8", "f32", "f64", "bool"}
 
+# Base types with a generated UbeOption_<base> runtime helper.
+OPTION_BASES = {"i32", "i64", "u32", "u64", "u8", "f32", "f64", "bool",
+                "string"}
+
 
 def ctype(t):
     if not t:
         return "void"
     t = t.strip()
+    if t.endswith("?"):
+        return "UbeOption_%s" % t[:-1].strip()
     if re.match(r"^Chan\[.+\]$", t):
         return "UbeChan"
     return TYPE_MAP.get(t, t)
@@ -518,6 +524,16 @@ class UbeTranspiler:
                 continue
 
             # 8. Return statements
+            if line == "return":
+                if self.current_fn_return_type == "main":
+                    self.emit("ube_tuber_restore(__watermark);")
+                    self.emit("return 0;")
+                else:
+                    # Void functions (None) return nothing; anything else is
+                    # a source error caught by the C compiler.
+                    self.emit("return;")
+                i += 1
+                continue
             if line.startswith("return "):
                 ret_val = line[7:].strip()
                 if self.current_fn_return_type == "main":
@@ -749,7 +765,70 @@ class UbeTranspiler:
                 i += 1
                 continue
 
-            # 16. The `?` operator: let val = call(...)?
+            # 16. Optional declaration: let x: i32? = 777 / null
+            m_opt = re.match(
+                r"let\s+(?:mut\s+)?(\w+)\s*:\s*(\w+\?)\s*=\s*(.+?)\s*$", line)
+            if m_opt:
+                var_name, opt_type, value = m_opt.groups()
+                base = opt_type[:-1]
+                if base not in OPTION_BASES:
+                    sys.stderr.write(
+                        "[ubec]: error: optional type '%s' has no runtime "
+                        "helper (supported: %s)\n"
+                        % (opt_type,
+                           ", ".join(sorted(OPTION_BASES)) + "?"))
+                    sys.exit(1)
+                if value == "null":
+                    self.emit("%s %s = ube_none_%s();"
+                              % (ctype(opt_type), var_name, base))
+                elif self.var_types.get(value) == opt_type:
+                    self.emit("%s %s = %s;"
+                              % (ctype(opt_type), var_name, value))
+                else:
+                    if base == "string" and self.is_string_expr(value):
+                        value = self.gen_string_expr(value)
+                    self.emit("%s %s = ube_some_%s(%s);"
+                              % (ctype(opt_type), var_name, base, value))
+                self.var_types[var_name] = opt_type
+                i += 1
+                continue
+
+            # 17. Fallback operator: let x = expr or_else default
+            m_orelse = re.match(
+                r"let\s+(?:mut\s+)?(\w+)\s*=\s*(.+?)\s+or_else\s+(.+?)\s*$",
+                line)
+            if m_orelse:
+                var_name, expr, default_val = m_orelse.groups()
+                ret_text = self.call_ret(expr)
+                expr_type = self.expr_type(expr)
+                if ret_text and result_parts(ret_text):
+                    val_text = result_parts(ret_text)[0]
+                    tmp = "__res_%s" % var_name
+                    self.emit("UbeResult_i32 %s = %s;" % (tmp, expr))
+                    self.emit("%s %s = %s.ok ? %s.val : (%s);"
+                              % (ctype(val_text), var_name, tmp, tmp,
+                                 default_val))
+                    self.var_types[var_name] = val_text
+                elif expr_type and expr_type.endswith("?"):
+                    base = expr_type[:-1]
+                    tmp = "__opt_%s" % var_name
+                    default_expr = default_val
+                    if base == "string" and self.is_string_expr(default_val):
+                        default_expr = self.gen_string_expr(default_val)
+                    self.emit("%s %s = %s;" % (ctype(expr_type), tmp, expr))
+                    self.emit("%s %s = %s.has_val ? %s.val : (%s);"
+                              % (ctype(base), var_name, tmp, tmp,
+                                 default_expr))
+                    self.var_types[var_name] = base
+                else:
+                    sys.stderr.write(
+                        "[ubec]: error: or_else requires a Result or optional "
+                        "value; '%s' has neither type\n" % expr)
+                    sys.exit(1)
+                i += 1
+                continue
+
+            # 18. The `?` operator: let val = call(...)?
             m_try = re.match(r"let\s+(\w+)\s*=\s*(.+?)\?\s*$", line)
             if m_try:
                 var_name, call_expr = m_try.group(1), m_try.group(2).strip()
@@ -786,7 +865,7 @@ class UbeTranspiler:
                 i += 1
                 continue
 
-            # 17. Receiver method call: let a = r.area()
+            # 19. Receiver method call: let a = r.area()
             m_call = re.match(
                 r"let\s+(?:mut\s+)?(\w+)\s*=\s*(\w+)\.(\w+)\s*\((.*?)\)\s*$",
                 line)
@@ -807,7 +886,7 @@ class UbeTranspiler:
                 i += 1
                 continue
 
-            # 18. for x in slice {
+            # 20. for x in slice {
             m_for = re.match(r"for\s+(\w+)\s+in\s+(\w+)\s*\{$", line)
             if m_for:
                 var, slice_var = m_for.groups()
@@ -818,7 +897,27 @@ class UbeTranspiler:
                 i += 1
                 continue
 
-            # 19. if <cond> {
+            # 21. Safe optional unwrap: if let val = opt {
+            m_iflet = re.match(r"if\s+let\s+(\w+)\s*=\s*(\w+)\s*\{$", line)
+            if m_iflet:
+                val_name, opt_var = m_iflet.groups()
+                opt_type = self.var_types.get(opt_var)
+                if not opt_type or not opt_type.endswith("?"):
+                    sys.stderr.write(
+                        "[ubec]: error: if let requires an optional variable; "
+                        "'%s' has type '%s'\n"
+                        % (opt_var, opt_type or "unknown"))
+                    sys.exit(1)
+                base = opt_type[:-1]
+                self.emit("if (%s.has_val) {" % opt_var)
+                self.indent += 1
+                self.emit("%s %s = %s.val;"
+                          % (ctype(base), val_name, opt_var))
+                self.var_types[val_name] = base
+                i += 1
+                continue
+
+            # 22. if <cond> {
             m_if = re.match(r"if\s+(.+?)\s*\{$", line)
             if m_if:
                 self.emit("if (%s) {" % m_if.group(1).strip())
@@ -826,7 +925,7 @@ class UbeTranspiler:
                 i += 1
                 continue
 
-            # 20. Declarations and statements
+            # 23. Declarations and statements
             if line.startswith("let mut ") and "[]i32{}" in line:
                 var_name = line.split()[2]
                 self.emit("UbeSlice_i32 %s = ube_slice_i32_new();" % var_name)

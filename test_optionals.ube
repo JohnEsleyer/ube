@@ -1,0 +1,26 @@
+// Focused null-safety tests: optional values, fallbacks, and unwrapping.
+fn main() {
+    let present: i32? = 41
+    let missing: i32? = null
+
+    let a = present or_else 0
+    let b = missing or_else 7
+    println(a)
+    println(b)
+
+    let name: string? = "Ube"
+    if let n = name {
+        println_str(n)
+    }
+
+    let nobody: string? = null
+    if let n = nobody {
+        println_str("never")
+    }
+
+    // Copying an optional keeps its tag intact.
+    let copy: i32? = present
+    if let v = copy {
+        println(v)
+    }
+}
