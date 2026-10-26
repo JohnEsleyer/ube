@@ -1,0 +1,30 @@
+{
+  "name": "ube-vscode",
+  "displayName": "Ube Language Support",
+  "description": "Rich language support for the Ube programming language 🍠",
+  "version": "0.1.0",
+  "publisher": "ube-lang",
+  "engines": {
+    "vscode": "^1.70.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "ube",
+        "aliases": ["Ube", "ube"],
+        "extensions": [".ube"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ube",
+        "scopeName": "source.ube",
+        "path": "./syntaxes/ube.tmLanguage.json"
+      }
+    ]
+  }
+}

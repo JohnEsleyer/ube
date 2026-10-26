@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+import sys
+import os
+import subprocess
+import shutil
+import re
+
+CACHE_DIR = os.path.expanduser("~/.ube/pkg")
+
+def print_banner(msg):
+    print(f"\033[1;35m🍠 Ube\033[0m {msg}")
+
+def print_error(msg):
+    print(f"\033[1;31mError:\033[0m {msg}")
+
+def ensure_cache():
+    if not os.path.exists(CACHE_DIR):
+        os.makedirs(CACHE_DIR)
+
+# --- Subcommand: ube new <name> ---
+def cmd_new(args):
+    if not args:
+        print_error("Please provide a project name: ube new <project_name>")
+        return
+    name = args[0]
+    if os.path.exists(name):
+        print_error(f"Directory '{name}' already exists.")
+        return
+
+    os.makedirs(name)
+    with open(os.path.join(name, "ube.mod"), "w") as f:
+        f.write(f"module {name}\n\nrequire (\n)\n")
+
+    with open(os.path.join(name, "main.ube"), "w") as f:
+        f.write('package main\n\nfn main() {\n    println_str("Kamusta from Ube! 🍠")\n}\n')
+
+    print_banner(f"Created new project \033[1;32m{name}\033[0m")
+    print(f"  cd {name}")
+    print("  ube run")
+
+# --- Subcommand: ube get <package_url> ---
+def cmd_get(args):
+    if not args:
+        print_error("Please specify a repository: ube get github.com/username/repo")
+        return
+    pkg_url = args[0].strip()
+    ensure_cache()
+
+    target_dir = os.path.join(CACHE_DIR, pkg_url)
+    if os.path.exists(target_dir):
+        print_banner(f"Updating package \033[1;36m{pkg_url}\033[0m...")
+        subprocess.run(["git", "-C", target_dir, "pull"], check=True)
+    else:
+        print_banner(f"Fetching \033[1;36m{pkg_url}\033[0m...")
+        clone_url = f"https://{pkg_url}.git"
+        os.makedirs(os.path.dirname(target_dir), exist_ok=True)
+        res = subprocess.run(["git", "clone", "--depth", "1", clone_url, target_dir])
+        if res.returncode != 0:
+            print_error(f"Failed to clone {pkg_url}")
+            return
+
+    # Update ube.mod if present in current directory
+    if os.path.exists("ube.mod"):
+        with open("ube.mod", "r") as f:
+            content = f.read()
+        if pkg_url not in content:
+            updated = content.replace("require (", f"require (\n    {pkg_url}")
+            with open("ube.mod", "w") as f:
+                f.write(updated)
+            print_banner(f"Added \033[1;32m{pkg_url}\033[0m to ube.mod")
+
+# --- Subcommand: ube run [file.ube] ---
+def cmd_run(args):
+    target = args[0] if args else "main.ube"
+    if not os.path.exists(target):
+        print_error(f"Cannot find '{target}'")
+        return
+
+    # 1. Transpile and compile using cmd_build
+    cmd_build([target, "-o", ".temp_ube_app", "--fast"])
+
+    # 2. Execute
+    if os.path.exists(".temp_ube_app"):
+        subprocess.run(["./.temp_ube_app"])
+        os.remove(".temp_ube_app")
+        if os.path.exists("output.c"):
+            os.remove("output.c")
+
+# --- Subcommand: ube build [options] ---
+def cmd_build(args):
+    target = "main.ube"
+    out_name = "app"
+    is_static = False
+    is_fast = False
+
+    i = 0
+    while i < len(args):
+        if args[i] == "-o" and i + 1 < len(args):
+            out_name = args[i+1]
+            i += 2
+            continue
+        elif args[i] == "--static":
+            is_static = True
+        elif args[i] == "--fast":
+            is_fast = True
+        elif not args[i].startswith("-"):
+            target = args[i]
+        i += 1
+
+    # Locate ubec.py relative to this script
+    transpiler = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ubec.py")
+    if not os.path.exists(transpiler):
+        transpiler = "ubec.py"
+
+    res = subprocess.run([sys.executable, transpiler, target])
+    if res.returncode != 0:
+        print_error("Compilation halted.")
+        return
+
+    # Compile with GCC / Clang
+    gcc_cmd = ["gcc"]
+    if is_fast:
+        gcc_cmd.extend(["-O0", "output.c", "-lpthread", "-o", out_name])
+    else:
+        gcc_cmd.extend(["-O2", "output.c", "-lpthread", "-o", out_name])
+        if is_static:
+            gcc_cmd.append("-static")
+
+    c_res = subprocess.run(gcc_cmd)
+    if c_res.returncode == 0 and not is_fast:
+        print_banner(f"Built binary -> \033[1;32m{out_name}\033[0m")
+
+def main():
+    if len(sys.argv) < 2:
+        print("""\033[1;35m🍠 Ube Programming Language Toolchain\033[0m
+Commands:
+  \033[1;32mube new <name>\033[0m       Create a new project
+  \033[1;32mube run [file]\033[0m       Compile and run instantly
+  \033[1;32mube build [options]\033[0m  Build a native static binary (-o <bin>, --static)
+  \033[1;32mube get <package>\033[0m    Download decentralized Git package
+""")
+        return
+
+    subcmd = sys.argv[1]
+    args = sys.argv[2:]
+
+    if subcmd == "new":
+        cmd_new(args)
+    elif subcmd == "run":
+        cmd_run(args)
+    elif subcmd == "build":
+        cmd_build(args)
+    elif subcmd == "get":
+        cmd_get(args)
+    else:
+        print_error(f"Unknown command '{subcmd}'")
+
+if __name__ == "__main__":
+    main()

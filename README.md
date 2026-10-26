@@ -563,7 +563,94 @@ with `-pthread`.
 
 ---
 
-## 11. Guiding Principles
+## 11. Developer Tooling
+
+### 11.1 VS Code Extension (`ube-vscode`)
+
+The `ube-vscode/` directory contains a complete VS Code extension providing:
+- **Syntax highlighting** for keywords, types, receiver functions, operators (`?`, `!`, `->`)
+- **Bracket auto-closing** and surrounding pairs
+- **Comment shortcuts** (`Ctrl+/` for line comments, block comment support)
+
+#### Installation
+Copy the extension folder into your VS Code extensions directory and restart VS Code:
+
+```bash
+# Linux / macOS
+cp -r ube-vscode ~/.vscode/extensions/ube-vscode
+
+# Windows
+copy ube-vscode %USERPROFILE%\.vscode\extensions\ube-vscode
+```
+
+`.ube` files will instantly highlight after restart.
+
+---
+
+### 11.2 The `ube` CLI
+
+The `ube` script (in the repo root) is a single-file CLI tool — the modern, unified entry point for the Ube toolchain. It works like `cargo`, `go`, or `bun`:
+
+| Command | Description |
+| :--- | :--- |
+| `ube new <name>` | Scaffold a new project with `ube.mod` and `main.ube` |
+| `ube run [file]` | Transpile and execute instantly (cleans up after itself) |
+| `ube build [opts]` | Build a native binary (`-o <name>`, `--static`) |
+| `ube get <pkg>` | Download a decentralized Git package |
+
+#### Quick Setup
+```bash
+# Make it globally available
+sudo cp ube /usr/local/bin/ube
+```
+
+#### Typical Workflow
+```bash
+# 1. Scaffold a new project
+ube new my_project
+cd my_project
+
+# 2. Add an open-source library (Git-native, no registry)
+ube get github.com/username/json-ube
+
+# 3. Develop with instant feedback
+ube run
+
+# 4. Ship a single static binary
+ube build --static -o my_app
+```
+
+---
+
+### 11.3 Decentralized Package Management
+
+Ube uses **direct Git imports** — no central package registry required. Packages are referenced by their URL path and fetched with `ube get`:
+
+```ube
+// Direct Git repository imports
+import "github.com/raysan5/raylib-ube"
+import "std/fmt"
+```
+
+The `ube.mod` manifest tracks dependencies:
+
+```ini
+module game_app
+
+require (
+    github.com/raysan5/raylib-ube
+    gitlab.com/embedded/sensor-driver
+)
+```
+
+Under the hood, `ube get github.com/user/repo`:
+1. Clones the repo to `~/.ube/pkg/github.com/user/repo` (shallow clone, fast).
+2. Records it in the local `ube.mod`.
+3. On build, `ubec` resolves the import to the cached source and inlines it into the final static binary — **no ABI mismatches, no version lock-in hell**.
+
+---
+
+## 12. Guiding Principles
 
 1. **Pragmatism Over Purity:** If a feature makes the compiler slightly more complex but saves the developer hours of frustration, we implement it.
 2. **Explicit Intent, Implicit Safety:** Mutability is explicit (`let mut`), but memory cleanup is implicit and guaranteed.
@@ -573,6 +660,6 @@ with `-pthread`.
 
 ---
 
-## 12. License
+## 13. License
 
 Ube is open-source software licensed under the [MIT License](LICENSE).
