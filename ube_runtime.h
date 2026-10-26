@@ -43,6 +43,10 @@ static inline void* ube_bump_alloc(size_t size) {
 }
 
 // --- Dynamic Slice for i32 ---
+//
+// Zero-GC returns: a function returning UbeSlice_i32 builds its elements on
+// the Tuber and does NOT restore its watermark, so the elements stay above
+// the caller's watermark. The caller's scope exit frees them in one store.
 typedef struct {
     int32_t* data;
     size_t len;

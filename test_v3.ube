@@ -1,0 +1,56 @@
+// 1. Declare a Tagged Union (Enum with data!)
+enum Shape {
+    Circle(i32),
+    Rectangle(i32, i32),
+    Point
+}
+
+// 2. Pattern Matching with variable binding
+fn print_shape(s: Shape) -> i32 {
+    match s {
+        Circle(r) => println(r),
+        Rectangle(w, h) => println(w * h),
+        Point => println_str("Point at (0, 0)")
+    }
+    return 0
+}
+
+// 3. Returning a Dynamic Slice across function boundaries (Zero GC!)
+fn make_even_numbers(count: i32) -> []i32 {
+    let mut evens = []i32{}
+    let mut i = 1
+    // Fill the slice on the current Tuber bump
+    evens.push(2)
+    evens.push(4)
+    evens.push(6)
+    evens.push(8)
+    return evens // Caller inherits the bump! Zero-copy, no GC heap!
+}
+
+fn main() {
+    println_str("--- Ube v0.3: Enums & Dynamic Returns ---")
+
+    // Test Tagged Enum & Match
+    let s1 = Shape.Circle(42)
+    let s2 = Shape.Rectangle(10, 5)
+    let s3 = Shape.Point
+
+    println_str("Circle radius:")
+    print_shape(s1)
+
+    println_str("Rectangle area:")
+    print_shape(s2)
+
+    println_str("Point:")
+    print_shape(s3)
+
+    // Test Returning Dynamic Slice from Function
+    println_str("Receiving dynamic slice from function:")
+    let mut numbers = make_even_numbers(4)
+
+    for num in numbers {
+        println(num)
+    }
+
+    println_str("All dynamic memory reclaimed cleanly on main() exit!")
+}

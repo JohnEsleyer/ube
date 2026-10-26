@@ -4,6 +4,7 @@ output.c
 # Built binaries
 ube_app
 ube_v1_demo
+ube_v2
 ube_strings
 ube_err
 

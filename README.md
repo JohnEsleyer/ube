@@ -66,6 +66,10 @@ In Ube, arrays grow monotonically inside the Tuber without moving existing items
 ### 3. Caller-Allocated Returns
 Instead of using escape analysis to dump returned values onto a GC heap (like Go does), Ube’s compiler automatically redirects function return allocations into the **caller's Tuber**. Returning dynamic collections is 100% zero-copy.
 
+A callee that returns `[]i32` simply does not restore its watermark: everything it built stays above the caller’s watermark, so the caller receives a live slice and frees it with its own scope exit.
+
+> **Prototype limit:** only one slice may be growing on a Tuber at a time. While a slice returned from a callee is live, do not `push` to another slice in the same scope; the production design enforces this invariant at compile time.
+
 ---
 
 ## 4. Syntax at a Glance
@@ -179,13 +183,13 @@ Ube uses a high-velocity transpiler architecture targeting ANSI C99 as universal
 - [x] Go-style receiver functions: `fn (s Slice) sum() -> i32`.
 - [x] Struct declarations and field access.
 - [x] Tuber-allocated `string` values: literals, `+` concatenation, printing.
-- [ ] Implicit caller-allocated return values (`fn make_list() -> []i32`).
+- [x] Implicit caller-allocated return values (`fn make_list() -> []i32`).
 
 ### Phase 3: Error Handling & Modern Types
 - [x] Result types (`i32 ! string`) with error bubbling via the `?` operator.
 - [ ] Null-safe Optionals (`T?`) eliminating null pointer panics.
-- [ ] Tagged Unions / Enums (`enum Shape { Circle(f32), Rectangle(f32, f32) }`).
-- [ ] Pattern matching (`match` expressions).
+- [x] Tagged Unions / Enums (`enum Shape { Circle(f32), Rectangle(f32, f32) }`).
+- [x] Pattern matching (`match` expressions).
 
 ### Phase 4: Standard Library & Concurrency
 - [ ] Standard I/O, File System, and Math modules.
@@ -215,8 +219,9 @@ cd ube
 ```bash
 python3 ubec.py test_v2.ube    # structs, receiver methods, `?`
 ```
-Also try `demo.ube` (slices and Tuber scopes) and `test_strings.ube`
-(Tuber-allocated strings and concatenation).
+Also try `demo.ube` (slices and Tuber scopes), `test_strings.ube`
+(Tuber-allocated strings and concatenation) and `test_v3.ube`
+(tagged enums, `match`, and zero-GC dynamic returns).
 
 ### 3. Build & Run the Native Binary
 ```bash
