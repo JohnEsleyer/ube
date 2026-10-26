@@ -338,7 +338,152 @@ Ube uses a high-velocity transpiler architecture targeting ANSI C99 as universal
 
 ---
 
-## 8. Implementation Roadmap
+## 8. Build System & Library Model
+
+### 8.1 Is Ube Statically Compiled? Should It Be?
+
+**Yes, Ube is statically compiled Ahead-Of-Time (AOT), and it absolutely should be.**
+
+One of Go's greatest contributions to software engineering was the **single static binary**:
+* You run `go build`, copy the single executable to a blank Linux server or Docker `FROM scratch` container, and it just runs.
+* No installing Python runtimes, no Node.js `node_modules`, no dynamic `.dll` / `.so` missing dependency errors.
+
+Because Ube has **no Garbage Collector, no runtime VM, and no interpreter**, it naturally produces **100% self-contained static binaries** that are even smaller and faster than Go's.
+
+```bash
+# Compile Ube to a single static binary with zero external dependencies
+ubec main.ube -o app --static
+```
+* On Linux: produces a single binary linked with `musl` or static `glibc`.
+* On Microcontrollers: produces a single `.bin` or `.hex` file flashed straight to ROM.
+* On Web: produces a standalone `.wasm` file.
+
+---
+
+### 8.2 How Do Native Ube Libraries Work?
+
+Ube avoids C++'s "header file hell" and instead uses **Source-Based Packages** (the modern model used by Go, Rust, and Zig).
+
+#### The Problem with C/C++ Binary Libraries:
+In C++, distributing pre-compiled binary libraries (`.a` / `.so`) is notoriously fragile. If a library was compiled with a different compiler version, standard library flag, or ABI, your program crashes with cryptic linker errors.
+
+#### The Ube Way: Source-Distributed Modules
+Because Ube transpiles so fast (under 100 milliseconds via TinyCC), **all Ube libraries are distributed as clean source code**:
+
+```
+my_game_project/
+├── ube.mod              <-- Package manifest
+├── main.ube
+└── vendor/
+    └── physics/         <-- Downloaded pure Ube library
+        ├── physics.ube
+        └── collision.ube
+```
+
+In your code:
+```ube
+import "std/fmt"
+import "vendor/physics"
+
+fn main() {
+    let body = physics.RigidBody.new()
+    fmt.println("Physics initialized!")
+}
+```
+
+When you compile, the Ube compiler reads the imported files, performs type checking and root analysis across the whole project, and emits **one cohesive, optimized C translation unit**.
+* **Dead code is eliminated automatically.**
+* **Functions are inlined across packages.**
+* **Zero ABI mismatch bugs.**
+
+---
+
+### 8.3 How Do C Libraries Work in Ube?
+
+In Go, calling C code through `cgo` has a **massive performance penalty** (hundreds of nanoseconds per call) because Go has to switch stacks and pin memory so the Garbage Collector doesn't move data out from under C.
+
+In Ube, **memory never moves and there is no GC**. C libraries run at **100% native machine speed with zero conversion overhead**.
+
+There are two primary ways to use C libraries in Ube:
+
+#### Approach A: Direct Binding via `extern fn` (For System Libraries)
+If a C library is already installed on your system (like OpenSSL, SQLite, or raylib):
+
+```ube
+// 1. Declare the C function signature in Ube
+extern fn sqlite3_open(filename: *u8, ppDb: **void) -> i32
+extern fn sqlite3_close(db: *void) -> i32
+
+fn main() {
+    let mut db: *void = null
+    let rc = sqlite3_open("game_save.db".ptr, &db)
+
+    if rc == 0 {
+        fmt.println("Database opened successfully!")
+        sqlite3_close(db)
+    }
+}
+```
+Compile and link statically with one command:
+```bash
+ubec main.ube -o app -lsqlite3
+```
+
+#### Approach B: "Drop-in" C Source Files (The Game Dev & Embedded Secret)
+The best libraries in modern systems development are **Single-File C Libraries** (like `sqlite3.c`, `raylib`, `miniaudio.h`, `stb_image.h`, `cJSON.c`).
+
+In Ube, you can literally drop a `.c` file into your project folder:
+
+```ube
+#c_include "miniaudio.h"
+#c_source  "miniaudio.c"
+
+fn main() {
+    // Call miniaudio C functions directly!
+}
+```
+When `ubec` runs, it bundles the C source code alongside Ube's generated code into the final static executable. **No Makefiles, no CMake, no complex build scripts.**
+
+---
+
+### 8.4 Summary: The Ube Build Artifact Model
+
+```
+┌─────────────────────────────────┐
+│     Your Ube Source Code        │
+│          (*.ube)                │
+└────────────────┬────────────────┘
+                 │
+                 │  + Imported Ube Source Packages
+                 │  + Embedded C Source / Static Libs (.a)
+                 ▼
+┌─────────────────────────────────┐
+│     Ube Transpiler (ubec)       │
+└────────────────┬────────────────┘
+                 │
+                 ▼ (Single cohesive output.c)
+┌─────────────────────────────────┐
+│     C Backend (Clang / GCC)     │
+└────────────────┬────────────────┘
+                 │
+                 ▼
+┌────────────────────────────────────────────────────────┐
+│              Single Static Executable                  │
+│                                                        │
+│  • Desktop/Server: Standalone 2MB executable           │
+│  • Web: Standalone self-contained .wasm module         │
+│  • Microcontroller: Flat binary flashed straight to ROM│
+└────────────────────────────────────────────────────────┘
+```
+
+**Why this is the winning formula for Ube:**
+1. **Static compilation** gives developers the hassle-free deployment experience they love about Go.
+2. **Source-based Ube packages** eliminate C++'s fragile library/ABI headaches.
+3. **Native C compatibility** gives Ube instant access to 50 years of battle-tested C libraries (`raylib`, `SDL2`, `sqlite`, `mbedtls`, `curl`) with **zero performance tax**.
+
+---
+
+## 9. Implementation Roadmap
 
 ### Phase 1: The Core Foundation (Current Milestone)
 - [x] Minimal Tuber runtime (`ube_runtime.h`) with watermark save/restore.
@@ -379,7 +524,7 @@ Ube uses a high-velocity transpiler architecture targeting ANSI C99 as universal
 
 ---
 
-## 9. Quickstart (Testing the Prototype)
+## 10. Quickstart (Testing the Prototype)
 
 ### Prerequisites
 * Python 3.8+ (for running the compiler prototype)
@@ -418,7 +563,7 @@ with `-pthread`.
 
 ---
 
-## 10. Guiding Principles
+## 11. Guiding Principles
 
 1. **Pragmatism Over Purity:** If a feature makes the compiler slightly more complex but saves the developer hours of frustration, we implement it.
 2. **Explicit Intent, Implicit Safety:** Mutability is explicit (`let mut`), but memory cleanup is implicit and guaranteed.
@@ -428,6 +573,6 @@ with `-pthread`.
 
 ---
 
-## 11. License
+## 12. License
 
 Ube is open-source software licensed under the [MIT License](LICENSE).
