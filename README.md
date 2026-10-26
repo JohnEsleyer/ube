@@ -171,7 +171,61 @@ fn main() {
 
 ---
 
-## 5. Architectural Pipeline
+## 5. Concurrency: Direct Style, Not `async`/`await`
+
+Ube adopts Go’s **direct (sequential) style** by design. There is no `async`, no `await`, no `Future`, and no red/blue function coloring. A function that waits is an ordinary function:
+
+```ube
+struct Job { id: i32, weight: i32 }
+
+fn worker(jobs: Chan[Job], results: Chan[i32]) {
+    let job = jobs.recv()          // suspends this Vine, not the world
+    results.send(job.id * job.weight)
+}
+
+fn main() {
+    let jobs = Chan[Job].new(8)
+    let results = Chan[i32].new(8)
+
+    spawn worker(jobs, results)    // run it on another Vine
+
+    jobs.send(Job{ id: 1, weight: 10 })
+    jobs.close()
+
+    let result = results.recv()
+    println(result)
+}
+```
+
+There is only one kind of function. A blocking channel read is legal in `main`, in a helper, in a receiver method, and inside a spawned Vine — with no viral annotations, no `.await`, and no duplicated standard library split between sync and async variants.
+
+> **Enforced by the compiler.** `ubec` rejects `async` and `await` outright, so colored concurrency cannot creep into a codebase:
+>
+> ```text
+> [ubec]: error: 'async' is not part of Ube; concurrency is direct-style.
+>         Write plain blocking code, use `spawn` for background Vines, and
+>         `Chan[T]` for coordination.
+> ```
+
+How suspension is intended to work per target:
+
+| Target | Ready-Vine scheduling |
+| :--- | :--- |
+| Servers (Linux/macOS/Windows) | `epoll` / `kqueue` / `IOCP` event loop: a blocked Vine parks and the worker runs another |
+| Microcontrollers | cooperative fibers or FreeRTOS tasks over a small static Tuber |
+| WebAssembly | stack switching, or promises lowered through Asyncify |
+
+A suspended Vine needs only its registers and its **Tuber watermark**. Its scratch memory is fixed and never relocated, so there is no stack copying, no pointer fix-up pass, and no GC scan.
+
+### Cancellation and Timeouts
+
+Cancellation is explicit rather than an implicit future drop: spawn the work, then race its channel against a timer with `select`. `select`, timers, and non-blocking I/O remain roadmap items. Until they land, the pthread prototype simply blocks the worker thread; `recv` is synchronous and direct-style.
+
+> **Prototype status:** the language rule is final — direct style only. The current backend maps each Vine to a detached pthread, so a blocking `recv` parks an OS thread rather than a lightweight fiber. The event-loop and cooperative-fiber backends above are the next concurrency milestone.
+
+---
+
+## 6. Architectural Pipeline
 
 Ube uses a high-velocity transpiler architecture targeting ANSI C99 as universal intermediate representation:
 
@@ -205,7 +259,7 @@ Ube uses a high-velocity transpiler architecture targeting ANSI C99 as universal
 
 ---
 
-## 6. Implementation Roadmap
+## 7. Implementation Roadmap
 
 ### Phase 1: The Core Foundation (Current Milestone)
 - [x] Minimal Tuber runtime (`ube_runtime.h`) with watermark save/restore.
@@ -231,6 +285,8 @@ Ube uses a high-velocity transpiler architecture targeting ANSI C99 as universal
 - [x] Vines (lightweight coroutines/fibers) with private per-Vine Tubers.
 - [x] Typed flat channels (`Chan[T]`) with `new`, `send`, `recv`, and `close`.
 - [x] `spawn fn(args)` and the compile-time flat-only rule for payloads and arguments.
+- [x] Direct-style concurrency: no `async`/`await`, no colored functions (rejected by `ubec`).
+- [ ] Event-loop/fiber scheduler so blocking operations park a Vine instead of an OS thread.
 - [ ] `select` multiplexing, channel timeouts, and non-pthread backends.
 
 ### Phase 5: Self-Hosting & Native Tooling
@@ -240,7 +296,7 @@ Ube uses a high-velocity transpiler architecture targeting ANSI C99 as universal
 
 ---
 
-## 7. Quickstart (Testing the Prototype)
+## 8. Quickstart (Testing the Prototype)
 
 ### Prerequisites
 * Python 3.8+ (for running the compiler prototype)
@@ -276,15 +332,16 @@ with `-pthread`.
 
 ---
 
-## 8. Guiding Principles
+## 9. Guiding Principles
 
 1. **Pragmatism Over Purity:** If a feature makes the compiler slightly more complex but saves the developer hours of frustration, we implement it.
 2. **Explicit Intent, Implicit Safety:** Mutability is explicit (`let mut`), but memory cleanup is implicit and guaranteed.
 3. **No Hidden Costs:** No invisible allocations, no background GC threads, no stop-the-world pauses.
 4. **Small Conceptual Surface:** You should be able to learn the entire language syntax and semantics over a weekend.
+5. **One Kind of Function:** Concurrency never changes a function’s type or call syntax. There is no `async`/`await`; blocking code is just code, and `spawn` is how you run it elsewhere.
 
 ---
 
-## 9. License
+## 10. License
 
 Ube is open-source software licensed under the [MIT License](LICENSE).

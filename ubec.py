@@ -59,6 +59,27 @@ def strip_line_comment(line):
     return line
 
 
+def code_only(line):
+    """Drop string-literal contents so keyword scans ignore prose."""
+    out = []
+    in_string = False
+    escaped = False
+    for ch in line:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
 def split_top(text):
     """Split on top-level commas, ignoring commas inside [] () {}."""
     parts, cur, depth = [], "", 0
@@ -387,6 +408,18 @@ class UbeTranspiler:
         lines = [strip_line_comment(line).strip()
                  for line in self.source.splitlines()]
         lines = [line for line in lines if line]
+
+        # Ube is direct-style only: reject colored concurrency outright.
+        for line in lines:
+            m_async = re.search(r"\b(async|await)\b", code_only(line))
+            if m_async:
+                sys.stderr.write(
+                    "[ubec]: error: '%s' is not part of Ube; concurrency is "
+                    "direct-style.\n        Write plain blocking code, use "
+                    "`spawn` for background Vines, and `Chan[T]` for "
+                    "coordination.\n" % m_async.group(1))
+                sys.exit(1)
+
         self.prescan(lines)
 
         self.emit('#include "ube_runtime.h"')
