@@ -1,0 +1,31 @@
+fn main() {
+    println_str("--- Ube Zero-GC Language Demo ---")
+
+    let mut numbers = []i32{}
+    numbers.push(10)
+    numbers.push(20)
+    numbers.push(30)
+
+    println_str("Iterating through dynamic slice:")
+    for num in numbers {
+        println(num)
+    }
+
+    println_str("Entering temporary Tuber block...")
+    tuber {
+        let mut temp_list = []i32{}
+        temp_list.push(999)
+        temp_list.push(1000)
+        
+        println_str("Inside temporary scope:")
+        for temp in temp_list {
+            println(temp)
+        }
+    } // tuber
+    println_str("Temporary memory wiped clean in 1 instruction!")
+
+    println_str("Original slice still intact:")
+    for num in numbers {
+        println(num)
+    }
+}
