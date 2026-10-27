@@ -20,12 +20,17 @@
     "languages": [
       {
         "id": "ube",
-        "aliases": ["Ube", "ube"],
-        "extensions": [".ube"],
+        "aliases": [
+          "Ube",
+          "ube"
+        ],
+        "extensions": [
+          ".ube"
+        ],
         "configuration": "./language-configuration.json",
         "icon": {
-          "light": "./icon.svg",
-          "dark": "./icon.svg"
+          "light": "./icons/ube.svg",
+          "dark": "./icons/ube.svg"
         }
       }
     ],
@@ -40,6 +45,13 @@
       {
         "language": "ube",
         "path": "./snippets/ube.code-snippets"
+      }
+    ],
+    "iconThemes": [
+      {
+        "id": "ube-file-icons",
+        "label": "Ube",
+        "path": "./icons/ube-icon-theme.json"
       }
     ]
   }
