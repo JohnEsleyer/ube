@@ -15,10 +15,7 @@ type Parser struct {
 }
 
 func NewParser(tokens []Token) *Parser {
-	return &Parser{
-		tokens: tokens,
-		pos:    0,
-	}
+	return &Parser{tokens: tokens, pos: 0}
 }
 
 func (p *Parser) peek(offset int) Token {
@@ -57,7 +54,6 @@ func (p *Parser) expect(t TokenType, msg string) Token {
 	return Token{}
 }
 
-// ParseProgram parses top-level declarations until EOF.
 func (p *Parser) ParseProgram() (prog *Program, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -77,10 +73,6 @@ func (p *Parser) ParseProgram() (prog *Program, err error) {
 	}
 	return &Program{At: loc, Decls: decls}, nil
 }
-
-// -----------------------------------------------------------------------------
-// Declarations
-// -----------------------------------------------------------------------------
 
 func (p *Parser) parseDecl() Decl {
 	tok := p.peek(0)
@@ -174,8 +166,6 @@ func (p *Parser) parseExternDecl() *ExternFnDecl {
 
 func (p *Parser) parseFnDecl() *FnDecl {
 	loc := p.expect(TokenFn, "Expected 'fn'").Loc
-
-	// Receiver method check: fn (r Type) name(...)
 	var receiver *FieldDecl
 	if p.check(TokenLParen) {
 		p.advance()
@@ -217,10 +207,6 @@ func (p *Parser) parseFnDecl() *FnDecl {
 	}
 }
 
-// -----------------------------------------------------------------------------
-// Types
-// -----------------------------------------------------------------------------
-
 func (p *Parser) parseType() UbeType {
 	tok := p.peek(0)
 	var t UbeType
@@ -240,6 +226,12 @@ func (p *Parser) parseType() UbeType {
 		elem := p.parseType()
 		p.expect(TokenRBracket, "Expected ']' after Chan element type")
 		t = ChanType{Elem: elem}
+	} else if tok.Type == TokenIdent && tok.Val == "Pool" {
+		p.advance()
+		p.expect(TokenLBracket, "Expected '[' for Pool element type")
+		elem := p.parseType()
+		p.expect(TokenRBracket, "Expected ']' after Pool element type")
+		t = PoolType{Elem: elem}
 	} else if tok.Type == TokenIdent {
 		idName := p.advance().Val
 		switch idName {
@@ -268,10 +260,6 @@ func (p *Parser) parseType() UbeType {
 	return t
 }
 
-// -----------------------------------------------------------------------------
-// Statements
-// -----------------------------------------------------------------------------
-
 func (p *Parser) parseBlock() *BlockStmt {
 	loc := p.expect(TokenLBrace, "Expected '{' to begin block").Loc
 	var stmts []Stmt
@@ -296,19 +284,21 @@ func (p *Parser) parseStmt() Stmt {
 		return p.parseWhileStmt()
 	case TokenFor:
 		return p.parseForStmt()
-	case TokenTuber:
+	case TokenScope:
 		p.advance()
-		return &TuberStmt{At: tok.Loc, Body: p.parseBlock()}
-	case TokenSpawn:
+		return &ScopeStmt{At: tok.Loc, Body: p.parseBlock()}
+	case TokenWorker:
 		p.advance()
 		call := p.parseExpr()
 		callExpr, ok := call.(*CallExpr)
 		if !ok {
-			p.errorAt(tok.Loc, "spawn target must be a direct function call")
+			p.errorAt(tok.Loc, "worker target must be a direct function call")
 		}
-		return &SpawnStmt{At: tok.Loc, Call: callExpr}
+		return &WorkerStmt{At: tok.Loc, Call: callExpr}
 	case TokenMatch:
 		return p.parseMatchStmt()
+	case TokenSelect:
+		return p.parseSelectStmt()
 	}
 
 	expr := p.parseExpr()
@@ -318,6 +308,39 @@ func (p *Parser) parseStmt() Stmt {
 		return &AssignStmt{At: expr.Loc(), LHS: expr, RHS: rhs}
 	}
 	return &ExprStmt{At: expr.Loc(), Expr: expr}
+}
+
+func (p *Parser) parseSelectStmt() *SelectStmt {
+	loc := p.expect(TokenSelect, "Expected 'select'").Loc
+	p.expect(TokenLBrace, "Expected '{' after select")
+
+	var cases []SelectCase
+	var defBlock *BlockStmt
+
+	for !p.check(TokenRBrace) && !p.check(TokenEOF) {
+		cLoc := p.peek(0).Loc
+		if p.check(TokenIdent) && p.peek(0).Val == "default" {
+			p.advance()
+			p.expect(TokenFatArrow, "Expected '=>' after default")
+			defBlock = p.parseBlock()
+			if p.check(TokenComma) {
+				p.advance()
+			}
+			continue
+		}
+
+		vName := p.expect(TokenIdent, "Expected binding identifier in select case").Val
+		p.expect(TokenAssign, "Expected '=' in select case")
+		chExpr := p.parseExpr()
+		p.expect(TokenFatArrow, "Expected '=>' after select condition")
+		b := p.parseBlock()
+		cases = append(cases, SelectCase{At: cLoc, VarName: vName, Chan: chExpr, Body: b})
+		if p.check(TokenComma) {
+			p.advance()
+		}
+	}
+	p.expect(TokenRBrace, "Expected '}' closing select")
+	return &SelectStmt{At: loc, Cases: cases, Default: defBlock}
 }
 
 func (p *Parser) parseLetStmt() *LetStmt {
@@ -351,8 +374,6 @@ func (p *Parser) parseReturnStmt() *ReturnStmt {
 
 func (p *Parser) parseIfStmt() Stmt {
 	loc := p.expect(TokenIf, "Expected 'if'").Loc
-
-	// if let x = optExpr { ... }
 	if p.check(TokenLet) {
 		p.advance()
 		varName := p.expect(TokenIdent, "Expected identifier in if-let").Val
@@ -391,8 +412,6 @@ func (p *Parser) parseIfStmt() Stmt {
 
 func (p *Parser) parseWhileStmt() Stmt {
 	loc := p.expect(TokenWhile, "Expected 'while'").Loc
-
-	// while let x = call() { ... }
 	if p.check(TokenLet) {
 		p.advance()
 		varName := p.expect(TokenIdent, "Expected identifier in while-let").Val
@@ -451,10 +470,6 @@ func (p *Parser) parseMatchStmt() *MatchStmt {
 	p.expect(TokenRBrace, "Expected '}' closing match")
 	return &MatchStmt{At: loc, Expr: expr, Arms: arms}
 }
-
-// -----------------------------------------------------------------------------
-// Expressions (Precedence Climbing)
-// -----------------------------------------------------------------------------
 
 func (p *Parser) parseExpr() Expr {
 	return p.parseOrElse()
@@ -574,7 +589,6 @@ func (p *Parser) parsePrimary() Expr {
 		return &LiteralExpr{At: tok.Loc, Val: "null", Type: OptionalType{Inner: PrimitiveType{Name: "void"}}}
 	}
 
-	// Slice literal: []Type{}
 	if tok.Type == TokenLBracket && p.peek(1).Type == TokenRBracket {
 		p.advance()
 		p.advance()
@@ -584,7 +598,6 @@ func (p *Parser) parsePrimary() Expr {
 		return &SliceInitExpr{At: tok.Loc, Elem: elemT}
 	}
 
-	// Chan[T] handle (e.g. Chan[i32].new(...))
 	if tok.Type == TokenIdent && tok.Val == "Chan" && p.peek(1).Type == TokenLBracket {
 		p.advance()
 		p.advance()
@@ -593,7 +606,22 @@ func (p *Parser) parsePrimary() Expr {
 		return &IdentExpr{At: tok.Loc, Name: fmt.Sprintf("Chan[%s]", elemT.String())}
 	}
 
-	// Identifiers or Struct Literals: Point{ x: 10, y: 20 }
+	if tok.Type == TokenIdent && tok.Val == "Pool" && p.peek(1).Type == TokenLBracket {
+		p.advance()
+		p.advance()
+		elemT := p.parseType()
+		p.expect(TokenRBracket, "Expected ']' after Pool element type")
+		return &IdentExpr{At: tok.Loc, Name: fmt.Sprintf("Pool[%s]", elemT.String())}
+	}
+
+	if tok.Type == TokenIdent && tok.Val == "error" && p.peek(1).Type == TokenLParen {
+		loc := p.advance().Loc
+		p.advance()
+		arg := p.parseExpr()
+		p.expect(TokenRParen, "Expected ')' after error argument")
+		return &ErrorExpr{At: loc, Arg: arg}
+	}
+
 	if tok.Type == TokenIdent {
 		idTok := p.advance()
 		if p.check(TokenLBrace) && len(idTok.Val) > 0 && idTok.Val[0] >= 'A' && idTok.Val[0] <= 'Z' {

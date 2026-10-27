@@ -30,3 +30,6 @@ __pycache__/
 
 # textify
 codebase.txt
+
+# AI Prompts
+instructions/

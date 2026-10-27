@@ -11,8 +11,8 @@ fn main() {
         println(num)
     }
 
-    println_str("Entering temporary Tuber block...")
-    tuber {
+    println_str("Entering temporary scope block...")
+    scope {
         let mut temp_list = []i32{}
         temp_list.push(999)
         temp_list.push(1000)
@@ -21,8 +21,8 @@ fn main() {
         for temp in temp_list {
             println(temp)
         }
-    } // tuber
-    println_str("Temporary memory wiped clean in 1 instruction!")
+    } // Memory wiped clean in 1 instruction!
+    println_str("Temporary scope memory wiped clean!")
 
     println_str("Original slice still intact:")
     for num in numbers {

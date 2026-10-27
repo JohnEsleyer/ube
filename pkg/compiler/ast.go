@@ -110,6 +110,14 @@ type OrElseExpr struct {
 func (e *OrElseExpr) Loc() SourceLocation { return e.At }
 func (e *OrElseExpr) exprNode()           {}
 
+type ErrorExpr struct {
+	At  SourceLocation
+	Arg Expr
+}
+
+func (e *ErrorExpr) Loc() SourceLocation { return e.At }
+func (e *ErrorExpr) exprNode()           {}
+
 // Statements
 type Stmt interface {
 	Node
@@ -202,21 +210,21 @@ type ForStmt struct {
 func (s *ForStmt) Loc() SourceLocation { return s.At }
 func (s *ForStmt) stmtNode()           {}
 
-type TuberStmt struct {
+type ScopeStmt struct {
 	At   SourceLocation
 	Body *BlockStmt
 }
 
-func (s *TuberStmt) Loc() SourceLocation { return s.At }
-func (s *TuberStmt) stmtNode()           {}
+func (s *ScopeStmt) Loc() SourceLocation { return s.At }
+func (s *ScopeStmt) stmtNode()           {}
 
-type SpawnStmt struct {
+type WorkerStmt struct {
 	At   SourceLocation
 	Call *CallExpr
 }
 
-func (s *SpawnStmt) Loc() SourceLocation { return s.At }
-func (s *SpawnStmt) stmtNode()           {}
+func (s *WorkerStmt) Loc() SourceLocation { return s.At }
+func (s *WorkerStmt) stmtNode()           {}
 
 type MatchStmt struct {
 	At   SourceLocation
@@ -232,6 +240,22 @@ type MatchArm struct {
 
 func (s *MatchStmt) Loc() SourceLocation { return s.At }
 func (s *MatchStmt) stmtNode()           {}
+
+type SelectCase struct {
+	At      SourceLocation
+	VarName string
+	Chan    Expr
+	Body    *BlockStmt
+}
+
+type SelectStmt struct {
+	At      SourceLocation
+	Cases   []SelectCase
+	Default *BlockStmt
+}
+
+func (s *SelectStmt) Loc() SourceLocation { return s.At }
+func (s *SelectStmt) stmtNode()           {}
 
 type ExprStmt struct {
 	At   SourceLocation

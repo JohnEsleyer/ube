@@ -7,7 +7,7 @@ import (
 )
 
 func TestLexer(t *testing.T) {
-	code := "fn let mut struct enum match if while spawn tuber Chan 42 \"hello\" true null"
+	code := "fn let mut struct enum match if while worker scope Chan 42 \"hello\" true null"
 	lexer := compiler.NewLexer("test.ube", code)
 	toks, err := lexer.Tokenize()
 	if err != nil {
@@ -16,8 +16,8 @@ func TestLexer(t *testing.T) {
 	expected := []compiler.TokenType{
 		compiler.TokenFn, compiler.TokenLet, compiler.TokenMut,
 		compiler.TokenStruct, compiler.TokenEnum, compiler.TokenMatch,
-		compiler.TokenIf, compiler.TokenWhile, compiler.TokenSpawn,
-		compiler.TokenTuber, compiler.TokenIdent, compiler.TokenInt,
+		compiler.TokenIf, compiler.TokenWhile, compiler.TokenWorker,
+		compiler.TokenScope, compiler.TokenIdent, compiler.TokenInt,
 		compiler.TokenString, compiler.TokenBool, compiler.TokenNull,
 		compiler.TokenEOF,
 	}
@@ -87,7 +87,7 @@ func TestTypecheckerRejectsNonFlatChannel(t *testing.T) {
 		name: string
 	}
 
-	fn worker(ch: Chan[User]) {
+	fn handle_user(ch: Chan[User]) {
 	}
 	`
 	tokens, _ := compiler.NewLexer("test.ube", badCode).Tokenize()

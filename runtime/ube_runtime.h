@@ -12,53 +12,85 @@
 #include <errno.h>
 #include <time.h>
 
-#define UBE_TUBER_PAGE_SIZE (64 * 1024)
+#define UBE_SCOPE_CHUNK_SIZE (64 * 1024)
 
-// --- 1. Thread-Local Isolated Tuber Memory ---
-typedef struct {
-    uint8_t* buffer;
-    size_t top;
+// --- 1. Chunked Immutable Scopes (Arena Allocator) ---
+typedef struct UbeChunk {
+    struct UbeChunk* next;
     size_t capacity;
-} UbeTuber;
+    uint8_t memory[];
+} UbeChunk;
+
+typedef struct {
+    UbeChunk* head;
+    UbeChunk* current;
+    size_t top;          // Offset in current chunk
+    size_t total_chunks; // Number of chunks in use
+} UbeScopeArena;
+
+typedef struct {
+    UbeChunk* chunk;
+    size_t top;
+} UbeWatermark;
 
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-static _Thread_local UbeTuber current_tuber;
+static _Thread_local UbeScopeArena current_scope;
 #elif defined(__GNUC__) || defined(__clang__)
-static __thread UbeTuber current_tuber;
+static __thread UbeScopeArena current_scope;
 #else
-static UbeTuber current_tuber;
+static UbeScopeArena current_scope;
 #endif
 
+static inline UbeChunk* ube_chunk_alloc(size_t min_capacity) {
+    size_t cap = min_capacity > UBE_SCOPE_CHUNK_SIZE ? min_capacity : UBE_SCOPE_CHUNK_SIZE;
+    UbeChunk* c = (UbeChunk*)malloc(sizeof(UbeChunk) + cap);
+    if (!c) {
+        fprintf(stderr, "[Ube Panic]: Out of memory allocating Scope chunk!\n");
+        exit(1);
+    }
+    c->next = NULL;
+    c->capacity = cap;
+    return c;
+}
+
 static inline void ube_init(void) {
-    if (current_tuber.buffer == NULL) {
-        current_tuber.capacity = UBE_TUBER_PAGE_SIZE;
-        current_tuber.buffer = (uint8_t*)malloc(current_tuber.capacity);
-        current_tuber.top = 0;
+    if (current_scope.head == NULL) {
+        current_scope.head = ube_chunk_alloc(UBE_SCOPE_CHUNK_SIZE);
+        current_scope.current = current_scope.head;
+        current_scope.top = 0;
+        current_scope.total_chunks = 1;
     }
 }
 
-static inline size_t ube_tuber_save(void) {
-    return current_tuber.top;
+static inline UbeWatermark ube_scope_save(void) {
+    UbeWatermark wm = { current_scope.current, current_scope.top };
+    return wm;
 }
 
-static inline void ube_tuber_restore(size_t watermark) {
-    current_tuber.top = watermark;
+static inline void ube_scope_restore(UbeWatermark wm) {
+    if (!wm.chunk) return;
+    UbeChunk* c = wm.chunk->next;
+    while (c != NULL) {
+        UbeChunk* next = c->next;
+        free(c);
+        c = next;
+    }
+    wm.chunk->next = NULL;
+    current_scope.current = wm.chunk;
+    current_scope.top = wm.top;
 }
 
 static inline void* ube_bump_alloc_unaligned(size_t size) {
-    if (current_tuber.top + size > current_tuber.capacity) {
-        size_t new_cap = current_tuber.capacity * 2;
-        if (new_cap < current_tuber.top + size) new_cap = current_tuber.top + size + UBE_TUBER_PAGE_SIZE;
-        uint8_t* new_buf = (uint8_t*)realloc(current_tuber.buffer, new_cap);
-        if (!new_buf) {
-            fprintf(stderr, "[Ube Panic]: Fatal out of memory on Tuber expansion!\n");
-            exit(1);
-        }
-        current_tuber.buffer = new_buf;
-        current_tuber.capacity = new_cap;
+    ube_init();
+    if (current_scope.top + size > current_scope.current->capacity) {
+        UbeChunk* new_c = ube_chunk_alloc(size);
+        current_scope.current->next = new_c;
+        current_scope.current = new_c;
+        current_scope.top = 0;
+        current_scope.total_chunks++;
     }
-    void* ptr = &current_tuber.buffer[current_tuber.top];
-    current_tuber.top += size;
+    void* ptr = &current_scope.current->memory[current_scope.top];
+    current_scope.top += size;
     return ptr;
 }
 
@@ -109,11 +141,11 @@ typedef struct { \
 } Pool_##T; \
 static inline Pool_##T* Pool_##T##_new(size_t capacity) { \
     Pool_##T* p = (Pool_##T*)malloc(sizeof(Pool_##T)); \
-    p->capacity = capacity; \
+    p->capacity = capacity > 0 ? capacity : 16; \
     p->count = 0; \
     p->free_count = 0; \
-    p->slots = (UbeSlot_##T*)calloc(capacity, sizeof(UbeSlot_##T)); \
-    p->freelist = (uint32_t*)malloc(capacity * sizeof(uint32_t)); \
+    p->slots = (UbeSlot_##T*)calloc(p->capacity, sizeof(UbeSlot_##T)); \
+    p->freelist = (uint32_t*)malloc(p->capacity * sizeof(uint32_t)); \
     return p; \
 } \
 static inline UbeHandle Pool_##T##_spawn(Pool_##T* p, T val) { \
@@ -146,7 +178,7 @@ static inline bool Pool_##T##_despawn(Pool_##T* p, UbeHandle h) { \
     return true; \
 }
 
-// --- 4. Thread-Safe Ring Buffer Channels with Non-Blocking Try & Select ---
+// --- 4. Thread-Safe Ring Buffer Channels ---
 typedef struct {
     void* buffer;
     size_t elem_size;
@@ -162,9 +194,9 @@ typedef struct {
 
 static inline UbeRawChan* ube_raw_chan_new(size_t capacity, size_t elem_size) {
     UbeRawChan* ch = (UbeRawChan*)malloc(sizeof(UbeRawChan));
-    ch->buffer = malloc(capacity * elem_size);
+    ch->buffer = malloc((capacity > 0 ? capacity : 1) * elem_size);
     ch->elem_size = elem_size;
-    ch->capacity = capacity;
+    ch->capacity = capacity > 0 ? capacity : 1;
     ch->count = 0;
     ch->head = 0;
     ch->tail = 0;
@@ -230,57 +262,37 @@ static inline void ube_raw_chan_close(UbeRawChan* ch) {
     pthread_mutex_unlock(&ch->lock);
 }
 
-// --- 5. Thread Trampoline ---
+// --- 5. Workers / Isolated Task Trampoline ---
 typedef struct {
     void* (*fn)(void*);
     void* arg;
-} UbeThreadArgs;
+} UbeWorkerArgs;
 
-static void* ube_thread_trampoline(void* raw) {
-    UbeThreadArgs* a = (UbeThreadArgs*)raw;
+static void* ube_worker_trampoline(void* raw) {
+    UbeWorkerArgs* a = (UbeWorkerArgs*)raw;
     ube_init();
-    size_t watermark = ube_tuber_save();
+    UbeWatermark watermark = ube_scope_save();
     a->fn(a->arg);
-    ube_tuber_restore(watermark);
+    ube_scope_restore(watermark);
     free(a);
     return NULL;
 }
 
-static inline void ube_spawn(void* (*fn)(void*), void* arg) {
+static inline void ube_worker_spawn(void* (*fn)(void*), void* arg) {
     pthread_t th;
-    UbeThreadArgs* a = (UbeThreadArgs*)malloc(sizeof(UbeThreadArgs));
+    UbeWorkerArgs* a = (UbeWorkerArgs*)malloc(sizeof(UbeWorkerArgs));
     a->fn = fn;
     a->arg = arg;
-    pthread_create(&th, NULL, ube_thread_trampoline, a);
+    pthread_create(&th, NULL, ube_worker_trampoline, a);
     pthread_detach(th);
 }
 
-// --- 6. Built-in Standard Library Wrappers ---
+// --- 6. Helper I/O ---
 static inline void ube_fmt_println_str(const char* s) { printf("%s\n", s); }
 static inline void println_str(const char* s) { printf("%s\n", s); }
 static inline void println(int32_t v) { printf("%d\n", v); }
 static inline void ube_fmt_println_i32(int32_t v) { printf("%d\n", v); }
 static inline void ube_fmt_println_f32(float v) { printf("%f\n", v); }
 static inline void ube_fmt_println_bool(bool v) { printf("%s\n", v ? "true" : "false"); }
-
-static inline bool ube_fs_exists(const char* path) {
-    FILE* f = fopen(path, "r");
-    if (f) { fclose(f); return true; }
-    return false;
-}
-
-static inline string ube_fs_read_file(const char* path) {
-    FILE* f = fopen(path, "rb");
-    if (!f) return ube_str_lit("");
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    char* buf = (char*)ube_bump_alloc(sz + 1);
-    fread(buf, 1, sz, f);
-    buf[sz] = '\0';
-    fclose(f);
-    string s = { buf, (size_t)sz };
-    return s;
-}
 
 #endif // UBE_RUNTIME_H

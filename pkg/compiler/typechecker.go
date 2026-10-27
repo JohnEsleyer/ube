@@ -58,10 +58,6 @@ func NewTypechecker() *Typechecker {
 		Params:  []FieldDecl{{Name: "s", Type: StringType{}}},
 		RetType: PrimitiveType{Name: "void"},
 	}
-	tc.Global.Funcs["error"] = FuncSignature{
-		Params:  []FieldDecl{{Name: "msg", Type: StringType{}}},
-		RetType: PrimitiveType{Name: "void"},
-	}
 	return tc
 }
 
@@ -118,9 +114,10 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 				return err
 			}
 			if resT, ok := expected.(ResultType); ok {
-				if _, isErr := s.Value.(*CallExpr); !isErr {
-					return tc.assertCompat(resT.Ok, valT, s.At)
+				if _, isErr := s.Value.(*ErrorExpr); isErr {
+					return tc.assertCompat(resT.Err, valT, s.At)
 				}
+				return tc.assertCompat(resT.Ok, valT, s.At)
 			} else if optT, ok := expected.(OptionalType); ok {
 				if optT.Inner.String() != "void" {
 					if _, isNull := s.Value.(*LiteralExpr); !isNull {
@@ -206,10 +203,10 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		loopEnv.Vars[s.ItemName] = VarInfo{Type: slT.Elem, IsMut: false}
 		return tc.checkBlock(s.Body, loopEnv)
 
-	case *TuberStmt:
+	case *ScopeStmt:
 		return tc.checkBlock(s.Body, env)
 
-	case *SpawnStmt:
+	case *WorkerStmt:
 		_, err := tc.inferExpr(s.Call, env)
 		if err != nil {
 			return err
@@ -217,7 +214,30 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		for _, arg := range s.Call.Args {
 			argT, _ := tc.inferExpr(arg, env)
 			if !argT.IsFlat(tc.Global) {
-				return fmt.Errorf("[%s] cannot pass non-flat type '%s' across Vines", s.At, argT)
+				return fmt.Errorf("[%s] cannot pass non-flat type '%s' across Workers", s.At, argT)
+			}
+		}
+
+	case *SelectStmt:
+		for _, sc := range s.Cases {
+			chT, err := tc.inferExpr(sc.Chan, env)
+			if err != nil {
+				return err
+			}
+			chanType, ok := chT.(ChanType)
+			if !ok {
+				return fmt.Errorf("[%s] select case must receive from Chan, got '%s'", sc.At, chT)
+			}
+			caseEnv := NewTypeEnvironment(env)
+			caseEnv.CurRet = env.CurRet
+			caseEnv.Vars[sc.VarName] = VarInfo{Type: chanType.Elem, IsMut: false}
+			if err := tc.checkBlock(sc.Body, caseEnv); err != nil {
+				return err
+			}
+		}
+		if s.Default != nil {
+			if err := tc.checkBlock(s.Default, env); err != nil {
+				return err
 			}
 		}
 
@@ -283,22 +303,23 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		}
 		if strings.HasPrefix(e.Name, "Chan[") && strings.HasSuffix(e.Name, "]") {
 			elemName := e.Name[5 : len(e.Name)-1]
-			var elemT UbeType
-			switch elemName {
-			case "i32", "u32", "i64", "u64", "u8", "f32", "f64", "bool", "void":
-				elemT = PrimitiveType{Name: elemName}
-			case "string":
-				elemT = StringType{}
-			default:
-				elemT = CustomType{Name: elemName}
-			}
+			elemT := tc.typeFromName(elemName)
 			chT := ChanType{Elem: elemT}
 			if err := tc.validateType(chT, e.At); err != nil {
 				return nil, err
 			}
 			return chT, nil
 		}
+		if strings.HasPrefix(e.Name, "Pool[") && strings.HasSuffix(e.Name, "]") {
+			elemName := e.Name[5 : len(e.Name)-1]
+			elemT := tc.typeFromName(elemName)
+			pT := PoolType{Elem: elemT}
+			return pT, nil
+		}
 		return nil, fmt.Errorf("[%s] Undefined identifier '%s'", e.At, e.Name)
+
+	case *ErrorExpr:
+		return tc.inferExpr(e.Arg, env)
 
 	case *BinaryExpr:
 		lT, err := tc.inferExpr(e.Left, env)
@@ -363,7 +384,20 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					return PrimitiveType{Name: "void"}, nil
 				}
 			}
-			// Receiver functions
+			if p, ok := tgtT.(PoolType); ok {
+				if mem.Member == "new" {
+					return p, nil
+				}
+				if mem.Member == "spawn" {
+					return CustomType{Name: "UbeHandle"}, nil
+				}
+				if mem.Member == "get" {
+					return PointerType{Base: p.Elem}, nil
+				}
+				if mem.Member == "despawn" {
+					return PrimitiveType{Name: "bool"}, nil
+				}
+			}
 			methodKey := fmt.Sprintf("%s.%s", tgtT, mem.Member)
 			if sig, ok := tc.Global.Funcs[methodKey]; ok {
 				return sig.RetType, nil
@@ -441,7 +475,21 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 	return nil, fmt.Errorf("Cannot infer expression type")
 }
 
+func (tc *Typechecker) typeFromName(name string) UbeType {
+	switch name {
+	case "i32", "u32", "i64", "u64", "u8", "f32", "f64", "bool", "void":
+		return PrimitiveType{Name: name}
+	case "string":
+		return StringType{}
+	default:
+		return CustomType{Name: name}
+	}
+}
+
 func (tc *Typechecker) assertCompat(expected, actual UbeType, loc SourceLocation) error {
+	if expected == nil || actual == nil {
+		return nil
+	}
 	if expected.String() == actual.String() {
 		return nil
 	}
@@ -484,6 +532,8 @@ func (tc *Typechecker) validateType(t UbeType, loc SourceLocation) error {
 			return fmt.Errorf("[%s] Chan element type '%s' must be flat", loc, v.Elem)
 		}
 		return nil
+	case PoolType:
+		return tc.validateType(v.Elem, loc)
 	case CustomType:
 		return nil
 	default:
@@ -492,7 +542,11 @@ func (tc *Typechecker) validateType(t UbeType, loc SourceLocation) error {
 }
 
 func (tc *Typechecker) Check(prog *Program) error {
-	// Pass 1: Types & Declarations
+	tc.Global.Structs["UbeHandle"] = []FieldDecl{
+		{Name: "index", Type: PrimitiveType{Name: "u32"}},
+		{Name: "gen", Type: PrimitiveType{Name: "u32"}},
+	}
+
 	for _, decl := range prog.Decls {
 		switch d := decl.(type) {
 		case *StructDecl:
@@ -502,7 +556,6 @@ func (tc *Typechecker) Check(prog *Program) error {
 		}
 	}
 
-	// Validate struct fields and enum variants
 	for _, decl := range prog.Decls {
 		switch d := decl.(type) {
 		case *StructDecl:
@@ -522,7 +575,6 @@ func (tc *Typechecker) Check(prog *Program) error {
 		}
 	}
 
-	// Pass 2: Function Signatures
 	for _, decl := range prog.Decls {
 		switch d := decl.(type) {
 		case *FnDecl:
@@ -558,7 +610,6 @@ func (tc *Typechecker) Check(prog *Program) error {
 		}
 	}
 
-	// Pass 3: Bodies
 	for _, decl := range prog.Decls {
 		if fn, ok := decl.(*FnDecl); ok {
 			env := NewTypeEnvironment(tc.Global)

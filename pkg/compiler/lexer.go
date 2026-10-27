@@ -19,8 +19,8 @@ var keywords = map[string]TokenType{
 	"for":     TokenFor,
 	"in":      TokenIn,
 	"return":  TokenReturn,
-	"tuber":   TokenTuber,
-	"spawn":   TokenSpawn,
+	"scope":   TokenScope,
+	"worker":  TokenWorker,
 	"select":  TokenSelect,
 	"extern":  TokenExtern,
 	"or_else": TokenOrElse,
@@ -81,7 +81,6 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 			continue
 		}
 
-		// Comments
 		if ch == '/' && l.peek(1) == '/' {
 			for l.pos < len(l.source) && l.peek(0) != '\n' {
 				l.advance()
@@ -103,7 +102,6 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 
 		loc := SourceLocation{File: l.file, Line: l.line, Col: l.col}
 
-		// Two-character operators
 		if ch == '-' && l.peek(1) == '>' {
 			l.advance()
 			l.advance()
@@ -141,7 +139,6 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 			continue
 		}
 
-		// Single character delimiters
 		simple := map[rune]TokenType{
 			':': TokenColon, ',': TokenComma, '.': TokenDot, ';': TokenSemicolon,
 			'=': TokenAssign, '?': TokenQuestion, '!': TokenBang, '<': TokenLt,
@@ -155,7 +152,6 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 			continue
 		}
 
-		// Strings
 		if ch == '"' {
 			l.advance()
 			var buf strings.Builder
@@ -187,7 +183,6 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 			continue
 		}
 
-		// Numbers
 		if unicode.IsDigit(ch) {
 			var buf strings.Builder
 			isFloat := false
@@ -211,7 +206,6 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 			continue
 		}
 
-		// Identifiers & Keywords
 		if unicode.IsLetter(ch) || ch == '_' {
 			var buf strings.Builder
 			for l.pos < len(l.source) && (unicode.IsLetter(l.peek(0)) || unicode.IsDigit(l.peek(0)) || l.peek(0) == '_') {
@@ -226,7 +220,6 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 			continue
 		}
 
-		// Directives like #c_include, #c_source
 		if ch == '#' {
 			for l.pos < len(l.source) && l.peek(0) != '\n' {
 				l.advance()

@@ -42,6 +42,11 @@ type ChanType struct{ Elem UbeType }
 func (t ChanType) String() string                   { return fmt.Sprintf("Chan[%s]", t.Elem) }
 func (t ChanType) IsFlat(env *TypeEnvironment) bool { return t.Elem.IsFlat(env) }
 
+type PoolType struct{ Elem UbeType }
+
+func (t PoolType) String() string                   { return fmt.Sprintf("Pool[%s]", t.Elem) }
+func (t PoolType) IsFlat(env *TypeEnvironment) bool { return t.Elem.IsFlat(env) }
+
 type CustomType struct{ Name string }
 
 func (t CustomType) String() string { return t.Name }
