@@ -8,7 +8,7 @@
 *Easy to program like Go. Fast like C. Zero Garbage Collection.*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
-[![Status: Active](https://img.shields.io/badge/Status-v0.4.0-brightgreen.svg)]()
+[![Status: Active](https://img.shields.io/badge/Status-v0.5.0-brightgreen.svg)]()
 [![Target: C99_WASM](https://img.shields.io/badge/Target-C99%20%7C%20WASM%20%7C%20Embedded-blue.svg)]()
 
 </div>
@@ -17,15 +17,15 @@
 
 ## 1. What is Ube?
 
-**Ube** is a statically typed, compiled systems language designed for high developer happiness, blazing speed, and universal portability.
+**Ube** is a statically typed, compiled systems language designed for developer ergonomics, deterministic latency, and universal portability.
 
-It solves a fundamental dilemma in modern software engineering:
+It solves a fundamental dilemma in modern systems engineering:
 
-* **Go** is wonderfully productive, but its **Garbage Collector (GC)** causes unpredictable latency spikes, wastes memory, and makes it unsuitable for microcontrollers and hard real-time systems.
-* **Rust** gives high performance without GC, but its **borrow checker and explicit lifetime annotations (`'a`)** impose a brutal cognitive overhead that slows down feature delivery.
-* **C/C++** is everywhere, but lacks memory safety and modern ergonomics.
+* **Go** is productive, but its **Garbage Collector (GC)** incurs latency spikes, unpredictable memory footprints, and unsuitability for microcontrollers or hard real-time systems.
+* **Rust** gives high performance without GC, but its **borrow checker and explicit lifetime annotations (`'a`)** impose cognitive overhead that slows down iterative delivery.
+* **C/C++** is everywhere, but lacks memory ergonomics, type safety, and modern standard primitives.
 
-**Ube gives you Go's simplicity and developer ergonomics, but without a Garbage Collector.**
+**Ube provides Go-style syntax and developer ergonomics with zero garbage collection.**
 
 ---
 
@@ -33,17 +33,17 @@ It solves a fundamental dilemma in modern software engineering:
 
 | Pillar | How Ube Achieves It |
 | :--- | :--- |
-| 🚀 **Fast as C/Rust** | No GC pauses, contiguous memory layouts, monotone bump growth, and single-store deallocation. |
-| 🧁 **Easy as Go** | Minimalist syntax, Go-style receiver functions, fast compilation, and **zero lifetime annotations**. |
-| 🛡️ **Memory Safe** | Eliminates use-after-free, double-free, and dangling pointers via static root checks and scoped Tubers. |
-| 🌍 **Runs Everywhere** | Transpiles to clean ANSI C99/C23, giving day-one support for **Desktops, WebAssembly (WASM), and Microcontrollers (ESP32, STM32, RISC-V)**. |
-| ⚡ **Zero-Cost C Interop** | Since Ube data is flat and contiguous, passing slices and structs to existing C libraries (`sqlite`, `raylib`, `curl`) requires **zero overhead and no glue code**. |
+| 🚀 **Fast as C/Rust** | Contiguous memory layouts, monotone bump growth on Tubers, and single-store deallocation. |
+| 🧁 **Easy as Go** | Minimalist syntax, Go-style receiver methods, channels, fast compilation, and zero lifetime annotations. |
+| 🛡️ **Memory Safe** | Eliminates heap churn, use-after-free, and double-free via static root analysis and scoped regional Tubers. |
+| 🌍 **Runs Everywhere** | Transpiles to clean ANSI C99/C23: Desktops, WebAssembly (WASM), and Microcontrollers (ESP32, STM32, RISC-V). |
+| ⚡ **Zero-Cost C Interop** | Flat data models and direct C FFI (`extern fn`, `.ptr`) with zero conversion overhead and no glue code. |
 
 ---
 
 ## 3. The Memory Model: "Tubers"
 
-Ube rejects both runtime garbage collection and manual `malloc`/`free`. Instead, it uses **Tubers** (scoped regional bump allocators), adapted for portable 32-bit and 64-bit devices:
+Ube rejects runtime garbage collection and manual `malloc`/`free`. Instead, it uses **Tubers** (scoped regional bump allocators):
 
 ```
 +-------------------------------------------------------------------+
@@ -56,762 +56,64 @@ Ube rejects both runtime garbage collection and manual `malloc`/`free`. Instead,
 ```
 
 ### 1. Single-Store Deallocation
-Every function and lexical block saves a 64-bit `watermark` representing the current top of the Tuber. When the scope exits, deallocating an array with a million elements takes **one CPU instruction**:
+Every function and lexical block saves a watermark representing the current top of the Tuber. When the scope exits, all allocated items inside that scope are reclaimed in a single instruction:
 ```c
-tuber.top = watermark; // All memory reclaimed instantly!
+current_tuber.top = watermark;
 ```
 
-### 2. References Stay Valid Across Growth
-In Rust, calling `vec.push()` invalidates all existing references into that vector.  
-In Ube, arrays grow monotonically inside the Tuber without moving existing items. **References to elements inside an array remain valid even as you push more items to it.**
+### 2. Caller-Allocated Returns
+Callees that return dynamic slices do not reset their watermark; caller frames inherit the allocation directly without GC or copying.
 
-> **Prototype note:** the current compiler only implements `[]i32` slices and does not yet expose reference types (`&T`). This subsection describes the intended invariant, not a feature you can use today.
-
-### 3. Caller-Allocated Returns
-Instead of using escape analysis to dump returned values onto a GC heap (like Go does), Ube’s compiler automatically redirects function return allocations into the **caller's Tuber**. Returning dynamic collections is 100% zero-copy.
-
-A callee that returns `[]i32` simply does not restore its watermark: everything it built stays above the caller’s watermark, so the caller receives a live slice and frees it with its own scope exit.
-
-> **Prototype limit:** only one slice may be growing on a Tuber at a time. While a slice returned from a callee is live, do not `push` to another slice in the same scope; the production design enforces this invariant at compile time.
-
-### 4. Vines: Shared-Nothing Concurrency
-
-A **Vine** is Ube’s unit of concurrency. Every Vine owns a **private Tuber**, reached through thread-local storage, so no Vine can ever hold a pointer into another Vine’s scratch memory. Data crosses Vine boundaries only through typed channels:
-
-```ube
-struct Job { id: i32, weight: i32 }
-
-fn worker(jobs: Chan[Job], results: Chan[i32]) {
-    let job = jobs.recv()
-    results.send(job.id * job.weight)
-}
-
-fn main() {
-    let jobs = Chan[Job].new(8)
-    let results = Chan[i32].new(8)
-
-    spawn worker(jobs, results)
-
-    jobs.send(Job{ id: 1, weight: 10 })
-    jobs.close()
-    println(results.recv())
-}
-```
-
-A channel copies each value with `memcpy` into a runtime-owned ring buffer, and the receiving Vine reads its own bytes into its own Tuber. `Chan[T]` is therefore restricted at compile time to **flat** types: primitives, channel handles, and structs or enums built only from flat fields. `string`, slices, and borrowed references are rejected before any C is generated:
-
-```text
-[ubec]: error: cannot pass non-flat type 'string' across Vines (Chan[string])
-```
-
-That single rule replaces Rust’s `Send`/`Sync` trait machinery: with no pointers crossing the boundary, data races are impossible by construction. The prototype backend maps each spawned Vine to a detached pthread with its own TLS Tuber. `select`, channel timeouts, and alternative schedulers (WASM event loop, cooperative fibers or FreeRTOS tasks on microcontrollers) are roadmap items.
-
-> **Prototype limits:** `recv` is blocking and yields a zero value after `close`; the optional/`while let` machinery for clean closed-channel loops is not implemented yet. Channel ring buffers are never freed, and a detached Vine must be kept alive by the program’s own send/receive handshake.
+### 3. Vines: Shared-Nothing Concurrency
+A **Vine** is Ube's unit of execution. Every Vine owns a private, isolated Tuber via thread-local storage (`_Thread_local`). Cross-Vine communication occurs exclusively via typed channels (`Chan[T]`) copying data by value (`memcpy`).
 
 ---
 
-## 4. Syntax at a Glance
+## 4. Current Implementation Status
 
-### Clean, Predictable, and Safe
-
-```ube
-package main
-
-import "std/fmt"
-
-struct User {
-    id:    u32,
-    name:  string,
-    email: string?, // Nullable/Optional (no nil pointer crashes!)
-}
-
-// Go-style receiver method
-fn (u User) greeting() -> string {
-    return "Hello, " + u.name
-}
-
-fn main() {
-    // Dynamic slice allocated on the local Tuber scratchpad
-    let mut team = []User{}
-
-    team.push(User{ id: 1, name: "Maria", email: null })
-    team.push(User{ id: 2, name: "Jose",  email: "jose@ube.dev" })
-
-    // Safe reference: stays valid even after future pushes!
-    let leader = &team[0]
-
-    for member in team {
-        fmt.println(member.greeting())
-    }
-
-    // Isolated memory scratchpad
-    tuber {
-        let mut temp_data = []i32{}
-        temp_data.push(100)
-        temp_data.push(200)
-        // do heavy processing...
-    } // <-- temp_data memory reclaimed instantly in ONE instruction!
-}
-```
-
-### Better Error Handling than Go (`?` Operator)
-
-No more repetitive `if err != nil` blocks:
-
-```ube
-fn load_config(path: string) -> Config ! fs.Error {
-    let file = fs.open(path)?   // Bubbles up errors automatically
-    let data = file.read_all()?
-    return parse_json(data)
-}
-
-fn main() {
-    // Inline fallback: use a default when the result is an error.
-    let cfg = load_config("config.json") or_else Config.default()
-}
-```
-
-### Null Safety Without Null Pointers
-
-```ube
-let present: i32? = 777
-let missing: i32? = null
-
-if let val = present {
-    println(val)                 // runs only when a value exists
-}
-
-if let val = missing {
-    println(val)                 // never runs
-}
-
-let safe = missing or_else 0     // unwrap with a default
-```
-
-`T?` is a tagged value (`has_val` plus the value), not a pointer, so there is no `nil` to dereference. The prototype supports scalar optionals (`i32`, `i64`, `u32`, `u64`, `u8`, `f32`, `f64`, `bool`) and `string?`. Optional function return types and `if let ... else` chains remain roadmap items.
+| Feature / Subsystem | Status | Description |
+| :--- | :--- | :--- |
+| **AST Parser & Lexer** | **Shipped** | Full tokenization, recursive-descent parser, line/column tracking. |
+| **Static Typechecker** | **Shipped** | Scope resolution, type inference, struct/enum validation, flat type check for `Chan[T]`. |
+| **Generic Slices (`[]T`)** | **Shipped** | Supports dynamic arrays of primitives, structs, and custom types via `.push()`. |
+| **Null-Safe Optionals (`T?`)** | **Shipped** | `null`, `if let`, optional returns, and unwrap fallback (`or_else`). |
+| **Result Error Handling (`T ! E`)** | **Shipped** | Fallible functions, `return error(...)`, `?` propagation, and `or_else`. |
+| **Tagged Unions & Pattern Matching**| **Shipped** | Multi-variant data enums, multi-line `match` statements with bindings. |
+| **C FFI & Pointer Interop** | **Shipped** | `extern fn`, `*u8`, `*void`, `**void`, and `.ptr` lowering. |
+| **Generational Slot Pools (`Pool[T]`)**| **Shipped** | Fast handle-based entity pooling with generational index safety. |
+| **Channels & Vines** | **Shipped** | `Chan[T].new()`, `.send()`, `.recv()`, `.close()`, `spawn`, `while let`, and `select`. |
+| **Chunked Immutable Tubers** | Roadmap | Migration from reallocating buffer to non-moving chunk lists. |
+| **M:N Fiber Scheduler** | Roadmap | Epoll/Kqueue/WASM cooperative fiber event loop. |
+| **Self-Hosting Compiler** | Roadmap | Rewrite compiler frontend directly in Ube. |
 
 ---
 
-## 5. Concurrency: Direct Style, Not `async`/`await`
-
-Ube adopts Go’s **direct (sequential) style** by design. There is no `async`, no `await`, no `Future`, and no red/blue function coloring. A function that waits is an ordinary function:
-
-```ube
-struct Job { id: i32, weight: i32 }
-
-fn worker(jobs: Chan[Job], results: Chan[i32]) {
-    let job = jobs.recv()          // suspends this Vine, not the world
-    results.send(job.id * job.weight)
-}
-
-fn main() {
-    let jobs = Chan[Job].new(8)
-    let results = Chan[i32].new(8)
-
-    spawn worker(jobs, results)    // run it on another Vine
-
-    jobs.send(Job{ id: 1, weight: 10 })
-    jobs.close()
-
-    let result = results.recv()
-    println(result)
-}
-```
-
-There is only one kind of function. A blocking channel read is legal in `main`, in a helper, in a receiver method, and inside a spawned Vine — with no viral annotations, no `.await`, and no duplicated standard library split between sync and async variants.
-
-> **Enforced by the compiler.** `ubec` rejects `async` and `await` outright, so colored concurrency cannot creep into a codebase:
->
-> ```text
-> [ubec]: error: 'async' is not part of Ube; concurrency is direct-style.
->         Write plain blocking code, use `spawn` for background Vines, and
->         `Chan[T]` for coordination.
-> ```
-
-How suspension is intended to work per target:
-
-| Target | Ready-Vine scheduling |
-| :--- | :--- |
-| Servers (Linux/macOS/Windows) | `epoll` / `kqueue` / `IOCP` event loop: a blocked Vine parks and the worker runs another |
-| Microcontrollers | cooperative fibers or FreeRTOS tasks over a small static Tuber |
-| WebAssembly | stack switching, or promises lowered through Asyncify |
-
-A suspended Vine needs only its registers and its **Tuber watermark**. Its scratch memory is fixed and never relocated, so there is no stack copying, no pointer fix-up pass, and no GC scan.
-
-### Cancellation and Timeouts
-
-Cancellation is explicit rather than an implicit future drop: spawn the work, then race its channel against a timer with `select`. `select`, timers, and non-blocking I/O remain roadmap items. Until they land, the pthread prototype simply blocks the worker thread; `recv` is synchronous and direct-style.
-
-> **Prototype status:** the language rule is final — direct style only. The current backend maps each Vine to a detached pthread, so a blocking `recv` parks an OS thread rather than a lightweight fiber. The event-loop and cooperative-fiber backends above are the next concurrency milestone.
-
----
-
-## 6. Game Development: Frame Arenas and Flat Data
-
-Ube’s memory model maps onto the scratchpad pattern used by game engines: allocate temporary data for one frame, then reclaim all of it with a single store. There is no collector to trigger a hitch, and no per-frame `malloc`/`free` when the data is built inside a `tuber` block.
-
-```ube
-fn simulate_particles(frame: i32) -> i32 {
-    let mut particles = []i32{}
-    let mut i = 0
-    while i < 4 {
-        particles.push(frame * 10 + i)
-        i = i + 1
-    }
-    let mut total = 0
-    for p in particles {
-        total = total + p
-    }
-    return total
-}
-
-fn main() {
-    let mut frame = 0
-    while frame < 3 {
-        tuber {
-            let total = simulate_particles(frame)
-            println(total)
-        } // tuber: the whole frame scratchpad is reclaimed here
-        frame = frame + 1
-    }
-}
-```
-
-This is the runnable `test_game_loop.ube`. The generated C saves a watermark on entering the `tuber` block and restores it on exit — one pointer write, no scanning.
-
-### What works today
-
-| Capability | Status |
-| :--- | :--- |
-| Per-frame arenas via `tuber { ... }` | **Yes** — save/restore watermark |
-| Contiguous dynamic arrays | **Yes** for `[]i32` |
-| `while` loops, assignment, `break`, `continue` | **Yes** |
-| Flat structs, enums, and `match` | **Yes** |
-| Bounded, predictable frame cost (no GC) | **Yes** — no collector exists |
-| Generic slices `[]T` for structs/floats | **No** — roadmap |
-| `extern fn`, pointer types, `.ptr` | **No** — roadmap |
-| `Pool[T]` / generational slot pools | **No** — design/library stage |
-| References into a growing array | **Not exposed** — design intent only |
-| Real windowing/input/event loop | **No** — pthread prototype only |
-
-The demo uses `[]i32` as the particle buffer because generic `[]T` is not implemented yet. The essay’s `[]Particle`, `[]Enemy`, and `Pool[Entity]` examples are the target design, not current syntax.
-
-### C interop is a target, not a shipped feature
-
-Generated Ube code is C99/GNU-C, so the data model is compatible with C libraries. But there is currently no `extern fn`, `*u8`, or string `.ptr`, so the raylib/SDL2 example cannot be compiled by this prototype. When the FFI surface lands, flat structs and slices should cross the boundary without marshaling; until then, treat those snippets as design targets.
-
-### An honest comparison
-
-Ube’s advantage is not that other languages cannot make games. C++ and Rust also achieve no-GC frame arenas; C# and Go can avoid most GC hitches with pooling and careful allocation. Ube’s bet is that the arena pattern is the **default memory model** instead of a hand-rolled subsystem, with a smaller, Go-like surface than C++ or Rust. The remaining gap is implementation: generic slices, FFI, references, slot pools, and a non-pthread scheduler.
-
----
-
-## 7. Architectural Pipeline
-
-Ube uses a high-velocity transpiler architecture targeting ANSI C99 as universal intermediate representation:
-
-```
-┌─────────────────┐
-│ Ube Source File │ (*.ube)
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   ubec Parser   │ (Lexer, AST Builder, Typechecker)
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  Root Analysis  │ (Proves safe lifetimes & Tuber assignments)
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ C99 Transpiler  │ (Emits clean, readable output.c)
-└────────┬────────┘
-         │
-         ├───────────────────────────────┬───────────────────────────────┐
-         ▼                               ▼                               ▼
-┌─────────────────┐             ┌─────────────────┐             ┌─────────────────┐
-│ Clang / GCC     │             │ Clang WASM Target│            │ Embedded GCC    │
-│ (Desktop/Server)│             │ (Browser/WASI)  │             │ (ESP32 / ARM)   │
-└─────────────────┘             └─────────────────┘             └─────────────────┘
-```
-
----
-
-## 8. Build System & Library Model
-
-### 8.1 Is Ube Statically Compiled? Should It Be?
-
-**Yes, Ube is statically compiled Ahead-Of-Time (AOT), and it absolutely should be.**
-
-One of Go's greatest contributions to software engineering was the **single static binary**:
-* You run `go build`, copy the single executable to a blank Linux server or Docker `FROM scratch` container, and it just runs.
-* No installing Python runtimes, no Node.js `node_modules`, no dynamic `.dll` / `.so` missing dependency errors.
-
-Because Ube has **no Garbage Collector, no runtime VM, and no interpreter**, it naturally produces **100% self-contained static binaries** that are even smaller and faster than Go's.
-
-```bash
-# Compile Ube to a single static binary with zero external dependencies
-ubec main.ube -o app --static
-```
-* On Linux: produces a single binary linked with `musl` or static `glibc`.
-* On Microcontrollers: produces a single `.bin` or `.hex` file flashed straight to ROM.
-* On Web: produces a standalone `.wasm` file.
-
----
-
-### 8.2 How Do Native Ube Libraries Work?
-
-Ube avoids C++'s "header file hell" and instead uses **Source-Based Packages** (the modern model used by Go, Rust, and Zig).
-
-#### The Problem with C/C++ Binary Libraries:
-In C++, distributing pre-compiled binary libraries (`.a` / `.so`) is notoriously fragile. If a library was compiled with a different compiler version, standard library flag, or ABI, your program crashes with cryptic linker errors.
-
-#### The Ube Way: Source-Distributed Modules
-Because Ube transpiles so fast (under 100 milliseconds via TinyCC), **all Ube libraries are distributed as clean source code**:
-
-```
-my_game_project/
-├── ube.mod              <-- Package manifest
-├── main.ube
-└── vendor/
-    └── physics/         <-- Downloaded pure Ube library
-        ├── physics.ube
-        └── collision.ube
-```
-
-In your code:
-```ube
-import "std/fmt"
-import "vendor/physics"
-
-fn main() {
-    let body = physics.RigidBody.new()
-    fmt.println("Physics initialized!")
-}
-```
-
-When you compile, the Ube compiler reads the imported files, performs type checking and root analysis across the whole project, and emits **one cohesive, optimized C translation unit**.
-* **Dead code is eliminated automatically.**
-* **Functions are inlined across packages.**
-* **Zero ABI mismatch bugs.**
-
----
-
-### 8.3 How Do C Libraries Work in Ube?
-
-In Go, calling C code through `cgo` has a **massive performance penalty** (hundreds of nanoseconds per call) because Go has to switch stacks and pin memory so the Garbage Collector doesn't move data out from under C.
-
-In Ube, **memory never moves and there is no GC**. C libraries run at **100% native machine speed with zero conversion overhead**.
-
-There are two primary ways to use C libraries in Ube:
-
-#### Approach A: Direct Binding via `extern fn` (For System Libraries)
-If a C library is already installed on your system (like OpenSSL, SQLite, or raylib):
-
-```ube
-// 1. Declare the C function signature in Ube
-extern fn sqlite3_open(filename: *u8, ppDb: **void) -> i32
-extern fn sqlite3_close(db: *void) -> i32
-
-fn main() {
-    let mut db: *void = null
-    let rc = sqlite3_open("game_save.db".ptr, &db)
-
-    if rc == 0 {
-        fmt.println("Database opened successfully!")
-        sqlite3_close(db)
-    }
-}
-```
-Compile and link statically with one command:
-```bash
-ubec main.ube -o app -lsqlite3
-```
-
-#### Approach B: "Drop-in" C Source Files (The Game Dev & Embedded Secret)
-The best libraries in modern systems development are **Single-File C Libraries** (like `sqlite3.c`, `raylib`, `miniaudio.h`, `stb_image.h`, `cJSON.c`).
-
-In Ube, you can literally drop a `.c` file into your project folder:
-
-```ube
-#c_include "miniaudio.h"
-#c_source  "miniaudio.c"
-
-fn main() {
-    // Call miniaudio C functions directly!
-}
-```
-When `ubec` runs, it bundles the C source code alongside Ube's generated code into the final static executable. **No Makefiles, no CMake, no complex build scripts.**
-
----
-
-### 8.4 Summary: The Ube Build Artifact Model
-
-```
-┌─────────────────────────────────┐
-│     Your Ube Source Code        │
-│          (*.ube)                │
-└────────────────┬────────────────┘
-                 │
-                 │  + Imported Ube Source Packages
-                 │  + Embedded C Source / Static Libs (.a)
-                 ▼
-┌─────────────────────────────────┐
-│     Ube Transpiler (ubec)       │
-└────────────────┬────────────────┘
-                 │
-                 ▼ (Single cohesive output.c)
-┌─────────────────────────────────┐
-│     C Backend (Clang / GCC)     │
-└────────────────┬────────────────┘
-                 │
-                 ▼
-┌────────────────────────────────────────────────────────┐
-│              Single Static Executable                  │
-│                                                        │
-│  • Desktop/Server: Standalone 2MB executable           │
-│  • Web: Standalone self-contained .wasm module         │
-│  • Microcontroller: Flat binary flashed straight to ROM│
-└────────────────────────────────────────────────────────┘
-```
-
-**Why this is the winning formula for Ube:**
-1. **Static compilation** gives developers the hassle-free deployment experience they love about Go.
-2. **Source-based Ube packages** eliminate C++'s fragile library/ABI headaches.
-3. **Native C compatibility** gives Ube instant access to 50 years of battle-tested C libraries (`raylib`, `SDL2`, `sqlite`, `mbedtls`, `curl`) with **zero performance tax**.
-
----
-
-## 9. Implementation Roadmap
-
-### Phase 1: The Core Foundation (Current Milestone)
-- [x] Minimal Tuber runtime (`ube_runtime.h`) with watermark save/restore.
-- [x] End-to-end prototype compiler emitting C (`ubec.py`).
-- [x] Basic types: `i32`, `bool`, and dynamic slices `[]i32`.
-- [x] Monotone `push()` semantics and `tuber { ... }` scoped memory resets.
-- [x] `while` loops, assignment/compound assignment, `break`, and `continue`.
-
-### Phase 2: Ergonomics & Object Model
-- [x] Go-style receiver functions: `fn (s Slice) sum() -> i32`.
-- [x] Struct declarations and field access.
-- [x] Tuber-allocated `string` values: literals, `+` concatenation, printing.
-- [x] Implicit caller-allocated return values (`fn make_list() -> []i32`).
-- [ ] Generic slices `[]T` for structs, floats, and other element types.
-
-### Phase 3: Error Handling & Modern Types
-- [x] Result types (`i32 ! string`) with error bubbling via the `?` operator.
-- [x] `or_else` inline fallback defaults for results and optionals.
-- [x] Null-safe Optionals (`T?`) with `null` and `if let val = opt` unwrapping.
-- [ ] Optionals as function return values and `if let ... else` chains.
-- [x] Tagged Unions / Enums (`enum Shape { Circle(f32), Rectangle(f32, f32) }`).
-- [x] Pattern matching (`match` expressions).
-
-### Phase 4: Standard Library & Concurrency
-- [ ] Standard I/O, File System, and Math modules.
-- [ ] Zero-copy C foreign function interface (`extern fn`).
-- [x] Vines (lightweight coroutines/fibers) with private per-Vine Tubers.
-- [x] Typed flat channels (`Chan[T]`) with `new`, `send`, `recv`, and `close`.
-- [x] `spawn fn(args)` and the compile-time flat-only rule for payloads and arguments.
-- [x] Direct-style concurrency: no `async`/`await`, no colored functions (rejected by `ubec`).
-- [ ] Event-loop/fiber scheduler so blocking operations park a Vine instead of an OS thread.
-- [ ] `select` multiplexing, channel timeouts, and non-pthread backends.
-
-### Phase 5: Self-Hosting & Native Tooling
-- [ ] Rewrite `ubec` in Ube itself (Self-hosting compiler).
-- [ ] Instant-compilation dev workflow via in-process TinyCC (TCC).
-- [ ] Direct WebAssembly (`.wasm`) generation mode.
-
----
-
-## 10. Quickstart (Testing the Prototype)
+## 5. Quickstart
 
 ### Prerequisites
-* Python 3.8+ (for running the compiler prototype)
+* Python 3.8+
 * Any C compiler (`gcc`, `clang`, or `tcc`)
 
-### 1. Clone the Repository
+### Automatic Install
 ```bash
-git clone https://github.com/johnesleyer/ube.git
-cd ube
+curl -fsSL https://raw.githubusercontent.com/JohnEsleyer/ube/main/install.sh | bash
 ```
 
-### 2. Compile an Ube Program
+### Manual Build & Test
 ```bash
-python3 ubec.py test_v2.ube    # structs, receiver methods, `?`
-```
-Also try `demo.ube` (slices and Tuber scopes), `test_strings.ube`
-(Tuber-allocated strings and concatenation), `test_v3.ube`
-(tagged enums, `match`, and zero-GC dynamic returns), `test_v4.ube`
-(Vines, `Chan[T]`, and `spawn`), `test_optionals.ube` (optionals,
-`if let`, and optional `or_else`), `test_game_loop.ube` (per-frame
-`tuber` arenas), and `test_full.ube` (the grand tour:
-concurrency, optionals, `or_else`, enums, and `match`):
+# 1. Run the frontend compiler test suite
+python3 tests/test_frontend.py
 
-```bash
-python3 ubec.py test_full.ube
-```
+# 2. Compile comprehensive end-to-end suite
+python3 src/compiler/ubec.py tests/test_comprehensive.ube
 
-### 3. Build & Run the Native Binary
-```bash
-gcc -O2 -pthread output.c -o ube_app
+# 3. Build with GCC and run
+gcc -O2 -pthread -Isrc/runtime output.c -o ube_app
 ./ube_app
 ```
 
-Concurrency uses the pthreads backend in this prototype, so builds are linked
-with `-pthread`.
-
 ---
 
-## 11. Developer Tooling
-
-### 11.1 VS Code Extension (`editors/vscode`)
-
-The `editors/vscode/` directory contains a complete VS Code extension providing:
-- **Syntax highlighting** for keywords, types, receiver functions, operators (`?`, `!`, `->`)
-- **Bracket auto-closing** and surrounding pairs
-- **Comment shortcuts** (`Ctrl+/` for line comments, block comment support)
-
-#### Installation
-
-**Option A: Package as `.vsix` (Recommended)**
-```bash
-make vsix
-code --install-extension ube-0.4.0.vsix
-```
-
-**Option B: Copy extension directory directly**
-```bash
-# Linux / macOS
-cp -r editors/vscode ~/.vscode/extensions/ube-vscode
-
-# Windows
-copy editors\vscode %USERPROFILE%\.vscode\extensions\ube-vscode
-```
-
-`.ube` files will instantly highlight after restart.
-
----
-
-### 11.2 The `ube` CLI
-
-The `ube` script (in the repo root) is a single-file CLI tool — the modern, unified entry point for the Ube toolchain. It works like `cargo`, `go`, or `bun`:
-
-| Command | Description |
-| :--- | :--- |
-| `ube new <name>` | Scaffold a new project with `ube.mod` and `main.ube` |
-| `ube run [file]` | Transpile and execute instantly (cleans up after itself) |
-| `ube build [opts]` | Build a native binary (`-o <name>`, `--static`) |
-| `ube get <pkg>` | Download a package to the global cache (`~/.ube/pkg`) |
-| `ube vendor` | Copy all deps into `./vendor/` for offline/reproducible builds |
-| `ube clean --dry-run` | Show global cache disk usage without deleting anything |
-| `ube clean --cache` | Wipe the global package cache to free disk space |
-
-#### Quick Setup
-```bash
-# Make it globally available
-sudo cp ube /usr/local/bin/ube
-```
-
-#### Typical Workflow
-```bash
-# 1. Scaffold a new project
-ube new my_project
-cd my_project
-
-# 2. Add an open-source library (Git-native, no registry)
-ube get github.com/username/json-ube
-
-# 3. Develop with instant feedback
-ube run
-
-# 4. Ship a single static binary
-ube build --static -o my_app
-
-# 5. Vendor all deps for offline/reproducible builds
-ube vendor
-```
-
----
-
-### 11.3 Decentralized Package Management
-
-Ube uses **direct Git imports** — no central package registry required. Packages are referenced by their URL path and fetched with `ube get`. The resolver supports **any Git host on Earth**: GitHub, GitLab, Codeberg, Sourcehut, Gitea, Forgejo, corporate intranet servers, and custom vanity domains.
-
-```ube
-// Any public forge or self-hosted server
-import "codeberg.org/developer/game-engine"
-import "git.mycompany.com/embedded/sensor-driver"
-
-// Custom vanity domains
-import "alice.dev/vector-math"
-import "mycompany.io/telemetry"
-```
-
-#### Package Storage: Global Cache by Default
-
-By default, `ube get` stores packages in a **shared machine-wide cache** — the same proven model used by Cargo (`~/.cargo/registry`) and Go (`~/go/pkg/mod`):
-
-```
-~/.ube/pkg/
-├── github.com/
-│   └── raysan5/
-│       └── raylib-ube/          ← shared across all projects
-└── codeberg.org/
-    └── developer/
-        └── fast-json/
-```
-
-Your project directory stays **clean and tiny** (under 10 KB):
-
-```
-my_game/
-├── ube.mod        ← human-readable dependency list
-├── ube.lock       ← exact Git commit hashes for reproducible builds
-├── main.ube
-└── player.ube
-```
-
-Ten projects using the same library consume **zero extra disk space**. If you already have a package cached from another project, `ube run` starts immediately with no download.
-
-#### `ube vendor` — Offline & Reproducible Builds
-
-For game studios, aerospace teams, and CI pipelines that cannot rely on external internet access, one command localises all dependencies:
-
-```bash
-ube vendor
-```
-
-This copies the exact source of every dependency from `~/.ube/pkg` into a local `./vendor/` folder:
-
-```
-my_game/
-├── ube.mod
-├── ube.lock
-├── main.ube
-└── vendor/                            ← everything copied locally
-    ├── github.com/raysan5/raylib-ube/
-    └── codeberg.org/developer/fast-json/
-```
-
-When a `./vendor/` folder is present, `ubec` reads **exclusively from it** and ignores the internet completely. Commit `./vendor/` to your private repository and the project will build on a fully offline machine — even 20 years from now.
-
-#### Cache Management
-
-```bash
-# Show how much disk space the global cache is using
-ube clean --dry-run
-
-# Free disk space by wiping the global cache
-ube clean --cache
-```
-
-#### Comparison Across Languages
-
-| Language | Default package location | Vendoring? | Duplicate disk waste? |
-| :--- | :--- | :--- | :--- |
-| **Node.js** | `./node_modules` (local) | No | **Severe** (gigabytes of duplicates) |
-| **Rust (Cargo)** | `~/.cargo/registry` (global) | Yes (`cargo vendor`) | None |
-| **Go** | `~/go/pkg/mod` (global) | Yes (`go mod vendor`) | None |
-| **🍠 Ube** | **`~/.ube/pkg` (global)** | **Yes (`ube vendor`)** | **None** |
-
-#### Resolution Decision Tree
-
-```
-[ Import path: "mydomain.dev/fast-json" ]
-                      │
-                      ▼
-         Is it an explicit Git/SSH URL?
-        (git@..., ssh://..., https://...)
-               │              │
-              YES              NO
-               │              ▼
-               │   Query https://mydomain.dev/fast-json?ube-get=1
-               │   Check for <meta name="ube-import">
-               │              │
-               │        ┌─────┴─────┐
-               │       YES           NO
-               │        │            │
-               │        ▼            ▼
-               │   Use clone URL   Fallback:
-               │   from meta tag   https://mydomain.dev/fast-json.git
-               └────────┬──────────┘
-                        │
-                        ▼
-           git clone -> ~/.ube/pkg/mydomain.dev/fast-json
-```
-
-#### Vanity Domain Support
-
-If you own a domain, brand your packages cleanly without hosting a custom server — just add one `<meta>` tag:
-
-```html
-<!-- https://alice.dev/vector-math -->
-<head>
-    <meta name="ube-import" content="alice.dev/vector-math git https://gitlab.com/alice/vector-math-repo.git">
-</head>
-```
-
-> **Go vanity URLs work too.** Because Ube also accepts `<meta name="go-import">`, every existing Go package vanity domain works in Ube immediately with zero changes.
-
-#### Private & Self-Hosted Authentication
-
-Git's native credential system handles authentication transparently. Ube never touches or logs secrets.
-
-```bash
-# SSH key (via ssh-agent) — enterprise/private repos
-ube get git@git.corp.internal:engine/physics.git
-
-# HTTPS with credential helper / ~/.netrc — Gitea, Forgejo, corporate GitLab
-ube get git.mycompany.com/embedded/firmware-core
-```
-
-#### Concrete Examples
-
-```bash
-# Any public forge
-ube get codeberg.org/ziglings/core
-ube get gitlab.com/libeigen/eigen
-ube get git.sr.ht/~sircmpwn/openring
-
-# Self-hosted Gitea/Forgejo on a private network (custom port supported)
-ube get gitea.homelab.local:3000/games/retro-renderer
-
-# Direct SSH for private enterprise repos
-ube get git@git.mycompany.com:backend/payment-api.git
-
-# Custom vanity domain
-ube get mydomain.io/physics
-```
-
-The `ube.mod` manifest tracks all dependencies:
-
-```ini
-module game_app
-
-require (
-    github.com/raysan5/raylib-ube
-    codeberg.org/developer/game-engine
-    git@git.mycompany.com:backend/payment-api.git
-)
-```
-
-All fetched packages land in `~/.ube/pkg/` and are inlined by `ubec` into the final static binary — **no ABI mismatches, no registry downtime, no version lock-in**.
-
----
-
-## 12. Guiding Principles
-
-1. **Pragmatism Over Purity:** If a feature makes the compiler slightly more complex but saves the developer hours of frustration, we implement it.
-2. **Explicit Intent, Implicit Safety:** Mutability is explicit (`let mut`), but memory cleanup is implicit and guaranteed.
-3. **No Hidden Costs:** No invisible allocations, no background GC threads, no stop-the-world pauses.
-4. **Small Conceptual Surface:** You should be able to learn the entire language syntax and semantics over a weekend.
-5. **One Kind of Function:** Concurrency never changes a function’s type or call syntax. There is no `async`/`await`; blocking code is just code, and `spawn` is how you run it elsewhere.
-
----
-
-## 13. License
+## 6. License
 
 Ube is open-source software licensed under the [MIT License](LICENSE).

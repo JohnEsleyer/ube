@@ -25,6 +25,7 @@ dirs:
             - h
             - md
             - svg
+            - go
             - py
 
     assets:
