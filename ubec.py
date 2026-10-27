@@ -361,7 +361,21 @@ class UbeCompiler:
                 i += 1
                 continue
 
-            # 10. Control flow: else if / else / if
+            # 10. Control flow: else if / else / if / while / tuber
+            if line == "tuber {":
+                self.emit("{")
+                self.indent += 1
+                self.emit("size_t __watermark_scope = ube_tuber_save();")
+                i += 1
+                continue
+
+            if line.startswith("while ") and line.endswith("{"):
+                cond = line[6:-1].strip()
+                self.emit(f"while ({cond}) {{")
+                self.indent += 1
+                i += 1
+                continue
+
             if line.startswith("else if ") and line.endswith("{"):
                 cond = line[8:-1].strip()
                 self.indent -= 1
@@ -625,6 +639,11 @@ class UbeCompiler:
             return
 
         # Print helpers
+        if line.startswith("println_str(") and line.endswith(")"):
+            val = line[12:-1].strip()
+            self.emit(f'println_str({val});')
+            return
+
         if line.startswith("fmt.println(") or line.startswith("println("):
             val = line[line.find("(")+1:-1].strip()
             if val.endswith(".ptr"):
