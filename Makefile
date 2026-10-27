@@ -13,9 +13,14 @@ vsix:
 	@command -v vsce >/dev/null 2>&1 || { echo "vsce is required; install it with: npm install --global @vscode/vsce" >&2; exit 1; }
 	@cd editors/vscode && vsce package --no-dependencies
 
-# Install CLI globally to /usr/local/bin
+# Install the Ube toolchain and configure the user's shell PATH
 install:
-	@go install ./cmd/ubec
+	@./install.sh
+
+# Build the unified CLI and legacy core compiler
+build:
+	@go build ./cmd/ube
+	@go build ./cmd/ubec
 
 # Clean up temporary compilation artifacts
 clean:
