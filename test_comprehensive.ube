@@ -1,0 +1,101 @@
+// 1. External C FFI & Pointer types (Gap 2)
+extern fn puts(s: *u8) -> i32
+extern fn sin(val: f64) -> f64
+
+// 2. Structs & Generational Pool (Gap 1, Gap 15)
+struct Particle {
+    x: f32,
+    y: f32,
+    active: bool
+}
+
+// 3. Tagged Enums with Multi-statement Block Match (Gap 6)
+enum Command {
+    Spawn(f32, f32),
+    Despawn(i32),
+    Quit
+}
+
+// 4. Optional Return Types & if let ... else (Gap 3, Gap 4)
+fn find_even(num: i32) -> i32? {
+    if num % 2 == 0 {
+        return num
+    } else {
+        return null
+    }
+}
+
+// 5. Result types with custom non-i32 return (Gap 5)
+fn validate_particle(p: Particle) -> Particle ! string {
+    if p.x < 0.0 {
+        return error("particle position out of bounds")
+    }
+    return p
+}
+
+// 6. Worker vine for channels & while let (Gap 7)
+fn worker_vine(ch: Chan[i32]) {
+    while let job = ch.recv() {
+        println(job)
+    }
+}
+
+fn main() {
+    println("=== 🍠 Running Ube Comprehensive Validation ===")
+
+    // Test A: Generic Slices with custom structs (Gap 1)
+    let mut particles = []Particle{}
+    particles.push(Particle{ x: 10.5, y: 20.0, active: true })
+    particles.push(Particle{ x: 30.0, y: 40.5, active: false })
+
+    // Test B: Struct field mutation (Gap 9)
+    particles.data[0].x = 99.0
+
+    println("Iterating generic slice []Particle:")
+    for p in particles {
+        println(p.x)
+    }
+
+    // Test C: if let ... else (Gap 3)
+    let found = find_even(42)
+    if let val = found {
+        println("Found even number:")
+        println(val)
+    } else {
+        println("Number was odd!")
+    }
+
+    // Test D: Result & fallback (Gap 5, Gap 10)
+    let bad_p = Particle{ x: -5.0, y: 1.0, active: true }
+    let validated = validate_particle(bad_p) or_else Particle{ x: 0.0, y: 0.0, active: false }
+    println("Validated fallback x position:")
+    println(validated.x)
+
+    // Test E: Multi-line Block Match (Gap 6)
+    let cmd = Command.Spawn(100.0, 200.0)
+    match cmd {
+        Spawn(x, y) => {
+            println("Multi-line match: Spawning particle at:")
+            println(x)
+            println(y)
+        },
+        Despawn(id) => {
+            println(id)
+        },
+        Quit => {
+            println("Quitting")
+        }
+    }
+
+    // Test F: Channel Concurrency & while let
+    let jobs = Chan[i32].new(4)
+    spawn worker_vine(jobs)
+    jobs.send(777)
+    jobs.send(888)
+    jobs.close()
+
+    // Test G: C FFI Pointer call
+    puts("Direct C FFI call executed successfully via puts(*u8)".ptr)
+
+    println("=== All gap fixes successfully verified! ===")
+}

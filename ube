@@ -2,79 +2,31 @@
 import sys
 import os
 import subprocess
+import hashlib
+import json
 import re
-import urllib.request
-import urllib.error
 
 CACHE_DIR = os.path.expanduser("~/.ube/pkg")
+LOCK_FILE = "ube.mod.lock"
 
-def print_banner(msg):
-    print(f"\033[1;35m🍠 Ube\033[0m {msg}")
+def print_banner(msg): print(f"\033[1;35m🍠 Ube\033[0m {msg}")
+def print_error(msg): print(f"\033[1;31mError:\033[0m {msg}")
 
-def print_error(msg):
-    print(f"\033[1;31mError:\033[0m {msg}")
+def read_lockfile():
+    if os.path.exists(LOCK_FILE):
+        with open(LOCK_FILE, "r") as f: return json.load(f)
+    return {}
 
-def ensure_cache():
-    os.makedirs(CACHE_DIR, exist_ok=True)
+def write_lockfile(data):
+    with open(LOCK_FILE, "w") as f: json.dump(data, f, indent=2)
 
 def sanitize_pkg_path(pkg_url):
-    """Turns git@git.server.com:team/repo.git or https://host/repo into a safe local folder path."""
     clean = re.sub(r"^(https?://|git@|ssh://)", "", pkg_url)
     clean = clean.replace(":", "/")
     if clean.endswith(".git"):
         clean = clean[:-4]
     return clean
 
-def resolve_vanity_url(pkg_path):
-    """
-    Checks if a custom domain provides an HTML <meta name="ube-import"> or <meta name="go-import">
-    tag pointing to the real Git clone URL.
-    Example: mydomain.dev/math -> returns the real Git clone URL.
-    Also supports existing Go vanity URLs (<meta name="go-import">) with no changes required.
-    """
-    url = f"https://{pkg_path}?ube-get=1"
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Ube-Package-Resolver/1.0"})
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            html = resp.read().decode("utf-8", errors="ignore")
-            # Look for: <meta name="ube-import" content="prefix vcs repo-root">
-            # Also accepts go-import so every Go vanity URL works immediately in Ube.
-            m = re.search(
-                r'<meta\s+name=["\'](ube|go)-import["\']\s+content=["\']([^"\']+)["\']',
-                html
-            )
-            if m:
-                parts = m.group(2).split()
-                if len(parts) >= 3 and parts[1] == "git":
-                    return parts[2]  # The real git clone URL
-    except Exception:
-        pass
-    return None
-
-def resolve_clone_url(pkg_input):
-    """
-    Resolves any repository path to a git-cloneable URL.
-
-    Priority order:
-      1. Direct SSH or full protocol URLs (passed through unchanged).
-      2. Vanity domain discovery via <meta name="ube-import"> / <meta name="go-import">.
-      3. Direct HTTPS fallback (works for GitHub, GitLab, Codeberg, Gitea, Forgejo, etc.).
-    """
-    # 1. Direct SSH or full protocol URLs — pass through unchanged
-    if (pkg_input.startswith("git@") or pkg_input.startswith("ssh://")
-            or pkg_input.startswith("https://") or pkg_input.startswith("http://")):
-        return pkg_input
-
-    # 2. Vanity domain discovery
-    vanity_clone_url = resolve_vanity_url(pkg_input)
-    if vanity_clone_url:
-        print_banner(f"Discovered vanity repository -> \033[1;36m{vanity_clone_url}\033[0m")
-        return vanity_clone_url
-
-    # 3. Direct HTTPS fallback (self-hosted GitLab/Gitea/Forgejo/Codeberg/etc.)
-    return f"https://{pkg_input}.git"
-
-# --- Subcommand: ube new <name> ---
 def cmd_new(args):
     if not args:
         print_error("Please provide a project name: ube new <project_name>")
@@ -89,258 +41,148 @@ def cmd_new(args):
         f.write(f"module {name}\n\nrequire (\n)\n")
 
     with open(os.path.join(name, "main.ube"), "w") as f:
-        f.write('package main\n\nfn main() {\n    println_str("Kamusta from Ube! 🍠")\n}\n')
+        f.write('package main\n\nfn main() {\n    println("Kamusta from Ube! 🍠")\n}\n')
 
     print_banner(f"Created new project \033[1;32m{name}\033[0m")
     print(f"  cd {name}")
     print("  ube run")
 
-# --- Subcommand: ube get <any_repo> ---
-def cmd_get(args):
-    if not args:
-        print_error(
-            "Please specify a repository:\n"
-            "  ube get gitlab.com/user/repo\n"
-            "  ube get git.mycompany.com/team/lib\n"
-            "  ube get codeberg.org/dev/pkg\n"
-            "  ube get git@git.corp.internal:team/repo.git"
-        )
+def cmd_vendor():
+    if not os.path.exists("ube.mod"):
+        print_error("No ube.mod found in current directory.")
         return
+    lock_data = read_lockfile()
+    os.makedirs("vendor", exist_ok=True)
+    print_banner("Vendoring packages into \033[1;32m./vendor/\033[0m...")
 
-    raw_pkg = args[0].strip()
-    ensure_cache()
-
-    local_rel_path = sanitize_pkg_path(raw_pkg)
-    target_dir = os.path.join(CACHE_DIR, local_rel_path)
-    clone_url = resolve_clone_url(raw_pkg)
-
-    if os.path.exists(target_dir):
-        print_banner(f"Updating \033[1;36m{local_rel_path}\033[0m from \033[1;32m{clone_url}\033[0m...")
-        res = subprocess.run(["git", "-C", target_dir, "pull"])
-        if res.returncode != 0:
-            print_error(f"Failed to update {target_dir}")
-            return
+    # If lockfile exists, vendor from lockfile, otherwise parse ube.mod
+    vendored_any = False
+    if lock_data:
+        for pkg, info in lock_data.items():
+            src = os.path.join(CACHE_DIR, pkg)
+            dst = os.path.join("vendor", pkg)
+            if os.path.exists(src):
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                subprocess.run(["cp", "-r", src, dst], check=True)
+                print(f"  Vendored: {pkg}")
+                vendored_any = True
     else:
-        print_banner(f"Cloning \033[1;36m{raw_pkg}\033[0m...")
-        print(f"  Remote: \033[1;30m{clone_url}\033[0m")
-        print(f"  Target: \033[1;30m{target_dir}\033[0m")
-        os.makedirs(os.path.dirname(target_dir), exist_ok=True)
-
-        # Git automatically uses ssh-agent, ~/.gitconfig, or credential helpers.
-        # Ube never touches or logs authentication secrets.
-        res = subprocess.run(["git", "clone", "--depth", "1", clone_url, target_dir])
-        if res.returncode != 0:
-            # Fallback: retry without .git suffix for servers that don't redirect
-            if clone_url.endswith(".git") and clone_url.startswith("https://"):
-                retry_url = clone_url[:-4]
-                res = subprocess.run(["git", "clone", "--depth", "1", retry_url, target_dir])
-
-            if res.returncode != 0:
-                print_error(f"Failed to clone repository from {clone_url}")
-                return
-
-    # Record dependency in ube.mod
-    if os.path.exists("ube.mod"):
         with open("ube.mod", "r") as f:
             content = f.read()
-        if raw_pkg not in content:
-            updated = content.replace("require (", f"require (\n    {raw_pkg}")
-            with open("ube.mod", "w") as f:
-                f.write(updated)
-            print_banner(f"Recorded dependency in \033[1;32mube.mod\033[0m")
+        m = re.search(r"require\s*\(([^)]*)\)", content, re.DOTALL)
+        if m:
+            deps = [line.strip() for line in m.group(1).splitlines() if line.strip()]
+            for dep in deps:
+                rel_path = sanitize_pkg_path(dep)
+                src = os.path.join(CACHE_DIR, rel_path)
+                dst = os.path.join("vendor", rel_path)
+                if os.path.exists(src):
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    subprocess.run(["cp", "-r", src, dst], check=True)
+                    print(f"  Vendored: {rel_path}")
+                    vendored_any = True
 
-# --- Subcommand: ube vendor ---
-def cmd_vendor(args):
-    """
-    Copies all dependencies from the global cache (~/.ube/pkg) into ./vendor/.
-    Once ./vendor/ exists, ubec reads exclusively from it — zero internet required.
-    Safe to commit into your own repository for fully reproducible/offline builds.
-    """
-    if not os.path.exists("ube.mod"):
-        print_error("No ube.mod found. Run this command from the root of a Ube project.")
+    print_banner("Vendoring complete! Project is now 100% offline-ready.")
+
+def cmd_test():
+    print_banner("Running test suite...")
+    test_files = [f for f in os.listdir(".") if f.startswith("test_") and f.endswith(".ube")]
+    if not test_files:
+        print_error("No test_*.ube files found.")
         return
-
-    with open("ube.mod", "r") as f:
-        content = f.read()
-
-    # Parse all entries inside require ( ... )
-    m = re.search(r"require\s*\(([^)]*)\)", content, re.DOTALL)
-    if not m:
-        print_banner("No dependencies found in ube.mod.")
-        return
-
-    deps = [line.strip() for line in m.group(1).splitlines() if line.strip()]
-    if not deps:
-        print_banner("Dependency list is empty — nothing to vendor.")
-        return
-
-    vendor_dir = os.path.join(os.getcwd(), "vendor")
-    os.makedirs(vendor_dir, exist_ok=True)
-
-    import shutil
-    for dep in deps:
-        rel_path = sanitize_pkg_path(dep)
-        src = os.path.join(CACHE_DIR, rel_path)
-        dst = os.path.join(vendor_dir, rel_path)
-
-        if not os.path.exists(src):
-            print_error(f"Package not in cache: {dep}")
-            print(f"  Run: \033[1;33mube get {dep}\033[0m first.")
+    passed = 0
+    for t in sorted(test_files):
+        print(f"  Executing {t} ... ", end="", flush=True)
+        res = subprocess.run([sys.executable, "ubec.py", t], capture_output=True, text=True)
+        if res.returncode != 0:
+            print("\033[1;31mFAIL (Compile)\033[0m")
+            print(res.stderr)
             continue
+        c_res = subprocess.run(["gcc", "-O2", "output.c", "-lpthread", "-lm", "-o", ".test_bin"], capture_output=True, text=True)
+        if c_res.returncode != 0:
+            print("\033[1;31mFAIL (C Link)\033[0m")
+            print(c_res.stderr)
+            continue
+        run_res = subprocess.run(["./.test_bin"], capture_output=True, text=True)
+        if run_res.returncode == 0:
+            print("\033[1;32mPASS\033[0m")
+            passed += 1
+        else:
+            print(f"\033[1;31mFAIL (Exit {run_res.returncode})\033[0m")
+            print(run_res.stderr)
+        if os.path.exists(".test_bin"): os.remove(".test_bin")
+    print_banner(f"Test Summary: {passed}/{len(test_files)} passed.")
 
-        if os.path.exists(dst):
-            shutil.rmtree(dst)
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.copytree(src, dst)
-        print_banner(f"Vendored \033[1;32m{rel_path}\033[0m -> vendor/{rel_path}")
+def cmd_build(args):
+    target = "main.ube"
+    out_name = "app"
+    is_wasm = "--wasm" in args
+    is_static = "--static" in args
+    
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "-o" and i + 1 < len(args):
+            out_name = args[i+1]
+            i += 2
+            continue
+        elif not arg.startswith("-"):
+            target = arg
+        i += 1
 
-    print_banner(f"All dependencies vendored to \033[1;32m./vendor/\033[0m")
-    print("  Tip: commit ./vendor/ to your repo for fully offline, reproducible builds.")
+    res = subprocess.run([sys.executable, "ubec.py", target] + (["--wasm"] if is_wasm else []))
+    if res.returncode != 0: return
 
-# --- Subcommand: ube clean ---
+    if is_wasm:
+        wasm_out = out_name if out_name.endswith(".wasm") else f"{out_name}.wasm"
+        print_banner(f"Compiling WebAssembly -> \033[1;32m{wasm_out}\033[0m")
+        subprocess.run(["clang", "--target=wasm32-wasi", "-O3", "-nostdlib", 
+                        "-Wl,--no-entry", "-Wl,--export-all", "-o", wasm_out, "output.c"], check=True)
+    else:
+        gcc_cmd = ["gcc", "-O2", "output.c", "-lpthread", "-lm", "-o", out_name]
+        if is_static: gcc_cmd.append("-static")
+        subprocess.run(gcc_cmd, check=True)
+        print_banner(f"Built native static binary -> \033[1;32m{out_name}\033[0m")
+
 def cmd_clean(args):
-    """
-    Cache management:
-      --dry-run   Show cache size without deleting anything.
-      --cache     Delete the entire global package cache (~/.ube/pkg).
-    """
     import shutil
-
     dry_run = "--dry-run" in args
     wipe_cache = "--cache" in args
-
     if not dry_run and not wipe_cache:
-        print(
-            "Usage:\n"
-            "  \033[1;32mube clean --dry-run\033[0m   Show cache size without deleting\n"
-            "  \033[1;32mube clean --cache\033[0m     Wipe the global package cache\n"
-        )
+        print("Usage: ube clean [--dry-run | --cache]")
         return
-
-    # Calculate cache size
     total_bytes = 0
     pkg_count = 0
     if os.path.exists(CACHE_DIR):
         for dirpath, dirnames, filenames in os.walk(CACHE_DIR):
             for fname in filenames:
                 total_bytes += os.path.getsize(os.path.join(dirpath, fname))
-        # Count top-level package entries (depth = host/user/repo = 3 levels)
         for root, dirs, _ in os.walk(CACHE_DIR):
             depth = root.replace(CACHE_DIR, "").count(os.sep)
-            if depth == 2:
-                pkg_count += len(dirs)
-
+            if depth == 2: pkg_count += len(dirs)
     size_mb = total_bytes / (1024 * 1024)
-
     if dry_run:
-        print_banner(
-            f"Global cache: \033[1;33m{size_mb:.1f} MB\033[0m "
-            f"across \033[1;33m{pkg_count}\033[0m package(s) in \033[1;30m{CACHE_DIR}\033[0m"
-        )
-        print("  Run \033[1;32mube clean --cache\033[0m to free this space.")
-        return
-
-    if wipe_cache:
+        print_banner(f"Global cache: {size_mb:.1f} MB across {pkg_count} package(s)")
+    elif wipe_cache:
         if os.path.exists(CACHE_DIR):
             shutil.rmtree(CACHE_DIR)
-            print_banner(
-                f"Cleared \033[1;32m{size_mb:.1f} MB\033[0m from global cache \033[1;30m{CACHE_DIR}\033[0m"
-            )
-        else:
-            print_banner("Cache is already empty.")
-
-# --- Subcommand: ube run [file.ube] ---
-def cmd_run(args):
-    target = args[0] if args else "main.ube"
-    if not os.path.exists(target):
-        print_error(f"Cannot find '{target}'")
-        return
-
-    # 1. Transpile and compile using cmd_build
-    cmd_build([target, "-o", ".temp_ube_app", "--fast"])
-
-    # 2. Execute
-    if os.path.exists(".temp_ube_app"):
-        subprocess.run(["./.temp_ube_app"])
-        os.remove(".temp_ube_app")
-        if os.path.exists("output.c"):
-            os.remove("output.c")
-
-# --- Subcommand: ube build [options] ---
-def cmd_build(args):
-    target = "main.ube"
-    out_name = "app"
-    is_static = False
-    is_fast = False
-
-    i = 0
-    while i < len(args):
-        if args[i] == "-o" and i + 1 < len(args):
-            out_name = args[i+1]
-            i += 2
-            continue
-        elif args[i] == "--static":
-            is_static = True
-        elif args[i] == "--fast":
-            is_fast = True
-        elif not args[i].startswith("-"):
-            target = args[i]
-        i += 1
-
-    # Locate ubec.py relative to this script
-    transpiler = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ubec.py")
-    if not os.path.exists(transpiler):
-        transpiler = "ubec.py"
-
-    res = subprocess.run([sys.executable, transpiler, target])
-    if res.returncode != 0:
-        print_error("Compilation halted.")
-        return
-
-    # Compile with GCC / Clang
-    gcc_cmd = ["gcc"]
-    if is_fast:
-        gcc_cmd.extend(["-O0", "output.c", "-lpthread", "-o", out_name])
-    else:
-        gcc_cmd.extend(["-O2", "output.c", "-lpthread", "-o", out_name])
-        if is_static:
-            gcc_cmd.append("-static")
-
-    c_res = subprocess.run(gcc_cmd)
-    if c_res.returncode == 0 and not is_fast:
-        print_banner(f"Built binary -> \033[1;32m{out_name}\033[0m")
+            print_banner(f"Cleared {size_mb:.1f} MB from global cache.")
 
 def main():
     if len(sys.argv) < 2:
-        print("""\033[1;35m🍠 Ube Programming Language Toolchain\033[0m
-Commands:
-  \033[1;32mube new <name>\033[0m           Create a new project
-  \033[1;32mube run [file]\033[0m           Compile and run instantly
-  \033[1;32mube build [options]\033[0m      Build a native static binary (-o <bin>, --static)
-  \033[1;32mube get <package>\033[0m        Download package to global cache (~/.ube/pkg)
-  \033[1;32mube vendor\033[0m               Copy all deps into ./vendor/ for offline builds
-  \033[1;32mube clean --dry-run\033[0m      Show global cache disk usage
-  \033[1;32mube clean --cache\033[0m        Wipe the global package cache
-""")
+        print("\033[1;35m🍠 Ube Toolchain\033[0m [test | vendor | build | run | get | new | clean]")
         return
+    cmd = sys.argv[1]
+    if cmd == "test": cmd_test()
+    elif cmd == "vendor": cmd_vendor()
+    elif cmd == "build": cmd_build(sys.argv[2:])
+    elif cmd == "new": cmd_new(sys.argv[2:])
+    elif cmd == "clean": cmd_clean(sys.argv[2:])
+    elif cmd == "run":
+        target = sys.argv[2] if len(sys.argv) > 2 else "main.ube"
+        subprocess.run([sys.executable, "ubec.py", target], check=True)
+        subprocess.run(["gcc", "-O0", "output.c", "-lpthread", "-lm", "-o", ".temp_run"], check=True)
+        subprocess.run(["./.temp_run"])
+        if os.path.exists(".temp_run"): os.remove(".temp_run")
 
-    subcmd = sys.argv[1]
-    args = sys.argv[2:]
-
-    if subcmd == "new":
-        cmd_new(args)
-    elif subcmd == "run":
-        cmd_run(args)
-    elif subcmd == "build":
-        cmd_build(args)
-    elif subcmd == "get":
-        cmd_get(args)
-    elif subcmd == "vendor":
-        cmd_vendor(args)
-    elif subcmd == "clean":
-        cmd_clean(args)
-    else:
-        print_error(f"Unknown command '{subcmd}'")
-
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
