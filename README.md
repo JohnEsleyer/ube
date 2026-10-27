@@ -1,12 +1,14 @@
 <div align="center">
 
-# 🍠 Ube Programming Language
+<img src="assets/icon.svg" alt="Ube Logo" width="130" height="130" />
+
+# Ube Programming Language
 
 **The sweet, grounded systems language.**  
 *Easy to program like Go. Fast like C. Zero Garbage Collection.*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
-[![Status: Prototype](https://img.shields.io/badge/Status-Active_Prototype-brightgreen.svg)]()
+[![Status: Active](https://img.shields.io/badge/Status-v0.4.0-brightgreen.svg)]()
 [![Target: C99_WASM](https://img.shields.io/badge/Target-C99%20%7C%20WASM%20%7C%20Embedded-blue.svg)]()
 
 </div>
