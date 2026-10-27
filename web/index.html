@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ube Programming Language 🍠</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --card-bg: #1e293b;
+            --accent: #c084fc;
+            --accent-dark: #7e22ce;
+            --text: #f8fafc;
+            --muted: #94a3b8;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 0;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 4rem 1.5rem;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+        h1 {
+            font-size: 3rem;
+            color: var(--accent);
+            margin-bottom: 0.5rem;
+        }
+        .subtitle {
+            font-size: 1.25rem;
+            color: var(--muted);
+        }
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            border: 1px solid #334155;
+        }
+        code, pre {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            background: #020617;
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            color: #38bdf8;
+        }
+        pre {
+            padding: 1rem;
+            overflow-x: auto;
+        }
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+        }
+        .feature-item {
+            background: #1e293b;
+            padding: 1.5rem;
+            border-radius: 8px;
+            border: 1px solid #334155;
+        }
+        .feature-title {
+            color: var(--accent);
+            font-weight: bold;
+            margin-bottom: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🍠 Ube Language</h1>
+            <p class="subtitle">The sweet, grounded systems language. Fast like C, easy like Go, Zero GC.</p>
+        </header>
+
+        <div class="card">
+            <h2>Quickstart</h2>
+            <pre><code># Clone and test Ube
+git clone https://github.com/JohnEsleyer/ube.git
+cd ube
+make test
+
+# Build and run
+./bin/ube run examples/01_hello/main.ube</code></pre>
+        </div>
+
+        <div class="features">
+            <div class="feature-item">
+                <div class="feature-title">🚀 Fast as C / Rust</div>
+                <p>Contiguous layouts, monotone bump growth on Tubers, single-store deallocation, and no garbage collection pauses.</p>
+            </div>
+            <div class="feature-item">
+                <div class="feature-title">🧁 Easy as Go</div>
+                <p>Minimalist syntax, Go-style receiver methods, channels, and fast compilation without lifetime annotations.</p>
+            </div>
+            <div class="feature-item">
+                <div class="feature-title">⚡ Zero-Cost C Interop</div>
+                <p>Direct bindings via <code>extern fn</code>, drop-in single-file C support, and clean ANSI C99 output.</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

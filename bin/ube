@@ -86,7 +86,9 @@ def cmd_build(args):
 
     # Step 1: Transpilation via ubec.py
     print(f"{tag('Analyzing', CLR_BLUE)}Tubers & Root lifetimes")
-    transpiler = os.path.join(os.path.dirname(__file__), "ubec.py")
+    bin_dir = os.path.dirname(os.path.abspath(__file__))
+    root_dir = os.path.dirname(bin_dir)
+    transpiler = os.path.join(root_dir, "src", "compiler", "ubec.py")
     if not os.path.exists(transpiler):
         transpiler = "ubec.py"
 
@@ -109,14 +111,17 @@ def cmd_build(args):
 
     print(f"{tag('Linking', CLR_BLUE)}{link_info}")
 
+    runtime_inc = os.path.join(root_dir, "src", "runtime")
+    inc_flag = f"-I{runtime_inc}"
+
     if is_wasm:
         wasm_out = out_name if out_name.endswith(".wasm") else f"{out_name}.wasm"
-        gcc_cmd = ["clang", "--target=wasm32-wasi", "-O3", "-nostdlib", 
+        gcc_cmd = ["clang", "--target=wasm32-wasi", inc_flag, "-O3", "-nostdlib", 
                     "-Wl,--no-entry", "-Wl,--export-all", "-o", wasm_out, "output.c"]
         final_binary = wasm_out
     else:
         opt_flag = "-O3" if is_release else "-O0"
-        gcc_cmd = ["gcc", opt_flag, "output.c", "-lpthread", "-lm", "-o", out_name]
+        gcc_cmd = ["gcc", opt_flag, inc_flag, "output.c", "-lpthread", "-lm", "-o", out_name]
         if is_static:
             gcc_cmd.append("-static")
         final_binary = out_name
@@ -172,7 +177,10 @@ def cmd_run(args):
 # --- Subcommand: ube test ---
 def cmd_test():
     print_header("test runner")
-    test_files = [f for f in sorted(os.listdir(".")) if f.startswith("test_") and f.endswith(".ube")]
+    bin_dir = os.path.dirname(os.path.abspath(__file__))
+    root_dir = os.path.dirname(bin_dir)
+    tests_dir = os.path.join(root_dir, "tests") if os.path.isdir(os.path.join(root_dir, "tests")) else "."
+    test_files = [os.path.join(tests_dir, f) for f in sorted(os.listdir(tests_dir)) if f.startswith("test_") and f.endswith(".ube")]
     if not test_files:
         print(f"\n   {CLR_MUTED}No test files found matching `test_*.ube`{CLR_RESET}\n")
         return
@@ -181,17 +189,22 @@ def cmd_test():
     passed = 0
     total_start = time.perf_counter()
 
+    transpiler = os.path.join(root_dir, "src", "compiler", "ubec.py")
+    runtime_inc = os.path.join(root_dir, "src", "runtime")
+    inc_flag = f"-I{runtime_inc}"
+
     for t in test_files:
-        print(f"   • {t:<28}", end="", flush=True)
+        t_display = os.path.relpath(t, os.getcwd())
+        print(f"   • {t_display:<28}", end="", flush=True)
         t_start = time.perf_counter()
         
         # Compile
-        res = subprocess.run([sys.executable, "ubec.py", t], capture_output=True, text=True)
+        res = subprocess.run([sys.executable, transpiler, t], capture_output=True, text=True)
         if res.returncode != 0:
             print(f" {CLR_RED}FAIL (Transpile){CLR_RESET}")
             continue
             
-        c_res = subprocess.run(["gcc", "-O0", "output.c", "-lpthread", "-lm", "-o", ".test_tmp"], capture_output=True)
+        c_res = subprocess.run(["gcc", "-O0", inc_flag, "output.c", "-lpthread", "-lm", "-o", ".test_tmp"], capture_output=True)
         if c_res.returncode != 0:
             print(f" {CLR_RED}FAIL (C Link){CLR_RESET}")
             continue
