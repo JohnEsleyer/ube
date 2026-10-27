@@ -137,20 +137,25 @@ func publish(uri, source string) {
 		}
 	}
 	if err != nil {
-		line, col := 0, 0
-		msg := err.Error()
-		if m := locRE.FindStringSubmatch(msg); len(m) > 0 {
-			fmt.Sscanf(m[2], "%d", &line)
-			fmt.Sscanf(m[3], "%d", &col)
-			msg = strings.TrimSpace(strings.TrimPrefix(msg, m[0]))
+		for _, errLine := range strings.Split(err.Error(), "\n") {
+			errLine = strings.TrimSpace(errLine)
+			if errLine == "" {
+				continue
+			}
+			line, col, msg := 0, 0, errLine
+			if m := locRE.FindStringSubmatch(errLine); len(m) > 0 {
+				fmt.Sscanf(m[2], "%d", &line)
+				fmt.Sscanf(m[3], "%d", &col)
+				msg = strings.TrimSpace(strings.TrimPrefix(errLine, m[0]))
+			}
+			if line < 1 {
+				line = 1
+			}
+			if col < 1 {
+				col = 1
+			}
+			diags = append(diags, map[string]any{"range": map[string]any{"start": map[string]int{"line": line - 1, "character": col - 1}, "end": map[string]int{"line": line - 1, "character": col + 3}}, "severity": 1, "source": "ube", "message": msg})
 		}
-		if line < 1 {
-			line = 1
-		}
-		if col < 1 {
-			col = 1
-		}
-		diags = append(diags, map[string]any{"range": map[string]any{"start": map[string]int{"line": line - 1, "character": col - 1}, "end": map[string]int{"line": line - 1, "character": col + 3}}, "severity": 1, "source": "ube", "message": msg})
 	}
 	notify("textDocument/publishDiagnostics", map[string]any{"uri": uri, "diagnostics": diags})
 }

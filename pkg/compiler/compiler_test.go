@@ -441,3 +441,34 @@ func TestCompileTimeScopeEscapeRejections(t *testing.T) {
 		})
 	}
 }
+
+func TestMultiArgSpawnAndReceivers(t *testing.T) {
+	src := `struct Calc { factor: i32 }
+	fn (c Calc) mul(a: i32, b: i32) -> i32 { return a * b * c.factor }
+	fn worker(ch: Chan[i32], mult: i32) { ch.send(10 * mult) }
+	fn main() {
+		let c = Calc{ factor: 2 }
+		println(c.mul(3, 4))
+		let ch = Chan[i32].new(1)
+		spawn worker(ch, 5)
+		select { value = ch => println(value) }
+	}`
+	if out := runSourceNative(t, src); out != "24\n50" {
+		t.Fatalf("expected '24\\n50', got %q", out)
+	}
+}
+
+func TestParserMultiErrorRecovery(t *testing.T) {
+	code := "fn first( { }\nfn second( { }"
+	tokens, err := compiler.NewLexer("test.ube", code).Tokenize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, parseErr := compiler.NewParser(tokens).ParseProgram()
+	if parseErr == nil {
+		t.Fatal("expected syntax errors, got nil")
+	}
+	if lines := strings.Split(parseErr.Error(), "\n"); len(lines) < 2 {
+		t.Fatalf("expected at least 2 collected syntax errors, got: %v", parseErr)
+	}
+}

@@ -407,11 +407,16 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		if err != nil {
 			return err
 		}
+		s.Call.ArgTypes = nil
 		for _, arg := range s.Call.Args {
-			argT, _ := tc.inferExpr(arg, env)
+			argT, err := tc.inferExpr(arg, env)
+			if err != nil {
+				return err
+			}
 			if !argT.IsFlat(tc.Global) {
 				return fmt.Errorf("[%s] cannot pass non-flat type '%s' across spawned Vines", s.At, argT)
 			}
+			s.Call.ArgTypes = append(s.Call.ArgTypes, argT)
 		}
 
 	case *SelectStmt:
@@ -757,6 +762,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			}
 			methodKey := fmt.Sprintf("%s.%s", tgtT, mem.Member)
 			if sig, ok := tc.Global.Funcs[methodKey]; ok {
+				e.ReceiverType = tgtT
 				if err := tc.checkCallArgs(e.Args, sig.Params, env, e.At); err != nil {
 					return nil, err
 				}

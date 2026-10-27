@@ -3,6 +3,7 @@ package compiler
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 type parseError struct {
@@ -13,6 +14,7 @@ type parseError struct {
 type Parser struct {
 	tokens []Token
 	pos    int
+	errors []parseError
 }
 
 func NewParser(tokens []Token) *Parser {
@@ -55,24 +57,54 @@ func (p *Parser) expect(t TokenType, msg string) Token {
 	return Token{}
 }
 
-func (p *Parser) ParseProgram() (prog *Program, err error) {
+func (p *Parser) ParseProgram() (*Program, error) {
+	loc := p.peek(0).Loc
+	var decls []Decl
+	for !p.check(TokenEOF) {
+		before := p.pos
+		d, perr := p.parseDeclSafe()
+		if perr != nil {
+			p.errors = append(p.errors, *perr)
+			p.synchronizeDecl()
+		} else if d != nil {
+			decls = append(decls, d)
+		}
+		if p.pos == before && !p.check(TokenEOF) {
+			p.advance()
+		}
+	}
+	if len(p.errors) > 0 {
+		msgs := make([]string, 0, len(p.errors))
+		for _, pe := range p.errors {
+			msgs = append(msgs, fmt.Sprintf("[%s] Syntax Error: %s", pe.loc, pe.msg))
+		}
+		return nil, fmt.Errorf("%s", strings.Join(msgs, "\n"))
+	}
+	return &Program{At: loc, Decls: decls}, nil
+}
+
+func (p *Parser) synchronizeDecl() {
+	for !p.check(TokenEOF) {
+		switch p.peek(0).Type {
+		case TokenFn, TokenStruct, TokenEnum, TokenExtern, TokenImport:
+			return
+		}
+		p.advance()
+	}
+}
+
+func (p *Parser) parseDeclSafe() (d Decl, perr *parseError) {
 	defer func() {
 		if r := recover(); r != nil {
 			if pe, ok := r.(parseError); ok {
-				err = fmt.Errorf("[%s] Syntax Error: %s", pe.loc, pe.msg)
-				prog = nil
+				perr = &pe
+				d = nil
 			} else {
 				panic(r)
 			}
 		}
 	}()
-
-	loc := p.peek(0).Loc
-	var decls []Decl
-	for !p.check(TokenEOF) {
-		decls = append(decls, p.parseDecl())
-	}
-	return &Program{At: loc, Decls: decls}, nil
+	return p.parseDecl(), nil
 }
 
 func (p *Parser) parseDecl() Decl {

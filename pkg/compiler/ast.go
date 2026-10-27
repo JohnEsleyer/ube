@@ -47,10 +47,12 @@ func (e *UnaryExpr) Loc() SourceLocation { return e.At }
 func (e *UnaryExpr) exprNode()           {}
 
 type CallExpr struct {
-	At       SourceLocation
-	Callee   Expr
-	Args     []Expr
-	PoolElem UbeType
+	At           SourceLocation
+	Callee       Expr
+	Args         []Expr
+	PoolElem     UbeType
+	ReceiverType UbeType
+	ArgTypes     []UbeType
 }
 
 func (e *CallExpr) Loc() SourceLocation { return e.At }

@@ -13,7 +13,7 @@ import (
 	ubert "github.com/JohnEsleyer/ube/runtime"
 )
 
-const version = "0.7.0"
+const version = "0.8.0"
 
 const (
 	colorReset  = "\x1b[0m"
@@ -257,7 +257,7 @@ func compileNative(ast *compiler.Program, cPath, output string, optimize bool) e
 	if cc == "" {
 		return fmt.Errorf("no C compiler found (install GCC or Clang)")
 	}
-	args := []string{"-std=gnu11", "-pthread", "-I" + runtimeDir, cPath, "-o", output}
+	args := []string{"-std=gnu11", "-pthread", "-I" + runtimeDir, cPath, "-o", output, "-lm"}
 	if optimize {
 		args = append(args, "-O2")
 	}
