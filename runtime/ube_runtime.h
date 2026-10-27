@@ -262,14 +262,14 @@ static inline void ube_raw_chan_close(UbeRawChan* ch) {
     pthread_mutex_unlock(&ch->lock);
 }
 
-// --- 5. Workers / Isolated Task Trampoline ---
+// --- 5. Spawned Vine Trampoline ---
 typedef struct {
     void* (*fn)(void*);
     void* arg;
-} UbeWorkerArgs;
+} UbeSpawnArgs;
 
-static void* ube_worker_trampoline(void* raw) {
-    UbeWorkerArgs* a = (UbeWorkerArgs*)raw;
+static void* ube_spawn_trampoline(void* raw) {
+    UbeSpawnArgs* a = (UbeSpawnArgs*)raw;
     ube_init();
     UbeWatermark watermark = ube_scope_save();
     a->fn(a->arg);
@@ -278,21 +278,34 @@ static void* ube_worker_trampoline(void* raw) {
     return NULL;
 }
 
-static inline void ube_worker_spawn(void* (*fn)(void*), void* arg) {
+static inline void ube_spawn(void* (*fn)(void*), void* arg) {
     pthread_t th;
-    UbeWorkerArgs* a = (UbeWorkerArgs*)malloc(sizeof(UbeWorkerArgs));
+    UbeSpawnArgs* a = (UbeSpawnArgs*)malloc(sizeof(UbeSpawnArgs));
     a->fn = fn;
     a->arg = arg;
-    pthread_create(&th, NULL, ube_worker_trampoline, a);
+    pthread_create(&th, NULL, ube_spawn_trampoline, a);
     pthread_detach(th);
 }
 
 // --- 6. Helper I/O ---
-static inline void ube_fmt_println_str(const char* s) { printf("%s\n", s); }
 static inline void println_str(const char* s) { printf("%s\n", s); }
 static inline void println(int32_t v) { printf("%d\n", v); }
-static inline void ube_fmt_println_i32(int32_t v) { printf("%d\n", v); }
-static inline void ube_fmt_println_f32(float v) { printf("%f\n", v); }
-static inline void ube_fmt_println_bool(bool v) { printf("%s\n", v ? "true" : "false"); }
+static inline void ube_print_string(string s) { printf("%.*s\n", (int)s.len, s.data); }
+static inline void ube_print_u32(uint32_t v) { printf("%u\n", v); }
+static inline void ube_print_u8(uint8_t v) { printf("%u\n", (unsigned)v); }
+static inline void ube_print_i64(int64_t v) { printf("%lld\n", (long long)v); }
+static inline void ube_print_u64(uint64_t v) { printf("%llu\n", (unsigned long long)v); }
+static inline void ube_print_f32(float v) { printf("%g\n", (double)v); }
+static inline void ube_print_f64(double v) { printf("%g\n", v); }
+static inline void ube_print_bool(bool v) { puts(v ? "true" : "false"); }
+static inline void ube_print_ptr(const void* p) { printf("%p\n", p); }
+#define UBE_PRINTLN(X) _Generic((X), \
+    string: ube_print_string, \
+    bool: ube_print_bool, \
+    int32_t: println, uint32_t: ube_print_u32, uint8_t: ube_print_u8, \
+    int64_t: ube_print_i64, uint64_t: ube_print_u64, \
+    float: ube_print_f32, double: ube_print_f64, \
+    default: ube_print_ptr \
+)(X)
 
 #endif // UBE_RUNTIME_H

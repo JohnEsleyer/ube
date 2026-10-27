@@ -7,27 +7,29 @@ import (
 )
 
 var keywords = map[string]TokenType{
-	"fn":      TokenFn,
-	"let":     TokenLet,
-	"mut":     TokenMut,
-	"struct":  TokenStruct,
-	"enum":    TokenEnum,
-	"match":   TokenMatch,
-	"if":      TokenIf,
-	"else":    TokenElse,
-	"while":   TokenWhile,
-	"for":     TokenFor,
-	"in":      TokenIn,
-	"return":  TokenReturn,
-	"scope":   TokenScope,
-	"worker":  TokenWorker,
-	"select":  TokenSelect,
-	"extern":  TokenExtern,
-	"or_else": TokenOrElse,
-	"import":  TokenImport,
-	"true":    TokenBool,
-	"false":   TokenBool,
-	"null":    TokenNull,
+	"fn":       TokenFn,
+	"let":      TokenLet,
+	"mut":      TokenMut,
+	"struct":   TokenStruct,
+	"enum":     TokenEnum,
+	"match":    TokenMatch,
+	"if":       TokenIf,
+	"else":     TokenElse,
+	"while":    TokenWhile,
+	"for":      TokenFor,
+	"in":       TokenIn,
+	"return":   TokenReturn,
+	"break":    TokenBreak,
+	"continue": TokenContinue,
+	"scope":    TokenScope,
+	"spawn":    TokenSpawn,
+	"select":   TokenSelect,
+	"extern":   TokenExtern,
+	"or_else":  TokenOrElse,
+	"import":   TokenImport,
+	"true":     TokenBool,
+	"false":    TokenBool,
+	"null":     TokenNull,
 }
 
 type Lexer struct {
@@ -101,6 +103,18 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 		}
 
 		loc := SourceLocation{File: l.file, Line: l.line, Col: l.col}
+		if ch == '&' && l.peek(1) == '&' {
+			l.advance()
+			l.advance()
+			tokens = append(tokens, Token{Type: TokenAnd, Val: "&&", Loc: loc})
+			continue
+		}
+		if ch == '|' && l.peek(1) == '|' {
+			l.advance()
+			l.advance()
+			tokens = append(tokens, Token{Type: TokenOr, Val: "||", Loc: loc})
+			continue
+		}
 
 		if ch == '-' && l.peek(1) == '>' {
 			l.advance()

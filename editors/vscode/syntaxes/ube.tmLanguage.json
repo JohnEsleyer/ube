@@ -34,7 +34,7 @@
       "patterns": [
         {
           "name": "keyword.control.ube",
-          "match": "\\b(if|else|while|for|in|return|match|select|spawn|tuber|or_else)\\b"
+          "match": "\\b(if|else|while|for|in|return|break|continue|match|select|spawn|scope|or_else)\\b"
         },
         {
           "name": "keyword.other.ube",

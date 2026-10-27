@@ -1,0 +1,15 @@
+// Push enough values to grow the backing buffer through several capacities.
+fn main() {
+    let mut values = []i32{}
+    let mut i = 0
+    while i < 50 {
+        values.push(i * 2)
+        i = i + 1
+    }
+
+    let mut sum = 0
+    for value in values {
+        sum = sum + value
+    }
+    println(sum)
+}

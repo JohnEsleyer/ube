@@ -56,10 +56,10 @@
     ],
     "description": "Pattern matching on enums"
   },
-  "Tuber Scratchpad": {
-    "prefix": "tuber",
+  "Scope Scratchpad": {
+    "prefix": "scope",
     "body": [
-      "tuber {",
+      "scope {",
       "\t${0}",
       "} // Wiped in 1 instruction!"
     ],
@@ -68,7 +68,7 @@
   "Spawn Vine": {
     "prefix": "spawn",
     "body": [
-      "spawn ${1:worker_function}(${2:channel})"
+      "spawn ${1:vine_function}(${2:channel})"
     ],
     "description": "Spawn a concurrent task"
   }

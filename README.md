@@ -8,112 +8,59 @@
 *Easy to program like Go. Fast like C. Zero Garbage Collection.*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
-[![Status: Active](https://img.shields.io/badge/Status-v0.5.0-brightgreen.svg)]()
-[![Target: C99_WASM](https://img.shields.io/badge/Target-C99%20%7C%20WASM%20%7C%20Embedded-blue.svg)]()
 
 </div>
 
----
+## What is Ube?
 
-## 1. What is Ube?
+Ube is a statically typed systems language with Go-style ergonomics and deterministic scoped arena allocation. Its compiler frontend is written in Go and emits C for native compilation.
 
-**Ube** is a statically typed, compiled systems language designed for developer ergonomics, deterministic latency, and universal portability.
+## Memory and concurrency
 
-It solves a fundamental dilemma in modern systems engineering:
+Lexical `scope { ... }` blocks save and restore an arena watermark. Dynamic slices grow geometrically in contiguous arena-backed buffers; growth copies live elements into a new buffer, so slice contents remain intact. Old buffers remain allocated until the enclosing scope is restored.
 
-* **Go** is productive, but its **Garbage Collector (GC)** incurs latency spikes, unpredictable memory footprints, and unsuitability for microcontrollers or hard real-time systems.
-* **Rust** gives high performance without GC, but its **borrow checker and explicit lifetime annotations (`'a`)** impose cognitive overhead that slows down iterative delivery.
-* **C/C++** is everywhere, but lacks memory ergonomics, type safety, and modern standard primitives.
+Use `spawn function(args)` to start a Vine on a detached OS thread. Typed channels copy flat values between Vines.
 
-**Ube provides Go-style syntax and developer ergonomics with zero garbage collection.**
-
----
-
-## 2. The Core Pillars
-
-| Pillar | How Ube Achieves It |
-| :--- | :--- |
-| 🚀 **Fast as C/Rust** | Contiguous memory layouts, monotone bump growth on Tubers, and single-store deallocation. |
-| 🧁 **Easy as Go** | Minimalist syntax, Go-style receiver methods, channels, fast compilation, and zero lifetime annotations. |
-| 🛡️ **Memory Safe** | Eliminates heap churn, use-after-free, and double-free via static root analysis and scoped regional Tubers. |
-| 🌍 **Runs Everywhere** | Transpiles to clean ANSI C99/C23: Desktops, WebAssembly (WASM), and Microcontrollers (ESP32, STM32, RISC-V). |
-| ⚡ **Zero-Cost C Interop** | Flat data models and direct C FFI (`extern fn`, `.ptr`) with zero conversion overhead and no glue code. |
-
----
-
-## 3. The Memory Model: "Tubers"
-
-Ube rejects runtime garbage collection and manual `malloc`/`free`. Instead, it uses **Tubers** (scoped regional bump allocators):
-
-```
-+-------------------------------------------------------------------+
-|  Tuber Page (Default 64 KB, matches WASM Page Size)               |
-+-------------------------------------------------------------------+
-| [Fixed Stack Data] | [Dynamic Slice Items ...] -> (bumps top)     |
-+-------------------------------------------------------------------+
-                     ^                                              ^
-                 Watermark                                      Tuber Top
+```ube
+fn main() {
+    let mut values = []i32{}
+    values.push(10)
+    values.push(20)
+    if true && true {
+        println("two values")
+    }
+}
 ```
 
-### 1. Single-Store Deallocation
-Every function and lexical block saves a watermark representing the current top of the Tuber. When the scope exits, all allocated items inside that scope are reclaimed in a single instruction:
-```c
-current_tuber.top = watermark;
-```
+The language supports short-circuiting `&&` and `||`, plus `break` and `continue` inside loops.
 
-### 2. Caller-Allocated Returns
-Callees that return dynamic slices do not reset their watermark; caller frames inherit the allocation directly without GC or copying.
+## Implementation status and roadmap
 
-### 3. Vines: Shared-Nothing Concurrency
-A **Vine** is Ube's unit of execution. Every Vine owns a private, isolated Tuber via thread-local storage (`_Thread_local`). Cross-Vine communication occurs exclusively via typed channels (`Chan[T]`) copying data by value (`memcpy`).
+| Feature | Status | Notes |
+| --- | --- | --- |
+| Go compiler frontend | Shipped | Lexer, parser, typechecker, and C code generator in `pkg/compiler`. |
+| Dynamic slices | Shipped | Contiguous arena buffers with geometric growth and copy-forward. |
+| Print helpers | Shipped | Polymorphic `println` for supported scalar and string types. |
+| Logical operators | Shipped | Short-circuiting boolean `&&` and `||`. |
+| Control flow | Shipped | `if`, `while`, `for`, `break`, and `continue`. |
+| Spawn and channels | Shipped | Detached Vines with flat typed channel values. |
+| M:N fiber scheduler | Roadmap | Cooperative scheduling and platform event integration. |
+| WASM and embedded targets | Roadmap | Target profiles for WebAssembly and bare-metal systems. |
 
----
+The compiler will remain implemented in Go; self-hosting the compiler in Ube is not a roadmap objective.
 
-## 4. Current Implementation Status
+## Build and use
 
-| Feature / Subsystem | Status | Description |
-| :--- | :--- | :--- |
-| **AST Parser & Lexer** | **Shipped** | Full tokenization, recursive-descent parser, line/column tracking. |
-| **Static Typechecker** | **Shipped** | Scope resolution, type inference, struct/enum validation, flat type check for `Chan[T]`. |
-| **Generic Slices (`[]T`)** | **Shipped** | Supports dynamic arrays of primitives, structs, and custom types via `.push()`. |
-| **Null-Safe Optionals (`T?`)** | **Shipped** | `null`, `if let`, optional returns, and unwrap fallback (`or_else`). |
-| **Result Error Handling (`T ! E`)** | **Shipped** | Fallible functions, `return error(...)`, `?` propagation, and `or_else`. |
-| **Tagged Unions & Pattern Matching**| **Shipped** | Multi-variant data enums, multi-line `match` statements with bindings. |
-| **C FFI & Pointer Interop** | **Shipped** | `extern fn`, `*u8`, `*void`, `**void`, and `.ptr` lowering. |
-| **Generational Slot Pools (`Pool[T]`)**| **Shipped** | Fast handle-based entity pooling with generational index safety. |
-| **Channels & Vines** | **Shipped** | `Chan[T].new()`, `.send()`, `.recv()`, `.close()`, `spawn`, `while let`, and `select`. |
-| **Chunked Immutable Tubers** | Roadmap | Migration from reallocating buffer to non-moving chunk lists. |
-| **M:N Fiber Scheduler** | Roadmap | Epoll/Kqueue/WASM cooperative fiber event loop. |
-| **Self-Hosting Compiler** | Roadmap | Rewrite compiler frontend directly in Ube. |
+Requirements: Go 1.20+ and a C compiler such as GCC or Clang.
 
----
-
-## 5. Quickstart
-
-### Prerequisites
-* Python 3.8+
-* Any C compiler (`gcc`, `clang`, or `tcc`)
-
-### Automatic Install
-```bash
-curl -fsSL https://raw.githubusercontent.com/JohnEsleyer/ube/main/install.sh | bash
-```
-
-### Manual Build & Test
-```bash
-# 1. Run the frontend compiler test suite
-python3 tests/test_frontend.py
-
-# 2. Compile comprehensive end-to-end suite
-python3 src/compiler/ubec.py tests/test_comprehensive.ube
-
-# 3. Build with GCC and run
-gcc -O2 -pthread -Isrc/runtime output.c -o ube_app
+```sh
+go build -o bin/ubec ./cmd/ubec
+go test ./pkg/compiler/...
+./bin/ubec examples/01_hello/main.ube -o output.c
+gcc -std=gnu11 -O2 -pthread -Iruntime output.c -o ube_app
 ./ube_app
 ```
 
----
+## License
 
-## 6. License
-
-Ube is open-source software licensed under the [MIT License](LICENSE).
+Ube is licensed under the MIT License.

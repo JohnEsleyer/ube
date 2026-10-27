@@ -1,15 +1,15 @@
 fn main() {
-    println_str("--- Ube Strings on Tubers ---")
+    println_str("--- Ube Strings in Scopes ---")
 
     let first = "Ube"
     let second = "language"
     let msg = first + " is a " + second
     println_str(msg)
 
-    tuber {
+    scope {
         let tmp = "scratch " + "memory"
         println_str(tmp)
-    } // tuber
+    } // scope
 
     println_str("concatenation allocations were freed by one store")
 }

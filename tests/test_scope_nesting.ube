@@ -1,0 +1,20 @@
+// Nested scope restores must preserve allocations made by the outer scope.
+fn main() {
+    let mut outer = []i32{}
+    outer.push(1)
+
+    scope {
+        let mut inner = []i32{}
+        inner.push(10)
+        scope {
+            let mut nested = []i32{}
+            nested.push(100)
+            println(nested[0])
+        }
+        println(inner[0])
+    }
+
+    outer.push(2)
+    println(outer[0])
+    println(outer[1])
+}

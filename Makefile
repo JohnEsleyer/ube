@@ -5,17 +5,16 @@ all: test
 
 # Run compiler validation tests
 test:
-	@./bin/ube test
+	@go test ./pkg/compiler/...
+	@go test ./cmd/...
 
 # Build the VS Code .vsix package
 vsix:
-	@cd editors/vscode && python3 build_vsix.py
+	@cd editors/vscode && npx --yes @vscode/vsce package
 
 # Install CLI globally to /usr/local/bin
 install:
-	@chmod +x bin/ube
-	@cp bin/ube /usr/local/bin/ube
-	@echo "🍠 Ube CLI installed to /usr/local/bin/ube"
+	@go install ./cmd/ubec
 
 # Clean up temporary compilation artifacts
 clean:

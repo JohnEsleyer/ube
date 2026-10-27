@@ -218,13 +218,21 @@ type ScopeStmt struct {
 func (s *ScopeStmt) Loc() SourceLocation { return s.At }
 func (s *ScopeStmt) stmtNode()           {}
 
-type WorkerStmt struct {
+type LoopControlStmt struct {
+	At       SourceLocation
+	Continue bool
+}
+
+func (s *LoopControlStmt) Loc() SourceLocation { return s.At }
+func (s *LoopControlStmt) stmtNode()           {}
+
+type SpawnStmt struct {
 	At   SourceLocation
 	Call *CallExpr
 }
 
-func (s *WorkerStmt) Loc() SourceLocation { return s.At }
-func (s *WorkerStmt) stmtNode()           {}
+func (s *SpawnStmt) Loc() SourceLocation { return s.At }
+func (s *SpawnStmt) stmtNode()           {}
 
 type MatchStmt struct {
 	At   SourceLocation

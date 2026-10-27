@@ -287,14 +287,17 @@ func (p *Parser) parseStmt() Stmt {
 	case TokenScope:
 		p.advance()
 		return &ScopeStmt{At: tok.Loc, Body: p.parseBlock()}
-	case TokenWorker:
+	case TokenSpawn:
 		p.advance()
 		call := p.parseExpr()
 		callExpr, ok := call.(*CallExpr)
 		if !ok {
-			p.errorAt(tok.Loc, "worker target must be a direct function call")
+			p.errorAt(tok.Loc, "spawn target must be a direct function call")
 		}
-		return &WorkerStmt{At: tok.Loc, Call: callExpr}
+		return &SpawnStmt{At: tok.Loc, Call: callExpr}
+	case TokenBreak, TokenContinue:
+		p.advance()
+		return &LoopControlStmt{At: tok.Loc, Continue: tok.Type == TokenContinue}
 	case TokenMatch:
 		return p.parseMatchStmt()
 	case TokenSelect:
@@ -476,10 +479,10 @@ func (p *Parser) parseExpr() Expr {
 }
 
 func (p *Parser) parseOrElse() Expr {
-	node := p.parseEquality()
+	node := p.parseLogicalOr()
 	if p.check(TokenOrElse) {
 		loc := p.advance().Loc
-		rhs := p.parseEquality()
+		rhs := p.parseLogicalOr()
 		return &OrElseExpr{At: loc, Primary: node, Fallback: rhs}
 	}
 	return node
@@ -491,6 +494,24 @@ func (p *Parser) parseEquality() Expr {
 		opTok := p.advance()
 		right := p.parseRelational()
 		node = &BinaryExpr{At: opTok.Loc, Left: node, Op: opTok.Val, Right: right}
+	}
+	return node
+}
+
+func (p *Parser) parseLogicalOr() Expr {
+	node := p.parseLogicalAnd()
+	for p.check(TokenOr) {
+		opTok := p.advance()
+		node = &BinaryExpr{At: opTok.Loc, Left: node, Op: opTok.Val, Right: p.parseLogicalAnd()}
+	}
+	return node
+}
+
+func (p *Parser) parseLogicalAnd() Expr {
+	node := p.parseEquality()
+	for p.check(TokenAnd) {
+		opTok := p.advance()
+		node = &BinaryExpr{At: opTok.Loc, Left: node, Op: opTok.Val, Right: p.parseEquality()}
 	}
 	return node
 }

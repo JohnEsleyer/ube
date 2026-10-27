@@ -1,13 +1,13 @@
-// v0.4: shared-nothing Vines with private Tubers and flat channels.
-// The worker Vine receives flat Job values by memcpy, computes on its own
-// Tuber, and sends flat i32 results back. No pointer ever crosses a Vine.
+// v0.4: shared-nothing Vines with private scope arenas and flat channels.
+// The spawned Vine receives flat Job values by memcpy, computes on its own
+// scope arena, and sends flat i32 results back. No pointer ever crosses a Vine.
 
 struct Job {
     id: i32,
     weight: i32
 }
 
-fn worker(jobs: Chan[Job], results: Chan[i32]) {
+fn process_jobs(jobs: Chan[Job], results: Chan[i32]) {
     let a = jobs.recv()
     results.send(a.id * a.weight)
 
@@ -24,8 +24,8 @@ fn main() {
     let jobs = Chan[Job].new(8)
     let results = Chan[i32].new(8)
 
-    // Each Vine gets its own Tuber on its own OS thread.
-    spawn worker(jobs, results)
+    // Each Vine gets its own scope arena on its own OS thread.
+    spawn process_jobs(jobs, results)
 
     jobs.send(Job{ id: 1, weight: 10 })
     jobs.send(Job{ id: 2, weight: 20 })
@@ -41,5 +41,5 @@ fn main() {
     println(r2)
     println(r3)
 
-    println_str("All Vines done; main Tuber reclaimed in one store.")
+    println_str("All Vines done; main scope arena reclaimed in one restore.")
 }

@@ -1,0 +1,27 @@
+// Basic arithmetic precedence, boolean operators, and loop control.
+fn precedence() -> i32 {
+    return 2 + 3 * 4 - 6 / 2
+}
+
+fn loop_total() -> i32 {
+    let mut total = 0
+    let mut i = 0
+    while i < 10 {
+        i = i + 1
+        if i % 2 == 0 {
+            continue
+        }
+        if i > 7 {
+            break
+        }
+        total = total + i
+    }
+    return total
+}
+
+fn main() {
+    println(precedence())
+    println(true && (10 > 5))
+    println(false || (2 == 2))
+    println(loop_total())
+}

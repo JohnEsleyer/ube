@@ -84,19 +84,21 @@
 
         <div class="card">
             <h2>Quickstart</h2>
-            <pre><code># Clone and test Ube
+            <pre><code># Clone and build the Go compiler
 git clone https://github.com/JohnEsleyer/ube.git
 cd ube
-make test
+go build -o bin/ubec ./cmd/ubec
 
-# Build and run
-./bin/ube run examples/01_hello/main.ube</code></pre>
+# Generate C, compile, and run
+./bin/ubec examples/01_hello/main.ube -o output.c
+gcc -std=gnu11 -O2 -pthread -Iruntime output.c -o ube_app
+./ube_app</code></pre>
         </div>
 
         <div class="features">
             <div class="feature-item">
                 <div class="feature-title">🚀 Fast as C / Rust</div>
-                <p>Contiguous layouts, monotone bump growth on Tubers, single-store deallocation, and no garbage collection pauses.</p>
+                <p>Contiguous arena-backed slices with geometric growth, scope-based reclamation, and no garbage collection pauses.</p>
             </div>
             <div class="feature-item">
                 <div class="feature-title">🧁 Easy as Go</div>
@@ -104,8 +106,14 @@ make test
             </div>
             <div class="feature-item">
                 <div class="feature-title">⚡ Zero-Cost C Interop</div>
-                <p>Direct bindings via <code>extern fn</code>, drop-in single-file C support, and clean ANSI C99 output.</p>
+                <p>Direct bindings via <code>extern fn</code>, drop-in single-file C support, and clean C output.</p>
             </div>
+        </div>
+
+        <div class="card">
+            <h2>Language status and roadmap</h2>
+            <p>The compiler frontend is written in Go and emits C. Current language features include arena-backed dynamic slices with geometric growth, polymorphic printing, short-circuiting <code>&amp;&amp;</code> and <code>||</code>, and loop <code>break</code>/<code>continue</code>.</p>
+            <p>Planned work: cooperative M:N fiber scheduling, then WebAssembly and embedded target profiles. The compiler will remain in Go; a self-hosting Ube compiler is not planned.</p>
         </div>
     </div>
 </body>

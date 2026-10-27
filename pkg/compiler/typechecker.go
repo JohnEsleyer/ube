@@ -16,12 +16,13 @@ type FuncSignature struct {
 }
 
 type TypeEnvironment struct {
-	Parent  *TypeEnvironment
-	Vars    map[string]VarInfo
-	Structs map[string][]FieldDecl
-	Enums   map[string][]VariantDecl
-	Funcs   map[string]FuncSignature
-	CurRet  UbeType
+	Parent    *TypeEnvironment
+	Vars      map[string]VarInfo
+	Structs   map[string][]FieldDecl
+	Enums     map[string][]VariantDecl
+	Funcs     map[string]FuncSignature
+	CurRet    UbeType
+	LoopDepth int
 }
 
 func NewTypeEnvironment(parent *TypeEnvironment) *TypeEnvironment {
@@ -50,10 +51,7 @@ type Typechecker struct {
 
 func NewTypechecker() *Typechecker {
 	tc := &Typechecker{Global: NewTypeEnvironment(nil)}
-	tc.Global.Funcs["println"] = FuncSignature{
-		Params:  []FieldDecl{{Name: "v", Type: PrimitiveType{Name: "i32"}}},
-		RetType: PrimitiveType{Name: "void"},
-	}
+	tc.Global.Funcs["println"] = FuncSignature{RetType: PrimitiveType{Name: "void"}}
 	tc.Global.Funcs["println_str"] = FuncSignature{
 		Params:  []FieldDecl{{Name: "s", Type: StringType{}}},
 		RetType: PrimitiveType{Name: "void"},
@@ -61,9 +59,23 @@ func NewTypechecker() *Typechecker {
 	return tc
 }
 
+func printableType(t UbeType) bool {
+	switch v := t.(type) {
+	case PrimitiveType:
+		switch v.Name {
+		case "i32", "u32", "u8", "i64", "u64", "f32", "f64", "bool":
+			return true
+		}
+	case StringType, PointerType:
+		return true
+	}
+	return false
+}
+
 func (tc *Typechecker) checkBlock(b *BlockStmt, env *TypeEnvironment) error {
 	bEnv := NewTypeEnvironment(env)
 	bEnv.CurRet = env.CurRet
+	bEnv.LoopDepth = env.LoopDepth
 	for _, stmt := range b.Stmts {
 		if err := tc.checkStmt(stmt, bEnv); err != nil {
 			return err
@@ -158,6 +170,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		}
 		thenEnv := NewTypeEnvironment(env)
 		thenEnv.CurRet = env.CurRet
+		thenEnv.LoopDepth = env.LoopDepth
 		thenEnv.Vars[s.VarName] = VarInfo{Type: oType.Inner, IsMut: false}
 		if err := tc.checkBlock(s.Then, thenEnv); err != nil {
 			return err
@@ -177,7 +190,10 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		if err := tc.assertCompat(PrimitiveType{Name: "bool"}, condT, s.At); err != nil {
 			return err
 		}
-		return tc.checkBlock(s.Body, env)
+		loopEnv := NewTypeEnvironment(env)
+		loopEnv.CurRet = env.CurRet
+		loopEnv.LoopDepth = env.LoopDepth + 1
+		return tc.checkBlock(s.Body, loopEnv)
 
 	case *WhileLetStmt:
 		cType, err := tc.inferExpr(s.Call, env)
@@ -186,6 +202,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		}
 		loopEnv := NewTypeEnvironment(env)
 		loopEnv.CurRet = env.CurRet
+		loopEnv.LoopDepth = env.LoopDepth + 1
 		loopEnv.Vars[s.VarName] = VarInfo{Type: cType, IsMut: false}
 		return tc.checkBlock(s.Body, loopEnv)
 
@@ -200,13 +217,19 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		}
 		loopEnv := NewTypeEnvironment(env)
 		loopEnv.CurRet = env.CurRet
+		loopEnv.LoopDepth = env.LoopDepth + 1
 		loopEnv.Vars[s.ItemName] = VarInfo{Type: slT.Elem, IsMut: false}
 		return tc.checkBlock(s.Body, loopEnv)
 
 	case *ScopeStmt:
 		return tc.checkBlock(s.Body, env)
+	case *LoopControlStmt:
+		if env.LoopDepth == 0 {
+			return fmt.Errorf("[%s] %s is only valid inside a loop", s.At, map[bool]string{true: "continue", false: "break"}[s.Continue])
+		}
+		return nil
 
-	case *WorkerStmt:
+	case *SpawnStmt:
 		_, err := tc.inferExpr(s.Call, env)
 		if err != nil {
 			return err
@@ -214,7 +237,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		for _, arg := range s.Call.Args {
 			argT, _ := tc.inferExpr(arg, env)
 			if !argT.IsFlat(tc.Global) {
-				return fmt.Errorf("[%s] cannot pass non-flat type '%s' across Workers", s.At, argT)
+				return fmt.Errorf("[%s] cannot pass non-flat type '%s' across spawned Vines", s.At, argT)
 			}
 		}
 
@@ -230,6 +253,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			}
 			caseEnv := NewTypeEnvironment(env)
 			caseEnv.CurRet = env.CurRet
+			caseEnv.LoopDepth = env.LoopDepth
 			caseEnv.Vars[sc.VarName] = VarInfo{Type: chanType.Elem, IsMut: false}
 			if err := tc.checkBlock(sc.Body, caseEnv); err != nil {
 				return err
@@ -268,6 +292,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			}
 			armEnv := NewTypeEnvironment(env)
 			armEnv.CurRet = env.CurRet
+			armEnv.LoopDepth = env.LoopDepth
 			for i, b := range arm.Bindings {
 				armEnv.Vars[b] = VarInfo{Type: expected[i], IsMut: false}
 			}
@@ -331,6 +356,14 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			return nil, err
 		}
 		switch e.Op {
+		case "&&", "||":
+			if err := tc.assertCompat(PrimitiveType{Name: "bool"}, lT, e.At); err != nil {
+				return nil, err
+			}
+			if err := tc.assertCompat(PrimitiveType{Name: "bool"}, rT, e.At); err != nil {
+				return nil, err
+			}
+			return PrimitiveType{Name: "bool"}, nil
 		case "==", "!=", "<", "<=", ">", ">=":
 			return PrimitiveType{Name: "bool"}, tc.assertCompat(lT, rT, e.At)
 		case "+":
@@ -353,6 +386,19 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		return opndT, nil
 
 	case *CallExpr:
+		if id, ok := e.Callee.(*IdentExpr); ok && id.Name == "println" {
+			if len(e.Args) != 1 {
+				return nil, fmt.Errorf("[%s] println expects one argument", e.At)
+			}
+			argT, err := tc.inferExpr(e.Args[0], env)
+			if err != nil {
+				return nil, err
+			}
+			if !printableType(argT) {
+				return nil, fmt.Errorf("[%s] println does not support type '%s'", e.At, argT)
+			}
+			return PrimitiveType{Name: "void"}, err
+		}
 		if mem, ok := e.Callee.(*MemberExpr); ok {
 			if id, ok := mem.Target.(*IdentExpr); ok {
 				if _, ok := tc.Global.Enums[id.Name]; ok {

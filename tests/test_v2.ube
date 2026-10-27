@@ -37,13 +37,13 @@ fn main() {
     println_str("Calculation succeeded with `?` operator:")
     println(scaled)
 
-    // Test Scoped Tuber Memory
-    tuber {
+    // Test scoped arena memory
+    scope {
         let mut list = []i32{}
         list.push(111)
         list.push(222)
-        println_str("Inside Tuber: memory will be wiped on block exit")
-    } // tuber
+        println_str("Inside scope: memory will be reclaimed on block exit")
+    } // scope
 
     println_str("All tests passed with zero GC!")
 }
