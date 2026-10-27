@@ -8,6 +8,8 @@
 **The sweet, grounded systems language.**
 *Easy to program like Go. Fast like C. Zero Garbage Collection.*
 
+**Latest version: `0.6.0`**
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.20+-00ADD8?logo=go)](https://golang.org)
 [![C Standard](https://img.shields.io/badge/C-GNU11-blue.svg)](https://en.wikipedia.org/wiki/C11)

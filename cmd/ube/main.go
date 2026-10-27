@@ -13,7 +13,7 @@ import (
 	ubert "github.com/JohnEsleyer/ube/runtime"
 )
 
-const version = "0.5.0"
+const version = "0.6.0"
 
 const (
 	colorReset  = "\x1b[0m"
