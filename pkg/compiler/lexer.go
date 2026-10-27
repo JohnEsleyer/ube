@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -27,6 +28,7 @@ var keywords = map[string]TokenType{
 	"extern":   TokenExtern,
 	"or_else":  TokenOrElse,
 	"import":   TokenImport,
+	"defer":    TokenDefer,
 	"true":     TokenBool,
 	"false":    TokenBool,
 	"null":     TokenNull,
@@ -176,8 +178,29 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 					switch esc {
 					case 'n':
 						buf.WriteRune('\n')
+					case 'r':
+						buf.WriteRune('\r')
+					case '0':
+						buf.WriteRune(0)
 					case 't':
 						buf.WriteRune('\t')
+					case 'x', 'u':
+						n := 2
+						if esc == 'u' {
+							n = 4
+						}
+						var digits strings.Builder
+						for i := 0; i < n; i++ {
+							if l.pos >= len(l.source) {
+								return nil, fmt.Errorf("[%s] incomplete escape", loc)
+							}
+							digits.WriteRune(l.advance())
+						}
+						v, err := strconv.ParseInt(digits.String(), 16, 32)
+						if err != nil {
+							return nil, fmt.Errorf("[%s] invalid escape \\%c%s", loc, esc, digits.String())
+						}
+						buf.WriteRune(rune(v))
 					case '"':
 						buf.WriteRune('"')
 					case '\\':

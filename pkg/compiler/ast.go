@@ -72,6 +72,14 @@ type IndexExpr struct {
 func (e *IndexExpr) Loc() SourceLocation { return e.At }
 func (e *IndexExpr) exprNode()           {}
 
+type SliceSubExpr struct {
+	At                 SourceLocation
+	Target, Start, End Expr
+}
+
+func (e *SliceSubExpr) Loc() SourceLocation { return e.At }
+func (e *SliceSubExpr) exprNode()           {}
+
 type StructInitExpr struct {
 	At     SourceLocation
 	Name   string
@@ -86,12 +94,32 @@ func (e *StructInitExpr) Loc() SourceLocation { return e.At }
 func (e *StructInitExpr) exprNode()           {}
 
 type SliceInitExpr struct {
-	At   SourceLocation
-	Elem UbeType
+	At       SourceLocation
+	Elem     UbeType
+	Elements []Expr
 }
 
 func (e *SliceInitExpr) Loc() SourceLocation { return e.At }
 func (e *SliceInitExpr) exprNode()           {}
+
+type ArrayInitExpr struct {
+	At       SourceLocation
+	Elem     UbeType
+	Size     int
+	Elements []Expr
+}
+
+func (e *ArrayInitExpr) Loc() SourceLocation { return e.At }
+func (e *ArrayInitExpr) exprNode()           {}
+
+type GenericTypeExpr struct {
+	At       SourceLocation
+	BaseType string
+	ElemType UbeType
+}
+
+func (e *GenericTypeExpr) Loc() SourceLocation { return e.At }
+func (e *GenericTypeExpr) exprNode()           {}
 
 type TryExpr struct {
 	At      SourceLocation
@@ -250,10 +278,11 @@ func (s *MatchStmt) Loc() SourceLocation { return s.At }
 func (s *MatchStmt) stmtNode()           {}
 
 type SelectCase struct {
-	At      SourceLocation
-	VarName string
-	Chan    Expr
-	Body    *BlockStmt
+	At       SourceLocation
+	VarName  string
+	Chan     Expr
+	ChanElem UbeType
+	Body     *BlockStmt
 }
 
 type SelectStmt struct {
@@ -273,11 +302,27 @@ type ExprStmt struct {
 func (s *ExprStmt) Loc() SourceLocation { return s.At }
 func (s *ExprStmt) stmtNode()           {}
 
+type DeferStmt struct {
+	At   SourceLocation
+	Call Expr
+}
+
+func (s *DeferStmt) Loc() SourceLocation { return s.At }
+func (s *DeferStmt) stmtNode()           {}
+
 // Top-Level Declarations
 type Decl interface {
 	Node
 	declNode()
 }
+
+type ImportDecl struct {
+	At   SourceLocation
+	Path string
+}
+
+func (d *ImportDecl) Loc() SourceLocation { return d.At }
+func (d *ImportDecl) declNode()           {}
 
 type StructDecl struct {
 	At     SourceLocation

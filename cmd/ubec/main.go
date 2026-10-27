@@ -21,25 +21,10 @@ func main() {
 		}
 	}
 
-	code, err := os.ReadFile(srcFile)
+	loader := compiler.NewModuleLoader()
+	ast, err := loader.Load(srcFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading %s: %v\n", srcFile, err)
-		os.Exit(1)
-	}
-
-	// 1. Lexing
-	lexer := compiler.NewLexer(srcFile, string(code))
-	tokens, err := lexer.Tokenize()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-
-	// 2. Parsing AST
-	parser := compiler.NewParser(tokens)
-	ast, err := parser.ParseProgram()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintf(os.Stderr, "[ubec] Compile Error: %v\n", err)
 		os.Exit(1)
 	}
 

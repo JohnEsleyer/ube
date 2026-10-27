@@ -34,6 +34,7 @@ const (
 	TokenExtern   TokenType = "extern"
 	TokenOrElse   TokenType = "or_else"
 	TokenImport   TokenType = "import"
+	TokenDefer    TokenType = "defer"
 
 	// Symbols & Operators
 	TokenArrow     TokenType = "->"

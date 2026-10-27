@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -17,6 +18,7 @@ type Generator struct {
 	indent     int
 	curFnRet   UbeType
 	tmpCounter int
+	deferCalls []string
 }
 
 func NewGenerator(prog *Program) *Generator {
@@ -68,6 +70,8 @@ func (g *Generator) toCType(t UbeType) string {
 		m := strings.ReplaceAll(v.Elem.String(), "*", "ptr_")
 		g.slices[m] = g.toCType(v.Elem)
 		return fmt.Sprintf("UbeSlice_%s", m)
+	case ArrayType:
+		return fmt.Sprintf("struct { %s data[%d]; }", g.toCType(v.Elem), v.Size)
 	case OptionalType:
 		m := strings.ReplaceAll(v.Inner.String(), "*", "ptr_")
 		g.options[m] = g.toCType(v.Inner)
@@ -217,6 +221,10 @@ func (g *Generator) genDecl(decl Decl) {
 		for _, st := range d.Body.Stmts {
 			g.genStmt(st)
 		}
+		for i := len(g.deferCalls) - 1; i >= 0; i-- {
+			g.emit(g.deferCalls[i] + ";")
+		}
+		g.deferCalls = nil
 
 		if d.Name == "main" {
 			g.emit("ube_scope_restore(__watermark);")
@@ -239,7 +247,14 @@ func (g *Generator) genStmt(st Stmt) {
 			m := strings.ReplaceAll(sl.Elem.String(), "*", "ptr_")
 			g.toCType(SliceType{Elem: sl.Elem})
 			g.sliceVars[s.Name] = m
-			g.emit(fmt.Sprintf("UbeSlice_%s %s = ube_slice_%s_new();", m, s.Name, m))
+			if len(sl.Elements) == 0 {
+				g.emit(fmt.Sprintf("UbeSlice_%s %s = ube_slice_%s_new();", m, s.Name, m))
+			} else {
+				g.emit(fmt.Sprintf("UbeSlice_%s %s = { .len=%d, .cap=%d, .data=(%s*)ube_bump_alloc(%d*sizeof(%s)) };", m, s.Name, len(sl.Elements), len(sl.Elements), g.toCType(sl.Elem), len(sl.Elements), g.toCType(sl.Elem)))
+				for i, e := range sl.Elements {
+					g.emit(fmt.Sprintf("%s.data[%d] = %s;", s.Name, i, g.genExpr(e)))
+				}
+			}
 			return
 		}
 		if s.Type != nil {
@@ -251,8 +266,13 @@ func (g *Generator) genStmt(st Stmt) {
 
 	case *AssignStmt:
 		g.emit(fmt.Sprintf("%s = %s;", g.genExpr(s.LHS), g.genExpr(s.RHS)))
+	case *DeferStmt:
+		g.deferCalls = append(g.deferCalls, g.genExpr(s.Call))
 
 	case *ReturnStmt:
+		for i := len(g.deferCalls) - 1; i >= 0; i-- {
+			g.emit(g.deferCalls[i] + ";")
+		}
 		if s.Value != nil {
 			// Caller-inherited dynamic slice bump preservation
 			if _, isSlice := g.curFnRet.(SliceType); isSlice {
@@ -400,7 +420,11 @@ func (g *Generator) genStmt(st Stmt) {
 			g.emit("{")
 			g.indent++
 			g.emit(fmt.Sprintf("__auto_type __c = %s;", g.genExpr(c.Chan)))
-			g.emit(fmt.Sprintf("int32_t %s;", c.VarName))
+			ct := c.ChanElem
+			if ct == nil {
+				ct = PrimitiveType{Name: "i32"}
+			}
+			g.emit(fmt.Sprintf("%s %s;", g.toCType(ct), c.VarName))
 			g.emit(fmt.Sprintf("if (ube_raw_chan_try_recv(__c, &%s)) {", c.VarName))
 			g.indent++
 			for _, sub := range c.Body.Stmts {
@@ -455,7 +479,7 @@ func (g *Generator) genExpr(expr Expr) string {
 	switch e := expr.(type) {
 	case *LiteralExpr:
 		if e.Type.String() == "string" {
-			return fmt.Sprintf("ube_str_lit(\"%s\")", e.Val)
+			return fmt.Sprintf("ube_str_lit(%s)", strconv.Quote(e.Val))
 		}
 		if e.Type.String() == "bool" {
 			return fmt.Sprintf("((bool)%s)", e.Val)
@@ -482,6 +506,13 @@ func (g *Generator) genExpr(expr Expr) string {
 			return fmt.Sprintf("UBE_PRINTLN(%s)", g.genExpr(e.Args[0]))
 		}
 		if mem, ok := e.Callee.(*MemberExpr); ok {
+			if gen, ok := mem.Target.(*GenericTypeExpr); ok && mem.Member == "new" && len(e.Args) == 1 {
+				if gen.BaseType == "Chan" {
+					return fmt.Sprintf("ube_raw_chan_new(%s, sizeof(%s))", g.genExpr(e.Args[0]), g.toCType(gen.ElemType))
+				}
+				m := strings.ReplaceAll(gen.ElemType.String(), "*", "ptr_")
+				return fmt.Sprintf("Pool_%s_new(%s)", m, g.genExpr(e.Args[0]))
+			}
 			if mem.Member == "push" {
 				sliceType := strings.ReplaceAll(g.genExpr(mem.Target), "*", "ptr_")
 				if id, ok := mem.Target.(*IdentExpr); ok {
@@ -526,7 +557,20 @@ func (g *Generator) genExpr(expr Expr) string {
 		return fmt.Sprintf("(%s).%s", g.genExpr(e.Target), e.Member)
 
 	case *IndexExpr:
+		if lit, ok := e.Target.(*LiteralExpr); ok && lit.Type.String() == "string" {
+			return fmt.Sprintf("((uint8_t)ube_str_index(%s,%s))", g.genExpr(e.Target), g.genExpr(e.Index))
+		}
 		return fmt.Sprintf("(%s).data[%s]", g.genExpr(e.Target), g.genExpr(e.Index))
+	case *SliceSubExpr:
+		return fmt.Sprintf("ube_str_slice(%s, %s, %s)", g.genExpr(e.Target), g.genExpr(e.Start), g.genExpr(e.End))
+	case *ArrayInitExpr:
+		var vals []string
+		for _, el := range e.Elements {
+			vals = append(vals, g.genExpr(el))
+		}
+		return fmt.Sprintf("(%s){ .data = { %s } }", g.toCType(ArrayType{Elem: e.Elem, Size: e.Size}), strings.Join(vals, ", "))
+	case *GenericTypeExpr:
+		return e.BaseType
 
 	case *StructInitExpr:
 		var inits []string

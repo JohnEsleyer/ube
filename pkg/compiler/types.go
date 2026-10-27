@@ -27,6 +27,14 @@ type SliceType struct{ Elem UbeType }
 func (t SliceType) String() string                   { return "[]" + t.Elem.String() }
 func (t SliceType) IsFlat(env *TypeEnvironment) bool { return false }
 
+type ArrayType struct {
+	Elem UbeType
+	Size int
+}
+
+func (t ArrayType) String() string                   { return fmt.Sprintf("[%d]%s", t.Size, t.Elem.String()) }
+func (t ArrayType) IsFlat(env *TypeEnvironment) bool { return t.Elem.IsFlat(env) }
+
 type OptionalType struct{ Inner UbeType }
 
 func (t OptionalType) String() string                   { return t.Inner.String() + "?" }

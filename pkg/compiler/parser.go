@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"strconv"
 )
 
 type parseError struct {
@@ -77,6 +78,10 @@ func (p *Parser) ParseProgram() (prog *Program, err error) {
 func (p *Parser) parseDecl() Decl {
 	tok := p.peek(0)
 	switch tok.Type {
+	case TokenImport:
+		loc := p.advance().Loc
+		path := p.expect(TokenString, "Expected import path").Val
+		return &ImportDecl{At: loc, Path: path}
 	case TokenStruct:
 		return p.parseStructDecl()
 	case TokenEnum:
@@ -220,6 +225,11 @@ func (p *Parser) parseType() UbeType {
 		p.advance()
 		elem := p.parseType()
 		t = SliceType{Elem: elem}
+	} else if tok.Type == TokenLBracket && p.peek(1).Type == TokenInt {
+		p.advance()
+		n, _ := strconv.Atoi(p.advance().Val)
+		p.expect(TokenRBracket, "Expected ']' after array size")
+		t = ArrayType{Elem: p.parseType(), Size: n}
 	} else if tok.Type == TokenIdent && tok.Val == "Chan" {
 		p.advance()
 		p.expect(TokenLBracket, "Expected '[' for Chan element type")
@@ -278,6 +288,9 @@ func (p *Parser) parseStmt() Stmt {
 		return p.parseLetStmt()
 	case TokenReturn:
 		return p.parseReturnStmt()
+	case TokenDefer:
+		p.advance()
+		return &DeferStmt{At: tok.Loc, Call: p.parseExpr()}
 	case TokenIf:
 		return p.parseIfStmt()
 	case TokenWhile:
@@ -568,7 +581,26 @@ func (p *Parser) parsePostfix() Expr {
 			node = &MemberExpr{At: loc, Target: node, Member: member}
 		} else if p.check(TokenLBracket) {
 			loc := p.advance().Loc
-			idx := p.parseExpr()
+			var idx Expr
+			if !p.check(TokenColon) {
+				idx = p.parseExpr()
+			}
+			if p.check(TokenColon) {
+				p.advance()
+				var end Expr
+				if !p.check(TokenRBracket) {
+					end = p.parseExpr()
+				}
+				p.expect(TokenRBracket, "Expected ']'")
+				if idx == nil {
+					idx = &LiteralExpr{At: loc, Val: "0", Type: PrimitiveType{Name: "i32"}}
+				}
+				if end == nil {
+					end = &LiteralExpr{At: loc, Val: "2147483647", Type: PrimitiveType{Name: "i32"}}
+				}
+				node = &SliceSubExpr{At: loc, Target: node, Start: idx, End: end}
+				continue
+			}
 			p.expect(TokenRBracket, "Expected ']'")
 			node = &IndexExpr{At: loc, Target: node, Index: idx}
 		} else if p.check(TokenLParen) {
@@ -615,8 +647,31 @@ func (p *Parser) parsePrimary() Expr {
 		p.advance()
 		elemT := p.parseType()
 		p.expect(TokenLBrace, "Expected '{' after slice type")
-		p.expect(TokenRBrace, "Expected '}' for empty slice literal")
-		return &SliceInitExpr{At: tok.Loc, Elem: elemT}
+		var elems []Expr
+		for !p.check(TokenRBrace) && !p.check(TokenEOF) {
+			elems = append(elems, p.parseExpr())
+			if p.check(TokenComma) {
+				p.advance()
+			}
+		}
+		p.expect(TokenRBrace, "Expected '}' after slice literal")
+		return &SliceInitExpr{At: tok.Loc, Elem: elemT, Elements: elems}
+	}
+	if tok.Type == TokenLBracket && p.peek(1).Type == TokenInt {
+		loc := p.advance().Loc
+		size, _ := strconv.Atoi(p.advance().Val)
+		p.expect(TokenRBracket, "Expected ']' after array size")
+		elem := p.parseType()
+		p.expect(TokenLBrace, "Expected '{' after array type")
+		var elems []Expr
+		for !p.check(TokenRBrace) && !p.check(TokenEOF) {
+			elems = append(elems, p.parseExpr())
+			if p.check(TokenComma) {
+				p.advance()
+			}
+		}
+		p.expect(TokenRBrace, "Expected '}' after array literal")
+		return &ArrayInitExpr{At: loc, Elem: elem, Size: size, Elements: elems}
 	}
 
 	if tok.Type == TokenIdent && tok.Val == "Chan" && p.peek(1).Type == TokenLBracket {
@@ -624,7 +679,7 @@ func (p *Parser) parsePrimary() Expr {
 		p.advance()
 		elemT := p.parseType()
 		p.expect(TokenRBracket, "Expected ']' after Chan element type")
-		return &IdentExpr{At: tok.Loc, Name: fmt.Sprintf("Chan[%s]", elemT.String())}
+		return &GenericTypeExpr{At: tok.Loc, BaseType: "Chan", ElemType: elemT}
 	}
 
 	if tok.Type == TokenIdent && tok.Val == "Pool" && p.peek(1).Type == TokenLBracket {
@@ -632,7 +687,7 @@ func (p *Parser) parsePrimary() Expr {
 		p.advance()
 		elemT := p.parseType()
 		p.expect(TokenRBracket, "Expected ']' after Pool element type")
-		return &IdentExpr{At: tok.Loc, Name: fmt.Sprintf("Pool[%s]", elemT.String())}
+		return &GenericTypeExpr{At: tok.Loc, BaseType: "Pool", ElemType: elemT}
 	}
 
 	if tok.Type == TokenIdent && tok.Val == "error" && p.peek(1).Type == TokenLParen {

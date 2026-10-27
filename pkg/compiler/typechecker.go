@@ -101,6 +101,12 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			valT = s.Type
 		}
 		env.Vars[s.Name] = VarInfo{Type: valT, IsMut: s.Mut}
+	case *DeferStmt:
+		if _, ok := s.Call.(*CallExpr); !ok {
+			return fmt.Errorf("[%s] defer requires a function call", s.At)
+		}
+		_, err := tc.inferExpr(s.Call, env)
+		return err
 
 	case *AssignStmt:
 		lhsT, err := tc.inferExpr(s.LHS, env)
@@ -251,6 +257,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			if !ok {
 				return fmt.Errorf("[%s] select case must receive from Chan, got '%s'", sc.At, chT)
 			}
+			sc.ChanElem = chanType.Elem
 			caseEnv := NewTypeEnvironment(env)
 			caseEnv.CurRet = env.CurRet
 			caseEnv.LoopDepth = env.LoopDepth
@@ -483,10 +490,59 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		if sl, ok := tgtT.(SliceType); ok {
 			return sl.Elem, nil
 		}
+		if arr, ok := tgtT.(ArrayType); ok {
+			return arr.Elem, nil
+		}
+		if _, ok := tgtT.(StringType); ok {
+			return PrimitiveType{Name: "u8"}, nil
+		}
 		return nil, fmt.Errorf("[%s] Type '%s' does not support indexing", e.At, tgtT)
+	case *SliceSubExpr:
+		t, err := tc.inferExpr(e.Target, env)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := t.(StringType); ok {
+			return StringType{}, nil
+		}
+		if sl, ok := t.(SliceType); ok {
+			return sl, nil
+		}
+		if a, ok := t.(ArrayType); ok {
+			return SliceType{Elem: a.Elem}, nil
+		}
+		return nil, fmt.Errorf("[%s] Type '%s' does not support slicing", e.At, t)
 
 	case *SliceInitExpr:
+		for _, el := range e.Elements {
+			t, err := tc.inferExpr(el, env)
+			if err != nil {
+				return nil, err
+			}
+			if err := tc.assertCompat(e.Elem, t, el.Loc()); err != nil {
+				return nil, err
+			}
+		}
 		return SliceType{Elem: e.Elem}, nil
+	case *ArrayInitExpr:
+		if len(e.Elements) > e.Size {
+			return nil, fmt.Errorf("[%s] too many array initializer elements", e.At)
+		}
+		for _, el := range e.Elements {
+			t, err := tc.inferExpr(el, env)
+			if err != nil {
+				return nil, err
+			}
+			if err := tc.assertCompat(e.Elem, t, el.Loc()); err != nil {
+				return nil, err
+			}
+		}
+		return ArrayType{Elem: e.Elem, Size: e.Size}, nil
+	case *GenericTypeExpr:
+		if e.BaseType == "Chan" {
+			return ChanType{Elem: e.ElemType}, nil
+		}
+		return PoolType{Elem: e.ElemType}, nil
 
 	case *StructInitExpr:
 		return CustomType{Name: e.Name}, nil

@@ -120,6 +120,20 @@ static inline string ube_str_concat(string a, string b) {
     return s;
 }
 
+static inline string ube_str_slice(string s, int32_t start, int32_t end) {
+    if (start < 0) start = 0;
+    if ((size_t)start > s.len) start = (int32_t)s.len;
+    if (end < start) end = start;
+    if ((size_t)end > s.len) end = (int32_t)s.len;
+    string sub = { s.data + start, (size_t)(end - start) };
+    return sub;
+}
+
+static inline uint8_t ube_str_index(string s, int32_t index) {
+    if (index < 0 || (size_t)index >= s.len) return 0;
+    return (uint8_t)s.data[index];
+}
+
 // --- 3. Generational Slot Pool (Pool[T]) ---
 typedef struct {
     uint32_t index;
