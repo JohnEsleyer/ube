@@ -164,7 +164,7 @@ func exprPushesName(expr Expr, name string) bool {
 	}
 	switch e := expr.(type) {
 	case *CallExpr:
-		if m, ok := e.Callee.(*MemberExpr); ok && m.Member == "push" && assignmentRoot(m.Target) == name {
+		if m, ok := e.Callee.(*MemberExpr); ok && (m.Member == "push" || m.Member == "pop") && assignmentRoot(m.Target) == name {
 			return true
 		}
 		if exprPushesName(e.Callee, name) {
@@ -298,6 +298,10 @@ func (g *Generator) Generate() string {
 	for _, decl := range g.Program.Decls {
 		g.genDecl(decl)
 	}
+	g.toCType(ResultType{Ok: StringType{}, Err: StringType{}})
+	g.toCType(ResultType{Ok: PrimitiveType{Name: "bool"}, Err: StringType{}})
+	g.toCType(ResultType{Ok: PrimitiveType{Name: "i64"}, Err: StringType{}})
+	g.toCType(SliceType{Elem: StringType{}})
 
 	body := g.buf.String()
 	g.buf = oldBuf
@@ -351,14 +355,21 @@ func (g *Generator) Generate() string {
 		}
 	}
 	for m, ct := range g.slices {
+		g.options[m] = ct
+		g.emit(fmt.Sprintf("#ifndef UbeSlice_%s_DEFINED\n#define UbeSlice_%s_DEFINED", m, m))
 		g.emit(fmt.Sprintf("typedef struct { %s* data; size_t len; size_t cap; } UbeSlice_%s;", ct, m))
+		g.emit("#endif")
 	}
 	for m, ct := range g.options {
+		g.emit(fmt.Sprintf("#ifndef UbeOption_%s_DEFINED\n#define UbeOption_%s_DEFINED", m, m))
 		g.emit(fmt.Sprintf("typedef struct { bool has_val; %s val; } UbeOption_%s;", ct, m))
+		g.emit("#endif")
 	}
 	for m, pair := range g.results {
 		parts := strings.Split(pair, "|")
+		g.emit(fmt.Sprintf("#ifndef UbeResult_%s_DEFINED\n#define UbeResult_%s_DEFINED", m, m))
 		g.emit(fmt.Sprintf("typedef struct { bool ok; union { %s val; %s err; }; } UbeResult_%s;", parts[0], parts[1], m))
+		g.emit("#endif")
 	}
 	for m, ct := range g.pools {
 		g.emit(fmt.Sprintf("DEFINE_UBE_POOL(%s, %s)", ct, m))
@@ -409,6 +420,7 @@ func (g *Generator) Generate() string {
 	for m, ct := range g.slices {
 		g.emit(fmt.Sprintf("static inline UbeSlice_%s ube_slice_%s_new() { UbeSlice_%s s = {0}; return s; }", m, m, m))
 		g.emit(fmt.Sprintf("static inline void ube_slice_%s_push(UbeSlice_%s* s, %s val) { if (s->len == s->cap) { if (s->cap > SIZE_MAX / 2) ube_panic_capacity((int64_t)s->cap); size_t cap = s->cap ? s->cap * 2 : 4; if (cap > SIZE_MAX / sizeof(%s)) ube_panic_capacity((int64_t)cap); %s* data = (%s*)ube_bump_alloc(cap * sizeof(%s)); if (s->len) memcpy(data, s->data, s->len * sizeof(%s)); s->data = data; s->cap = cap; } s->data[s->len++] = val; }", m, m, ct, ct, ct, ct, ct, ct))
+		g.emit(fmt.Sprintf("static inline UbeOption_%s ube_slice_%s_pop(UbeSlice_%s* s) { UbeOption_%s opt = { .has_val = false }; if (s->len) { opt.has_val = true; opt.val = s->data[--s->len]; } return opt; }", m, m, m, m))
 	}
 
 	g.emit("")
@@ -455,7 +467,7 @@ func (g *Generator) genDecl(decl Decl) {
 		if d.Name == "main" {
 			g.emit("int main(int argc, char** argv) {")
 			g.indent++
-			g.emit("(void)argc; (void)argv;")
+			g.emit("ube_init_args(argc, argv);")
 			g.emit("ube_init();")
 			g.emit("UbeWatermark __watermark = ube_scope_save();")
 			g.scopeMarks = []string{"__watermark"}
@@ -889,6 +901,13 @@ func (g *Generator) genExpr(expr Expr) string {
 		if e.Op == "+" && e.Type != nil && e.Type.String() == "string" {
 			return fmt.Sprintf("ube_str_concat(%s, %s)", g.genExpr(e.Left), g.genExpr(e.Right))
 		}
+		if (e.Op == "==" || e.Op == "!=") && e.OperandType != nil && e.OperandType.String() == "string" {
+			equality := fmt.Sprintf("ube_str_eq(%s, %s)", g.genExpr(e.Left), g.genExpr(e.Right))
+			if e.Op == "!=" {
+				return "((bool)!" + equality + ")"
+			}
+			return equality
+		}
 		if e.Op == "&&" || e.Op == "||" || e.Op == "==" || e.Op == "!=" || e.Op == "<" || e.Op == "<=" || e.Op == ">" || e.Op == ">=" {
 			return fmt.Sprintf("((bool)(%s %s %s))", g.genExpr(e.Left), e.Op, g.genExpr(e.Right))
 		}
@@ -898,8 +917,26 @@ func (g *Generator) genExpr(expr Expr) string {
 		return fmt.Sprintf("%s(%s)", e.Op, g.genExpr(e.Operand))
 
 	case *CallExpr:
+		if mem, ok := e.Callee.(*MemberExpr); ok && mem.Member == "recv" && e.PoolElem != nil {
+			tmp := g.newTmp()
+			ct := g.toCType(e.PoolElem)
+			return fmt.Sprintf("({ %s %s = {0}; (void)ube_raw_chan_recv(%s, &%s); %s; })", ct, tmp, g.genExpr(mem.Target), tmp, tmp)
+		}
 		if id, ok := e.Callee.(*IdentExpr); ok && (id.Name == "println" || id.Name == "println_str") && len(e.Args) == 1 {
 			return fmt.Sprintf("UBE_PRINTLN(%s)", g.genExpr(e.Args[0]))
+		}
+		if id, ok := e.Callee.(*IdentExpr); ok && id.Name == "print" && len(e.Args) == 1 {
+			return fmt.Sprintf("UBE_PRINT(%s)", g.genExpr(e.Args[0]))
+		}
+		if id, ok := e.Callee.(*IdentExpr); ok {
+			builtins := map[string]string{"time_now_ms": "ube_time_now_ms", "sleep_ms": "ube_sleep_ms", "yield": "ube_yield", "exit_process": "ube_exit_process", "int_to_str": "ube_int_to_str", "str_to_int": "ube_str_to_int", "read_file": "ube_read_file", "write_file": "ube_write_file", "os_args": "ube_os_args", "str_contains": "ube_str_contains", "str_starts_with": "ube_str_starts_with", "str_ends_with": "ube_str_ends_with"}
+			if fn, ok := builtins[id.Name]; ok {
+				args := make([]string, len(e.Args))
+				for i, arg := range e.Args {
+					args[i] = g.genExpr(arg)
+				}
+				return fmt.Sprintf("%s(%s)", fn, strings.Join(args, ", "))
+			}
 		}
 		if mem, ok := e.Callee.(*MemberExpr); ok {
 			if enum, ok := mem.Target.(*IdentExpr); ok {
@@ -933,6 +970,18 @@ func (g *Generator) genExpr(expr Expr) string {
 					sliceType,
 					g.genExpr(mem.Target),
 					g.genExpr(e.Args[0]))
+			}
+			if mem.Member == "pop" {
+				sliceType := strings.ReplaceAll(g.genExpr(mem.Target), "*", "ptr_")
+				if id, ok := mem.Target.(*IdentExpr); ok {
+					if known, found := g.sliceVars[id.Name]; found {
+						sliceType = known
+					}
+				}
+				if sl, ok := mem.TargetType.(SliceType); ok {
+					g.toCType(OptionalType{Inner: sl.Elem})
+				}
+				return fmt.Sprintf("ube_slice_%s_pop(&%s)", sliceType, g.genExpr(mem.Target))
 			}
 			if mem.Member == "send" {
 				return fmt.Sprintf("{ __auto_type __val = %s; ube_raw_chan_send(%s, &__val); }", g.genExpr(e.Args[0]), g.genExpr(mem.Target))
@@ -985,6 +1034,33 @@ func (g *Generator) genExpr(expr Expr) string {
 		}
 		if e.Member == "ptr" {
 			return fmt.Sprintf("(uint8_t*)((%s).data)", g.genExpr(e.Target))
+		}
+		if e.Member == "len" {
+			if arr, ok := e.TargetType.(ArrayType); ok {
+				return fmt.Sprintf("((int32_t)%d)", arr.Size)
+			}
+			return fmt.Sprintf("((int32_t)(%s).len)", g.genExpr(e.Target))
+		}
+		if e.Member == "cap" {
+			if arr, ok := e.TargetType.(ArrayType); ok {
+				return fmt.Sprintf("((int32_t)%d)", arr.Size)
+			}
+			return fmt.Sprintf("((int32_t)(%s).cap)", g.genExpr(e.Target))
+		}
+		if e.Member == "len" {
+			if arr, ok := e.TargetType.(ArrayType); ok {
+				return fmt.Sprintf("((int32_t)%d)", arr.Size)
+			}
+			if _, ok := e.TargetType.(StringType); ok {
+				return fmt.Sprintf("((int32_t)(%s).len)", g.genExpr(e.Target))
+			}
+			return fmt.Sprintf("((int32_t)(%s).len)", g.genExpr(e.Target))
+		}
+		if e.Member == "cap" {
+			if arr, ok := e.TargetType.(ArrayType); ok {
+				return fmt.Sprintf("((int32_t)%d)", arr.Size)
+			}
+			return fmt.Sprintf("((int32_t)(%s).cap)", g.genExpr(e.Target))
 		}
 		return fmt.Sprintf("(%s).%s", g.genExpr(e.Target), e.Member)
 

@@ -13,7 +13,7 @@ import (
 	ubert "github.com/JohnEsleyer/ube/runtime"
 )
 
-const version = "0.8.0"
+const version = "0.9.0"
 
 const (
 	colorReset  = "\x1b[0m"
@@ -148,7 +148,7 @@ func check(args []string) error {
 }
 
 func build(args []string) error {
-	file, output, emitC, forbidUnsafe, err := parseBuildArgs(args)
+	file, output, emitC, forbidUnsafe, freestanding, wasm, err := parseBuildArgs(args)
 	if err != nil {
 		return err
 	}
@@ -169,7 +169,10 @@ func build(args []string) error {
 	} else {
 		defer os.Remove(cPath)
 	}
-	if err = compileNative(ast, cPath, output, true); err != nil {
+	if wasm && !strings.HasSuffix(output, ".html") {
+		output += ".html"
+	}
+	if err = compileNative(ast, cPath, output, true, freestanding, wasm); err != nil {
 		return err
 	}
 	fmt.Printf("%s %s (%s)\n", paint("✓ Built", colorGreen), output, paint(time.Since(start).Round(time.Millisecond).String(), colorDim))
@@ -190,7 +193,7 @@ func run(args []string) error {
 	cPath := binary + ".c"
 	defer os.Remove(cPath)
 	defer os.Remove(binary)
-	if err = compileNative(ast, cPath, binary, false); err != nil {
+	if err = compileNative(ast, cPath, binary, false, false, false); err != nil {
 		return err
 	}
 	fmt.Printf("%s %s (%s)\n", paint("✓ Compiled", colorPurple), filepath.Base(args[0]), paint(time.Since(start).Round(time.Millisecond).String(), colorDim))
@@ -206,16 +209,16 @@ func run(args []string) error {
 	return nil
 }
 
-func parseBuildArgs(args []string) (string, string, bool, bool, error) {
+func parseBuildArgs(args []string) (string, string, bool, bool, bool, bool, error) {
 	if len(args) == 0 {
-		return "", "", false, false, fmt.Errorf("usage: ube build <file.ube> [-o binary] [--emit-c] [--forbid-unsafe]")
+		return "", "", false, false, false, false, fmt.Errorf("usage: ube build <file.ube> [-o binary] [--emit-c] [--forbid-unsafe] [--freestanding] [--wasm]")
 	}
-	file, output, emitC, forbidUnsafe := "", "", false, false
+	file, output, emitC, forbidUnsafe, freestanding, wasm := "", "", false, false, false, false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-o":
 			if i+1 >= len(args) {
-				return "", "", false, false, fmt.Errorf("-o requires an output path")
+				return "", "", false, false, false, false, fmt.Errorf("-o requires an output path")
 			}
 			output = args[i+1]
 			i++
@@ -223,29 +226,47 @@ func parseBuildArgs(args []string) (string, string, bool, bool, error) {
 			emitC = true
 		case "--forbid-unsafe":
 			forbidUnsafe = true
+		case "--freestanding":
+			freestanding = true
+		case "--wasm":
+			wasm = true
 		default:
 			if strings.HasPrefix(args[i], "-") {
-				return "", "", false, false, fmt.Errorf("unknown build option %s", args[i])
+				return "", "", false, false, false, false, fmt.Errorf("unknown build option %s", args[i])
 			}
 			if file != "" {
-				return "", "", false, false, fmt.Errorf("multiple source files are not supported")
+				return "", "", false, false, false, false, fmt.Errorf("multiple source files are not supported")
 			}
 			file = args[i]
 		}
 	}
 	if file == "" {
-		return "", "", false, false, fmt.Errorf("specify a .ube source file")
+		return "", "", false, false, false, false, fmt.Errorf("specify a .ube source file")
 	}
-	return file, output, emitC, forbidUnsafe, nil
+	if freestanding && wasm {
+		return "", "", false, false, false, false, fmt.Errorf("choose either --freestanding or --wasm")
+	}
+	return file, output, emitC, forbidUnsafe, freestanding, wasm, nil
 }
 
-func compileNative(ast *compiler.Program, cPath, output string, optimize bool) error {
+func compileNative(ast *compiler.Program, cPath, output string, optimize bool, freestanding bool, wasm bool) error {
 	if err := os.WriteFile(cPath, []byte(compiler.NewGenerator(ast).Generate()), 0644); err != nil {
 		return err
 	}
 	runtimeDir, err := ubert.EnsureRuntime()
 	if err != nil {
 		return fmt.Errorf("initialize runtime header: %w", err)
+	}
+	if wasm {
+		cc, e := exec.LookPath("emcc")
+		if e != nil {
+			return fmt.Errorf("emcc (Emscripten) is required for --wasm")
+		}
+		args := []string{"-O2", "-DUBE_FREESTANDING", "-I" + runtimeDir, cPath, "-o", output, "-sWASM=1"}
+		if out, e := exec.Command(cc, args...).CombinedOutput(); e != nil {
+			return fmt.Errorf("wasm compilation failed:\n%s", strings.TrimSpace(string(out)))
+		}
+		return nil
 	}
 	cc := ""
 	for _, candidate := range []string{"cc", "gcc", "clang"} {
@@ -257,7 +278,12 @@ func compileNative(ast *compiler.Program, cPath, output string, optimize bool) e
 	if cc == "" {
 		return fmt.Errorf("no C compiler found (install GCC or Clang)")
 	}
-	args := []string{"-std=gnu11", "-pthread", "-I" + runtimeDir, cPath, "-o", output, "-lm"}
+	args := []string{"-std=gnu11", "-I" + runtimeDir, cPath, "-o", output, "-lm"}
+	if freestanding {
+		args = append(args, "-DUBE_FREESTANDING")
+	} else {
+		args = append(args, "-pthread")
+	}
 	if optimize {
 		args = append(args, "-O2")
 	}
@@ -333,5 +359,5 @@ func newProject(args []string) error {
 }
 
 func help() {
-	fmt.Printf("🍠 Ube %s\n\nUsage: ube <command> [options]\n       ube <file.ube>\n\nCommands:\n  new <name>                Create a starter project\n  check <file.ube>          Check syntax and types\n  build <file.ube> [-o bin] Build a native executable\n  run <file.ube> [args...]  Compile and run a program\n  lsp                       Start the language server\n  version                   Show the version\n  help                      Show this help\n\nCheck options:\n  --strict                  Reject C FFI and unsafe blocks\n  --format=json             Emit a machine-readable audit report\n\nBuild options:\n  -o <path>                 Set executable output path\n  --emit-c                  Keep generated C beside the output\n  --forbid-unsafe           Reject C FFI and unsafe blocks\n", version)
+	fmt.Printf("🍠 Ube %s\n\nUsage: ube <command> [options]\n       ube <file.ube>\n\nCommands:\n  new <name>                Create a starter project\n  check <file.ube>          Check syntax and types\n  build <file.ube> [-o bin] Build a native executable\n  run <file.ube> [args...]  Compile and run a program\n  lsp                       Start the language server\n  version                   Show the version\n  help                      Show this help\n\nCheck options:\n  --strict                  Reject C FFI and unsafe blocks\n  --format=json             Emit a machine-readable audit report\n\nBuild options:\n  -o <path>                 Set executable output path\n  --emit-c                  Keep generated C beside the output\n  --forbid-unsafe           Reject C FFI and unsafe blocks\n  --freestanding            Build without pthread runtime support\n  --wasm                    Build HTML/WebAssembly with Emscripten\n", version)
 }

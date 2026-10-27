@@ -8,9 +8,13 @@
 #include <stdbool.h>
 #include <string.h>
 #include <math.h>
-#include <pthread.h>
 #include <errno.h>
 #include <time.h>
+#ifndef UBE_FREESTANDING
+#include <pthread.h>
+#include <unistd.h>
+#include <sched.h>
+#endif
 
 #define UBE_SCOPE_CHUNK_SIZE (64 * 1024)
 
@@ -37,10 +41,14 @@ typedef struct {
 
 static inline void ube_panic_capacity(int64_t capacity);
 
+#ifndef UBE_FREESTANDING
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 static _Thread_local UbeScopeArena current_scope;
 #elif defined(__GNUC__) || defined(__clang__)
 static __thread UbeScopeArena current_scope;
+#else
+static UbeScopeArena current_scope;
+#endif
 #else
 static UbeScopeArena current_scope;
 #endif
@@ -173,6 +181,96 @@ static inline uint8_t ube_str_index(string s, int32_t index) {
         exit(101);
     }
     return (uint8_t)s.data[index];
+}
+
+static inline bool ube_str_eq(string a, string b) {
+    return a.len == b.len && (a.len == 0 || memcmp(a.data, b.data, a.len) == 0);
+}
+static inline bool ube_str_contains(string s, string sub) {
+    if (sub.len == 0) return true;
+    if (s.len < sub.len) return false;
+    for (size_t i = 0; i <= s.len - sub.len; i++) if (memcmp(s.data + i, sub.data, sub.len) == 0) return true;
+    return false;
+}
+static inline bool ube_str_starts_with(string s, string prefix) {
+    return s.len >= prefix.len && (prefix.len == 0 || memcmp(s.data, prefix.data, prefix.len) == 0);
+}
+static inline bool ube_str_ends_with(string s, string suffix) {
+    return s.len >= suffix.len && (suffix.len == 0 || memcmp(s.data + s.len - suffix.len, suffix.data, suffix.len) == 0);
+}
+
+#ifndef UbeResult_string_string_DEFINED
+#define UbeResult_string_string_DEFINED
+typedef struct { bool ok; union { string val; string err; }; } UbeResult_string_string;
+#endif
+#ifndef UbeResult_bool_string_DEFINED
+#define UbeResult_bool_string_DEFINED
+typedef struct { bool ok; union { bool val; string err; }; } UbeResult_bool_string;
+#endif
+#ifndef UbeResult_i64_string_DEFINED
+#define UbeResult_i64_string_DEFINED
+typedef struct { bool ok; union { int64_t val; string err; }; } UbeResult_i64_string;
+#endif
+#ifndef UbeSlice_string_DEFINED
+#define UbeSlice_string_DEFINED
+typedef struct { string* data; size_t len; size_t cap; } UbeSlice_string;
+#endif
+
+static inline string ube_int_to_str(int64_t val) {
+    char buf[32]; int n = snprintf(buf, sizeof(buf), "%lld", (long long)val);
+    if (n < 0) n = 0;
+    char* mem = (char*)ube_bump_alloc((size_t)n + 1); memcpy(mem, buf, (size_t)n); mem[n] = '\0';
+    return (string){mem, (size_t)n};
+}
+static inline UbeResult_i64_string ube_str_to_int(string s) {
+    UbeResult_i64_string r; char buf[64];
+    if (!s.len || s.len >= sizeof(buf)) { r.ok = false; r.err = ube_str_lit("invalid integer format"); return r; }
+    memcpy(buf, s.data, s.len); buf[s.len] = '\0'; char* end = NULL; errno = 0;
+    long long v = strtoll(buf, &end, 10);
+    if (errno || end == buf || *end) { r.ok = false; r.err = ube_str_lit("invalid integer format"); return r; }
+    r.ok = true; r.val = (int64_t)v; return r;
+}
+static inline UbeResult_string_string ube_read_file(string path) {
+    UbeResult_string_string r; char name[1024];
+    if (path.len >= sizeof(name)) { r.ok = false; r.err = ube_str_lit("path too long"); return r; }
+    memcpy(name, path.data, path.len); name[path.len] = '\0'; FILE* f = fopen(name, "rb");
+    if (!f) { r.ok = false; r.err = ube_str_lit("cannot open file"); return r; }
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); r.ok = false; r.err = ube_str_lit("cannot seek file"); return r; }
+    long size = ftell(f); if (size < 0 || fseek(f, 0, SEEK_SET) != 0) { fclose(f); r.ok = false; r.err = ube_str_lit("cannot read file"); return r; }
+    char* data = (char*)ube_bump_alloc((size_t)size + 1); size_t got = fread(data, 1, (size_t)size, f); fclose(f); data[got] = '\0';
+    r.ok = true; r.val = (string){data, got}; return r;
+}
+static inline UbeResult_bool_string ube_write_file(string path, string content) {
+    UbeResult_bool_string r; char name[1024];
+    if (path.len >= sizeof(name)) { r.ok = false; r.err = ube_str_lit("path too long"); return r; }
+    memcpy(name, path.data, path.len); name[path.len] = '\0'; FILE* f = fopen(name, "wb");
+    if (!f) { r.ok = false; r.err = ube_str_lit("cannot open file for writing"); return r; }
+    size_t n = fwrite(content.data, 1, content.len, f); int close_status = fclose(f); bool ok = n == content.len && close_status == 0;
+    r.ok = ok; if (ok) r.val = true; else r.err = ube_str_lit("cannot write file"); return r;
+}
+static inline int64_t ube_time_now_ms(void) {
+#ifndef UBE_FREESTANDING
+    struct timespec ts; timespec_get(&ts, TIME_UTC); return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+#else
+    return 0;
+#endif
+}
+static inline void ube_sleep_ms(int32_t ms) {
+#ifndef UBE_FREESTANDING
+    if (ms > 0) { struct timespec req = {ms / 1000, (long)(ms % 1000) * 1000000L}; nanosleep(&req, NULL); }
+#else
+    (void)ms;
+#endif
+}
+static inline void ube_exit_process(int32_t code) { exit(code); }
+static int ube_global_argc = 0;
+static char** ube_global_argv = NULL;
+static inline void ube_init_args(int argc, char** argv) { ube_global_argc = argc; ube_global_argv = argv; }
+static inline UbeSlice_string ube_os_args(void) {
+    UbeSlice_string s; s.len = s.cap = (size_t)ube_global_argc;
+    s.data = s.len ? (string*)ube_bump_alloc(s.len * sizeof(string)) : NULL;
+    for (size_t i = 0; i < s.len; i++) s.data[i] = ube_str_lit(ube_global_argv[i]);
+    return s;
 }
 
 static inline void ube_panic_bounds(int64_t index, size_t len, const char* file, int line) {
@@ -434,40 +532,52 @@ static inline void ube_raw_chan_close(UbeRawChan* ch) {
     pthread_mutex_unlock(&ch->lock);
 }
 
-// --- 5. Spawned Vine Trampoline ---
+// --- 5. Bounded worker scheduler for spawned Vine tasks ---
+#ifndef UBE_FREESTANDING
+typedef struct UbeFiberTask { void* (*fn)(void*); void* arg; struct UbeFiberTask* next; } UbeFiberTask;
 typedef struct {
-    void* (*fn)(void*);
-    void* arg;
-} UbeSpawnArgs;
-
-static void* ube_spawn_trampoline(void* raw) {
-    UbeSpawnArgs* a = (UbeSpawnArgs*)raw;
-    ube_init();
-    UbeWatermark watermark = ube_scope_save();
-    a->fn(a->arg);
-    ube_scope_restore(watermark);
-    ube_scope_destroy();
-    free(a);
+    pthread_mutex_t lock; pthread_cond_t cond; UbeFiberTask* head; UbeFiberTask* tail;
+    size_t count; size_t worker_count; pthread_t* workers; bool initialized;
+} UbeFiberScheduler;
+static UbeFiberScheduler ube_global_scheduler;
+static void* ube_fiber_worker_loop(void* unused) {
+    (void)unused; ube_init();
+    for (;;) {
+        pthread_mutex_lock(&ube_global_scheduler.lock);
+        while (!ube_global_scheduler.head) pthread_cond_wait(&ube_global_scheduler.cond, &ube_global_scheduler.lock);
+        UbeFiberTask* task = ube_global_scheduler.head; ube_global_scheduler.head = task->next;
+        if (!ube_global_scheduler.head) ube_global_scheduler.tail = NULL;
+        ube_global_scheduler.count--; pthread_mutex_unlock(&ube_global_scheduler.lock);
+        UbeWatermark mark = ube_scope_save(); task->fn(task->arg); ube_scope_restore(mark); free(task);
+    }
     return NULL;
 }
-
-static inline void ube_spawn(void* (*fn)(void*), void* arg) {
-    pthread_t th;
-    UbeSpawnArgs* a = (UbeSpawnArgs*)malloc(sizeof(UbeSpawnArgs));
-    if (!a) {
-        fprintf(stderr, "[Ube Panic]: Out of memory starting Vine\n");
-        exit(101);
+static inline void ube_fiber_scheduler_init(void) {
+    if (ube_global_scheduler.initialized) return;
+    pthread_mutex_init(&ube_global_scheduler.lock, NULL); pthread_cond_init(&ube_global_scheduler.cond, NULL);
+    ube_global_scheduler.head = ube_global_scheduler.tail = NULL; ube_global_scheduler.count = 0;
+    ube_global_scheduler.worker_count = 4; ube_global_scheduler.workers = (pthread_t*)malloc(4 * sizeof(pthread_t));
+    if (!ube_global_scheduler.workers) { fprintf(stderr, "[Ube Panic]: scheduler allocation failed\n"); exit(101); }
+    ube_global_scheduler.initialized = true;
+    for (size_t i = 0; i < ube_global_scheduler.worker_count; i++) {
+        if (pthread_create(&ube_global_scheduler.workers[i], NULL, ube_fiber_worker_loop, NULL) != 0) { fprintf(stderr, "[Ube Panic]: worker startup failed\n"); exit(101); }
+        pthread_detach(ube_global_scheduler.workers[i]);
     }
-    a->fn = fn;
-    a->arg = arg;
-    int status = pthread_create(&th, NULL, ube_spawn_trampoline, a);
-    if (status != 0) {
-        free(a);
-        fprintf(stderr, "[Ube Panic]: Could not start Vine (error %d)\n", status);
-        exit(101);
-    }
-    pthread_detach(th);
 }
+static inline void ube_spawn(void* (*fn)(void*), void* arg) {
+    ube_fiber_scheduler_init(); UbeFiberTask* task = (UbeFiberTask*)malloc(sizeof(*task));
+    if (!task) { fprintf(stderr, "[Ube Panic]: task allocation failed\n"); exit(101); }
+    task->fn = fn; task->arg = arg; task->next = NULL;
+    pthread_mutex_lock(&ube_global_scheduler.lock);
+    if (ube_global_scheduler.tail) ube_global_scheduler.tail->next = task; else ube_global_scheduler.head = task;
+    ube_global_scheduler.tail = task; ube_global_scheduler.count++; pthread_cond_signal(&ube_global_scheduler.cond);
+    pthread_mutex_unlock(&ube_global_scheduler.lock);
+}
+static inline void ube_yield(void) { sched_yield(); }
+#else
+static inline void ube_spawn(void* (*fn)(void*), void* arg) { fn(arg); }
+static inline void ube_yield(void) {}
+#endif
 
 // --- 6. Helper I/O ---
 static inline void println_str(const char* s) { printf("%s\n", s); }
@@ -481,6 +591,15 @@ static inline void ube_print_f32(float v) { printf("%g\n", (double)v); }
 static inline void ube_print_f64(double v) { printf("%g\n", v); }
 static inline void ube_print_bool(bool v) { puts(v ? "true" : "false"); }
 static inline void ube_print_ptr(const void* p) { printf("%p\n", p); }
+static inline void ube_print_raw_string(string s) { printf("%.*s", (int)s.len, s.data); }
+static inline void ube_print_raw_int(int32_t v) { printf("%d", v); }
+static inline void ube_print_raw_u32(uint32_t v) { printf("%u", v); }
+static inline void ube_print_raw_u8(uint8_t v) { printf("%u", (unsigned)v); }
+static inline void ube_print_raw_i64(int64_t v) { printf("%lld", (long long)v); }
+static inline void ube_print_raw_u64(uint64_t v) { printf("%llu", (unsigned long long)v); }
+static inline void ube_print_raw_f32(float v) { printf("%g", (double)v); }
+static inline void ube_print_raw_f64(double v) { printf("%g", v); }
+static inline void ube_print_raw_bool(bool v) { fputs(v ? "true" : "false", stdout); }
 #define UBE_PRINTLN(X) _Generic((X), \
     string: ube_print_string, \
     bool: ube_print_bool, \
@@ -489,5 +608,10 @@ static inline void ube_print_ptr(const void* p) { printf("%p\n", p); }
     float: ube_print_f32, double: ube_print_f64, \
     default: ube_print_ptr \
 )(X)
+
+#define UBE_PRINT(X) _Generic((X), string: ube_print_raw_string, bool: ube_print_raw_bool, \
+    int32_t: ube_print_raw_int, uint32_t: ube_print_raw_u32, uint8_t: ube_print_raw_u8, \
+    int64_t: ube_print_raw_i64, uint64_t: ube_print_raw_u64, float: ube_print_raw_f32, \
+    double: ube_print_raw_f64, default: ube_print_ptr)(X)
 
 #endif // UBE_RUNTIME_H

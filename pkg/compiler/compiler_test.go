@@ -472,3 +472,70 @@ func TestParserMultiErrorRecovery(t *testing.T) {
 		t.Fatalf("expected at least 2 collected syntax errors, got: %v", parseErr)
 	}
 }
+
+func TestStringEqualityAndMethods(t *testing.T) {
+	src := `fn main() {
+		let a = "ube"
+		let b = "ube"
+		let c = "sweet"
+		println(a == b)
+		println(a != c)
+		println(str_contains("systems language", "lang"))
+		println(str_starts_with("compiler", "comp"))
+		println(str_ends_with("main.ube", ".ube"))
+	}`
+	if got, want := runSourceNative(t, src), "true\ntrue\ntrue\ntrue\ntrue"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestSliceAndStringLenCapPop(t *testing.T) {
+	src := `fn main() {
+		let s = "hello"
+		println(s.len)
+		let mut list = []i32{}
+		list.push(10)
+		list.push(20)
+		println(list.len)
+		if let popped = list.pop() { println(popped) }
+		println(list.len)
+		let arr = [3]i32{1, 2, 3}
+		println(arr.len)
+	}`
+	if got, want := runSourceNative(t, src), "5\n2\n20\n1\n3"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestStandardBuiltins(t *testing.T) {
+	src := `fn main() {
+		let now = time_now_ms()
+		println(now > 0)
+		let s = int_to_str(12345)
+		println(s)
+		let parsed = str_to_int("6789") or_else 0
+		println(parsed)
+		print("sweet ")
+		print("grounded\n")
+	}`
+	if got, want := runSourceNative(t, src), "true\n12345\n6789\nsweet grounded"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestFiberSchedulerConcurrency(t *testing.T) {
+	src := `fn task(ch: Chan[i32], id: i32) { yield() ch.send(id * 10) }
+	fn main() {
+		let ch = Chan[i32].new(4)
+		spawn task(ch, 1)
+		spawn task(ch, 2)
+		spawn task(ch, 3)
+		let mut sum = 0
+		let mut i = 0
+		while i < 3 { sum = sum + ch.recv() i = i + 1 }
+		println(sum)
+	}`
+	if got, want := runSourceNative(t, src), "60"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}

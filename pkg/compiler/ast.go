@@ -32,6 +32,7 @@ type BinaryExpr struct {
 	Left, Right Expr
 	Op          string
 	Type        UbeType
+	OperandType UbeType
 }
 
 func (e *BinaryExpr) Loc() SourceLocation { return e.At }
@@ -59,9 +60,10 @@ func (e *CallExpr) Loc() SourceLocation { return e.At }
 func (e *CallExpr) exprNode()           {}
 
 type MemberExpr struct {
-	At     SourceLocation
-	Target Expr
-	Member string
+	At         SourceLocation
+	Target     Expr
+	Member     string
+	TargetType UbeType
 }
 
 func (e *MemberExpr) Loc() SourceLocation { return e.At }

@@ -8,7 +8,7 @@
 **The sweet, grounded systems language.**
 *Easy to program like Go. Fast like C. Zero Garbage Collection.*
 
-**Latest version: `0.8.0`**
+**Latest version: `0.9.0`**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.20+-00ADD8?logo=go)](https://golang.org)
@@ -206,7 +206,7 @@ fn main() {
 
 ### 3. Concurrency via Vines & Flat Channels
 
-Vines are lightweight tasks running on detached OS threads with dedicated private arenas. Channels accept flat values, which avoids sending Ube-managed pointers across threads. A `select` with no `default` case blocks on channel notifications instead of polling. This does not prevent races through external shared state or unsafe C code.
+Vines are lightweight tasks queued onto a bounded pool of OS worker threads. Each worker keeps a private arena that is reset between tasks. Channels accept flat values, which avoids sending Ube-managed pointers across threads. A `select` with no `default` case blocks on channel notifications instead of polling. This does not prevent races through external shared state or unsafe C code.
 
 ```ube
 struct WorkOrder {
@@ -383,11 +383,11 @@ The VS Code extension is located under [`editors/vscode`](editors/vscode), provi
 | :--- | :--- | :--- |
 | **Go Compiler Frontend** | Shipped | Full lexer, parser, static typechecker, and GNU11 C generator |
 | **Scoped Arena Runtime** | Shipped | Watermark resets, contiguous geometric slice expansion |
-| **Vines & Channels** | Shipped | Detached threads with flat-type validation |
+| **Vines & Channels** | Shipped | Queued spawned tasks on a bounded worker pool with flat-type validation |
 | **Generational Pools** | Shipped | Generation-checked handles for non-lexical lifetimes |
-| **LSP Server** | Shipped | Native JSON-RPC server with diagnostics and hover documentation |
-| **M:N Fiber Scheduler** | In Progress | Cooperative M:N fibers over native OS threads |
-| **Embedded & WebAssembly** | Planned | Freestanding bare-metal profiles and WASM compilation targets |
+| **LSP Server** | Shipped | Native JSON-RPC server with hover, completion, definitions, and document symbols |
+| **M:N Fiber Scheduler** | Shipped | Queued Vine tasks multiplexed over native OS worker threads with `yield()` |
+| **Embedded & WebAssembly** | Shipped | Freestanding profiles (`--freestanding`) and Emscripten compilation (`--wasm`) |
 
 ---
 

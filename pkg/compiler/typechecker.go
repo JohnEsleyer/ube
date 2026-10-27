@@ -179,11 +179,26 @@ func (tc *Typechecker) exprDepth(expr Expr, env *TypeEnvironment) int {
 
 func NewTypechecker() *Typechecker {
 	tc := &Typechecker{Global: NewTypeEnvironment(nil), Externs: make(map[string]bool)}
-	tc.Global.Funcs["println"] = FuncSignature{RetType: PrimitiveType{Name: "void"}}
-	tc.Global.Funcs["println_str"] = FuncSignature{
-		Params:  []FieldDecl{{Name: "s", Type: StringType{}}},
-		RetType: PrimitiveType{Name: "void"},
-	}
+	void := PrimitiveType{Name: "void"}
+	i32 := PrimitiveType{Name: "i32"}
+	i64 := PrimitiveType{Name: "i64"}
+	boolType := PrimitiveType{Name: "bool"}
+	str := StringType{}
+	tc.Global.Funcs["println"] = FuncSignature{RetType: void}
+	tc.Global.Funcs["println_str"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}}, RetType: void}
+	tc.Global.Funcs["print"] = FuncSignature{RetType: void}
+	tc.Global.Funcs["time_now_ms"] = FuncSignature{RetType: i64}
+	tc.Global.Funcs["sleep_ms"] = FuncSignature{Params: []FieldDecl{{Name: "ms", Type: i32}}, RetType: void}
+	tc.Global.Funcs["yield"] = FuncSignature{RetType: void}
+	tc.Global.Funcs["exit_process"] = FuncSignature{Params: []FieldDecl{{Name: "code", Type: i32}}, RetType: void}
+	tc.Global.Funcs["int_to_str"] = FuncSignature{Params: []FieldDecl{{Name: "val", Type: nil}}, RetType: str}
+	tc.Global.Funcs["str_to_int"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}}, RetType: ResultType{Ok: i64, Err: str}}
+	tc.Global.Funcs["read_file"] = FuncSignature{Params: []FieldDecl{{Name: "path", Type: str}}, RetType: ResultType{Ok: str, Err: str}}
+	tc.Global.Funcs["write_file"] = FuncSignature{Params: []FieldDecl{{Name: "path", Type: str}, {Name: "content", Type: str}}, RetType: ResultType{Ok: boolType, Err: str}}
+	tc.Global.Funcs["os_args"] = FuncSignature{RetType: SliceType{Elem: str}}
+	tc.Global.Funcs["str_contains"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}, {Name: "substr", Type: str}}, RetType: boolType}
+	tc.Global.Funcs["str_starts_with"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}, {Name: "prefix", Type: str}}, RetType: boolType}
+	tc.Global.Funcs["str_ends_with"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}, {Name: "suffix", Type: str}}, RetType: boolType}
 	return tc
 }
 
@@ -555,6 +570,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		if err != nil {
 			return nil, err
 		}
+		e.OperandType = lT
 		switch e.Op {
 		case "&&", "||":
 			if err := tc.assertCompat(PrimitiveType{Name: "bool"}, lT, e.At); err != nil {
@@ -566,6 +582,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			e.Type = PrimitiveType{Name: "bool"}
 			return e.Type, nil
 		case "==", "!=", "<", "<=", ">", ">=":
+			e.OperandType = lT
 			e.Type = PrimitiveType{Name: "bool"}
 			return e.Type, tc.assertCompat(lT, rT, e.At)
 		case "+":
@@ -607,18 +624,28 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		if id, ok := e.Callee.(*IdentExpr); ok && tc.Externs[id.Name] && env.UnsafeDepth == 0 {
 			return nil, fmt.Errorf("[%s] Safety Error: foreign function '%s' can only be called inside unsafe { ... }", e.At, id.Name)
 		}
-		if id, ok := e.Callee.(*IdentExpr); ok && id.Name == "println" {
+		if id, ok := e.Callee.(*IdentExpr); ok && (id.Name == "println" || id.Name == "print") {
 			if len(e.Args) != 1 {
-				return nil, fmt.Errorf("[%s] println expects one argument", e.At)
+				return nil, fmt.Errorf("[%s] %s expects one argument", e.At, id.Name)
 			}
 			argT, err := tc.inferExpr(e.Args[0], env)
 			if err != nil {
 				return nil, err
 			}
 			if !printableType(argT) {
-				return nil, fmt.Errorf("[%s] println does not support type '%s'", e.At, argT)
+				return nil, fmt.Errorf("[%s] %s does not support type '%s'", e.At, id.Name, argT)
 			}
 			return PrimitiveType{Name: "void"}, err
+		}
+		if id, ok := e.Callee.(*IdentExpr); ok && id.Name == "int_to_str" && len(e.Args) == 1 {
+			argType, err := tc.inferExpr(e.Args[0], env)
+			if err != nil {
+				return nil, err
+			}
+			if !integerType(argType) {
+				return nil, fmt.Errorf("[%s] int_to_str expects an integer, got '%s'", e.At, argType)
+			}
+			return StringType{}, nil
 		}
 		if mem, ok := e.Callee.(*MemberExpr); ok {
 			if id, ok := mem.Target.(*IdentExpr); ok {
@@ -647,6 +674,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			if err != nil {
 				return nil, err
 			}
+			mem.TargetType = tgtT
 			if sl, ok := tgtT.(SliceType); ok && mem.Member == "push" {
 				if len(e.Args) != 1 {
 					return nil, fmt.Errorf("[%s] push expects 1 argument", e.At)
@@ -661,6 +689,12 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					return nil, err
 				}
 				return PrimitiveType{Name: "void"}, tc.assertCompat(sl.Elem, argT, e.At)
+			}
+			if sl, ok := tgtT.(SliceType); ok && mem.Member == "pop" {
+				if len(e.Args) != 0 {
+					return nil, fmt.Errorf("[%s] pop expects 0 arguments", e.At)
+				}
+				return OptionalType{Inner: sl.Elem}, nil
 			}
 			if ch, ok := tgtT.(ChanType); ok {
 				if mem.Member == "new" {
@@ -680,6 +714,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					if len(e.Args) != 0 {
 						return nil, fmt.Errorf("[%s] Chan.recv expects no arguments", e.At)
 					}
+					e.PoolElem = ch.Elem
 					return ch.Elem, nil
 				}
 				if mem.Member == "close" {
@@ -805,6 +840,22 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		tgtT, err := tc.inferExpr(e.Target, env)
 		if err != nil {
 			return nil, err
+		}
+		e.TargetType = tgtT
+		if e.Member == "len" {
+			switch tgtT.(type) {
+			case StringType, SliceType, ArrayType:
+				return PrimitiveType{Name: "i32"}, nil
+			}
+		}
+		if e.Member == "cap" {
+			switch tgtT.(type) {
+			case SliceType, ArrayType:
+				return PrimitiveType{Name: "i32"}, nil
+			}
+		}
+		if e.Member == "len" || e.Member == "cap" {
+			return nil, fmt.Errorf("[%s] '%s' is not available on '%s'", e.At, e.Member, tgtT)
 		}
 		if custom, ok := tgtT.(CustomType); ok {
 			if fields, ok := tc.Global.Structs[custom.Name]; ok {
@@ -938,6 +989,9 @@ func (tc *Typechecker) checkCallArgs(args []Expr, params []FieldDecl, env *TypeE
 		if _, rawPointer := actual.(PointerType); rawPointer && env.UnsafeDepth == 0 {
 			return fmt.Errorf("[%s] Safety Error: passing a raw pointer requires an unsafe block", arg.Loc())
 		}
+		if params[i].Type == nil {
+			continue
+		}
 		if err := tc.assertCompat(params[i].Type, actual, arg.Loc()); err != nil {
 			return err
 		}
@@ -961,6 +1015,9 @@ func (tc *Typechecker) assertCompat(expected, actual UbeType, loc SourceLocation
 		return nil
 	}
 	if expected.String() == actual.String() {
+		return nil
+	}
+	if integerType(expected) && integerType(actual) {
 		return nil
 	}
 	if opt, ok := expected.(OptionalType); ok {
