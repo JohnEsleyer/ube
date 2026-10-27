@@ -4,7 +4,11 @@
   "description": "Syntax highlighting, language configuration, and snippets for the Ube programming language 🍠",
   "version": "0.5.0",
   "publisher": "ube-lang",
-  "icon": "icon.svg",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ube-lang/ube"
+  },
+  "icon": "icon.png",
   "engines": {
     "vscode": "^1.70.0"
   },

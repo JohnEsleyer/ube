@@ -10,7 +10,8 @@ test:
 
 # Build the VS Code .vsix package
 vsix:
-	@cd editors/vscode && npx --yes @vscode/vsce package
+	@command -v vsce >/dev/null 2>&1 || { echo "vsce is required; install it with: npm install --global @vscode/vsce" >&2; exit 1; }
+	@cd editors/vscode && vsce package --no-dependencies
 
 # Install CLI globally to /usr/local/bin
 install:
