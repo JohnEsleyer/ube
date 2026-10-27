@@ -565,22 +565,28 @@ with `-pthread`.
 
 ## 11. Developer Tooling
 
-### 11.1 VS Code Extension (`ube-vscode`)
+### 11.1 VS Code Extension (`editors/vscode`)
 
-The `ube-vscode/` directory contains a complete VS Code extension providing:
+The `editors/vscode/` directory contains a complete VS Code extension providing:
 - **Syntax highlighting** for keywords, types, receiver functions, operators (`?`, `!`, `->`)
 - **Bracket auto-closing** and surrounding pairs
 - **Comment shortcuts** (`Ctrl+/` for line comments, block comment support)
 
 #### Installation
-Copy the extension folder into your VS Code extensions directory and restart VS Code:
 
+**Option A: Package as `.vsix` (Recommended)**
+```bash
+make vsix
+code --install-extension ube-0.4.0.vsix
+```
+
+**Option B: Copy extension directory directly**
 ```bash
 # Linux / macOS
-cp -r ube-vscode ~/.vscode/extensions/ube-vscode
+cp -r editors/vscode ~/.vscode/extensions/ube-vscode
 
 # Windows
-copy ube-vscode %USERPROFILE%\.vscode\extensions\ube-vscode
+copy editors\vscode %USERPROFILE%\.vscode\extensions\ube-vscode
 ```
 
 `.ube` files will instantly highlight after restart.
