@@ -8,7 +8,7 @@
 **The sweet, grounded systems language.**
 *Easy to program like Go. Fast like C. Zero Garbage Collection.*
 
-**Latest version: `0.6.0`**
+**Latest version: `0.7.0`**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.20+-00ADD8?logo=go)](https://golang.org)
@@ -155,7 +155,7 @@ fn main() {
 
 An `unsafe` block marks a trust boundary; it does not prove the C function is synchronous or prevent it from retaining a pointer. Only pass arena-backed strings and slices to C APIs whose contract guarantees the pointer is no longer used after the call returns, or copy the data into C-owned memory first. Ube cannot verify third-party C contracts or automatically determine whether a wrapper has been audited. `defer` schedules a cleanup call at the end of its lexical scope, including returns and loop exits.
 
-Slice, array, and string indexing checks bounds at runtime. Out-of-range access prints the source location and exits with status 101. The compiler also rejects assignments and returns that would let references to local values escape their lexical scope. Pool elements and channel elements must be flat; a stale pool handle returns an empty optional, while a valid handle returns a value copy.
+Slice, array, and string indexing checks bounds at runtime. Out-of-range access prints the source location and exits with status 101. The compiler rejects assignments and returns that would let arena-backed references escape an explicit `scope` block. Helper functions share the caller's active arena, so their returned strings and slices remain valid until that arena scope ends. Pool elements and channel elements must be flat; a stale pool handle returns an empty optional, while a valid handle returns a value copy.
 
 `ube check main.ube --format=json` emits an audit object for CI. Add `--strict` to fail when the program declares C FFI or contains unsafe blocks. `ube build main.ube --forbid-unsafe` applies the same policy before compiling a binary. These checks reduce common risks but are not a mathematical guarantee of memory safety.
 
@@ -187,7 +187,7 @@ fn main() {
 
 ### 2. Dynamic Slices with Managed Growth
 
-Slices are contiguous buffers backed by the active arena. When capacity is exceeded, storage expands geometrically while preserving live elements:
+Slices are contiguous buffers backed by the active arena. When capacity is exceeded, storage expands geometrically while preserving live elements. A function that calls `.push()` on a slice parameter receives a mutable reference to the caller's slice descriptor, so its new length and capacity are visible to the caller:
 
 ```ube
 fn main() {
@@ -206,7 +206,7 @@ fn main() {
 
 ### 3. Concurrency via Vines & Flat Channels
 
-Vines are lightweight tasks running on detached OS threads with dedicated private arenas. Channels accept flat values, which avoids sending Ube-managed pointers across threads. This does not prevent races through external shared state or unsafe C code.
+Vines are lightweight tasks running on detached OS threads with dedicated private arenas. Channels accept flat values, which avoids sending Ube-managed pointers across threads. A `select` with no `default` case blocks on channel notifications instead of polling. This does not prevent races through external shared state or unsafe C code.
 
 ```ube
 struct WorkOrder {

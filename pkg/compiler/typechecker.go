@@ -221,7 +221,9 @@ func (tc *Typechecker) checkBlock(b *BlockStmt, env *TypeEnvironment) error {
 	bEnv := childTypeEnvironment(env)
 	bEnv.CurRet = env.CurRet
 	bEnv.LoopDepth = env.LoopDepth
-	bEnv.ScopeDepth = env.ScopeDepth + 1
+	// Ordinary control-flow blocks do not restore the arena. Only `scope {}`
+	// changes the lifetime depth.
+	bEnv.ScopeDepth = env.ScopeDepth
 	for _, stmt := range b.Stmts {
 		if err := tc.checkStmt(stmt, bEnv); err != nil {
 			return err
@@ -386,7 +388,9 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		return tc.checkBlock(s.Body, loopEnv)
 
 	case *ScopeStmt:
-		return tc.checkBlock(s.Body, env)
+		scopeEnv := childTypeEnvironment(env)
+		scopeEnv.ScopeDepth = env.ScopeDepth + 1
+		return tc.checkBlock(s.Body, scopeEnv)
 	case *UnsafeStmt:
 		tc.HasUnsafe = true
 		unsafeEnv := childTypeEnvironment(env)
@@ -411,7 +415,11 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		}
 
 	case *SelectStmt:
-		for _, sc := range s.Cases {
+		if len(s.Cases) == 0 && s.Default == nil {
+			return fmt.Errorf("[%s] select requires at least one case", s.At)
+		}
+		for i := range s.Cases {
+			sc := &s.Cases[i]
 			chT, err := tc.inferExpr(sc.Chan, env)
 			if err != nil {
 				return err
@@ -550,15 +558,20 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			if err := tc.assertCompat(PrimitiveType{Name: "bool"}, rT, e.At); err != nil {
 				return nil, err
 			}
-			return PrimitiveType{Name: "bool"}, nil
+			e.Type = PrimitiveType{Name: "bool"}
+			return e.Type, nil
 		case "==", "!=", "<", "<=", ">", ">=":
-			return PrimitiveType{Name: "bool"}, tc.assertCompat(lT, rT, e.At)
+			e.Type = PrimitiveType{Name: "bool"}
+			return e.Type, tc.assertCompat(lT, rT, e.At)
 		case "+":
 			if lT.String() == "string" || rT.String() == "string" {
-				return StringType{}, tc.assertCompat(lT, rT, e.At)
+				e.Type = StringType{}
+				return e.Type, tc.assertCompat(lT, rT, e.At)
 			}
+			e.Type = lT
 			return lT, tc.assertCompat(lT, rT, e.At)
 		default:
+			e.Type = lT
 			return lT, tc.assertCompat(lT, rT, e.At)
 		}
 
@@ -632,6 +645,11 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			if sl, ok := tgtT.(SliceType); ok && mem.Member == "push" {
 				if len(e.Args) != 1 {
 					return nil, fmt.Errorf("[%s] push expects 1 argument", e.At)
+				}
+				if root := assignmentRoot(mem.Target); root != "" {
+					if info, found := env.LookupVar(root); found && env.ScopeDepth > info.Depth {
+						return nil, fmt.Errorf("[%s] Safety Error: cannot push to '%s' (declared at scope depth %d) from inside an inner scope (depth %d)", e.At, root, info.Depth, env.ScopeDepth)
+					}
 				}
 				argT, err := tc.inferExpr(e.Args[0], env)
 				if err != nil {

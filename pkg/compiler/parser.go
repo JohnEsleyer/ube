@@ -341,7 +341,12 @@ func (p *Parser) parseSelectStmt() *SelectStmt {
 		if p.check(TokenIdent) && p.peek(0).Val == "default" {
 			p.advance()
 			p.expect(TokenFatArrow, "Expected '=>' after default")
-			defBlock = p.parseBlock()
+			if p.check(TokenLBrace) {
+				defBlock = p.parseBlock()
+			} else {
+				stmt := p.parseStmt()
+				defBlock = &BlockStmt{At: stmt.Loc(), Stmts: []Stmt{stmt}}
+			}
 			if p.check(TokenComma) {
 				p.advance()
 			}
@@ -352,7 +357,13 @@ func (p *Parser) parseSelectStmt() *SelectStmt {
 		p.expect(TokenAssign, "Expected '=' in select case")
 		chExpr := p.parseExpr()
 		p.expect(TokenFatArrow, "Expected '=>' after select condition")
-		b := p.parseBlock()
+		var b *BlockStmt
+		if p.check(TokenLBrace) {
+			b = p.parseBlock()
+		} else {
+			stmt := p.parseStmt()
+			b = &BlockStmt{At: stmt.Loc(), Stmts: []Stmt{stmt}}
+		}
 		cases = append(cases, SelectCase{At: cLoc, VarName: vName, Chan: chExpr, Body: b})
 		if p.check(TokenComma) {
 			p.advance()

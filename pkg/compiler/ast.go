@@ -31,6 +31,7 @@ type BinaryExpr struct {
 	At          SourceLocation
 	Left, Right Expr
 	Op          string
+	Type        UbeType
 }
 
 func (e *BinaryExpr) Loc() SourceLocation { return e.At }

@@ -14,7 +14,7 @@
 
 #define UBE_SCOPE_CHUNK_SIZE (64 * 1024)
 
-// --- 1. Chunked Immutable Scopes (Arena Allocator) ---
+// --- 1. Chunked Immutable Scopes (Arena Allocator with per-thread recycling) ---
 typedef struct UbeChunk {
     struct UbeChunk* next;
     size_t capacity;
@@ -24,8 +24,10 @@ typedef struct UbeChunk {
 typedef struct {
     UbeChunk* head;
     UbeChunk* current;
-    size_t top;          // Offset in current chunk
-    size_t total_chunks; // Number of chunks in use
+    size_t top;
+    size_t total_chunks;
+    UbeChunk* freelist;
+    size_t freelist_count;
 } UbeScopeArena;
 
 typedef struct {
@@ -46,6 +48,17 @@ static UbeScopeArena current_scope;
 static inline UbeChunk* ube_chunk_alloc(size_t min_capacity) {
     size_t cap = min_capacity > UBE_SCOPE_CHUNK_SIZE ? min_capacity : UBE_SCOPE_CHUNK_SIZE;
     if (cap > SIZE_MAX - sizeof(UbeChunk)) ube_panic_capacity((int64_t)cap);
+    UbeChunk** link = &current_scope.freelist;
+    while (*link) {
+        UbeChunk* chunk = *link;
+        if (chunk->capacity >= cap) {
+            *link = chunk->next;
+            chunk->next = NULL;
+            if (current_scope.freelist_count) current_scope.freelist_count--;
+            return chunk;
+        }
+        link = &chunk->next;
+    }
     UbeChunk* c = (UbeChunk*)malloc(sizeof(UbeChunk) + cap);
     if (!c) {
         fprintf(stderr, "[Ube Panic]: Out of memory allocating Scope chunk!\n");
@@ -66,6 +79,7 @@ static inline void ube_init(void) {
 }
 
 static inline UbeWatermark ube_scope_save(void) {
+    ube_init();
     UbeWatermark wm = { current_scope.current, current_scope.top };
     return wm;
 }
@@ -73,14 +87,32 @@ static inline UbeWatermark ube_scope_save(void) {
 static inline void ube_scope_restore(UbeWatermark wm) {
     if (!wm.chunk) return;
     UbeChunk* c = wm.chunk->next;
-    while (c != NULL) {
-        UbeChunk* next = c->next;
-        free(c);
-        c = next;
+    if (c) {
+        size_t count = 0;
+        UbeChunk* tail = c;
+        count++;
+        while (tail->next) { tail = tail->next; count++; }
+        tail->next = current_scope.freelist;
+        current_scope.freelist = c;
+        current_scope.freelist_count += count;
+        if (current_scope.total_chunks >= count) current_scope.total_chunks -= count;
+        wm.chunk->next = NULL;
     }
-    wm.chunk->next = NULL;
     current_scope.current = wm.chunk;
     current_scope.top = wm.top;
+}
+
+static inline void ube_scope_destroy(void) {
+    UbeChunk* chunk = current_scope.head;
+    while (chunk) { UbeChunk* next = chunk->next; free(chunk); chunk = next; }
+    chunk = current_scope.freelist;
+    while (chunk) { UbeChunk* next = chunk->next; free(chunk); chunk = next; }
+    current_scope.head = NULL;
+    current_scope.current = NULL;
+    current_scope.top = 0;
+    current_scope.total_chunks = 0;
+    current_scope.freelist = NULL;
+    current_scope.freelist_count = 0;
 }
 
 static inline void* ube_bump_alloc_unaligned(size_t size) {
@@ -90,6 +122,7 @@ static inline void* ube_bump_alloc_unaligned(size_t size) {
         current_scope.current->next = new_c;
         current_scope.current = new_c;
         current_scope.top = 0;
+        if (!current_scope.head) current_scope.head = new_c;
         current_scope.total_chunks++;
     }
     void* ptr = &current_scope.current->memory[current_scope.top];
@@ -115,10 +148,11 @@ static inline string ube_str_lit(const char* lit) {
 }
 
 static inline string ube_str_concat(string a, string b) {
+	if (a.len > SIZE_MAX - b.len - 1) ube_panic_capacity((int64_t)(a.len + b.len));
     size_t total = a.len + b.len;
     char* dest = (char*)ube_bump_alloc(total + 1);
-    memcpy(dest, a.data, a.len);
-    memcpy(dest + a.len, b.data, b.len);
+    if (a.len) memcpy(dest, a.data, a.len);
+    if (b.len) memcpy(dest + a.len, b.data, b.len);
     dest[total] = '\0';
     string s = { dest, total };
     return s;
@@ -239,7 +273,36 @@ static inline bool Pool_##N##_despawn(Pool_##N* p, UbeHandle h) { \
     return true; \
 }
 
-// --- 4. Thread-Safe Ring Buffer Channels ---
+// --- 4. Thread-Safe Ring Buffer Channels and event-driven select ---
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    bool notified;
+} UbeSelectGroup;
+
+typedef struct UbeSelectWaiter {
+    UbeSelectGroup* group;
+    struct UbeSelectWaiter* next;
+} UbeSelectWaiter;
+
+static inline void ube_select_group_init(UbeSelectGroup* group) {
+    pthread_mutex_init(&group->mutex, NULL);
+    pthread_cond_init(&group->cond, NULL);
+    group->notified = false;
+}
+
+static inline void ube_select_group_destroy(UbeSelectGroup* group) {
+    pthread_mutex_destroy(&group->mutex);
+    pthread_cond_destroy(&group->cond);
+}
+
+static inline void ube_select_wait(UbeSelectGroup* group) {
+    pthread_mutex_lock(&group->mutex);
+    while (!group->notified) pthread_cond_wait(&group->cond, &group->mutex);
+    group->notified = false;
+    pthread_mutex_unlock(&group->mutex);
+}
+
 typedef struct {
     void* buffer;
     size_t elem_size;
@@ -251,7 +314,48 @@ typedef struct {
     pthread_mutex_t lock;
     pthread_cond_t not_empty;
     pthread_cond_t not_full;
+    UbeSelectWaiter* select_waiters;
 } UbeRawChan;
+
+static inline void ube_raw_chan_notify_select_locked(UbeRawChan* ch) {
+    for (UbeSelectWaiter* waiter = ch->select_waiters; waiter; waiter = waiter->next) {
+        UbeSelectGroup* group = waiter->group;
+        pthread_mutex_lock(&group->mutex);
+        group->notified = true;
+        pthread_cond_signal(&group->cond);
+        pthread_mutex_unlock(&group->mutex);
+    }
+}
+
+static inline void ube_select_register(UbeRawChan* ch, UbeSelectWaiter* waiter, UbeSelectGroup* group) {
+    waiter->group = group;
+    pthread_mutex_lock(&ch->lock);
+    waiter->next = ch->select_waiters;
+    ch->select_waiters = waiter;
+    pthread_mutex_unlock(&ch->lock);
+}
+
+static inline void ube_select_unregister(UbeRawChan* ch, UbeSelectWaiter* waiter) {
+    pthread_mutex_lock(&ch->lock);
+    UbeSelectWaiter** link = &ch->select_waiters;
+    while (*link && *link != waiter) link = &(*link)->next;
+    if (*link == waiter) *link = waiter->next;
+    pthread_mutex_unlock(&ch->lock);
+}
+
+static inline bool ube_raw_chan_has_data_or_closed(UbeRawChan* ch) {
+    pthread_mutex_lock(&ch->lock);
+    bool ready = ch->count > 0 || ch->closed;
+    pthread_mutex_unlock(&ch->lock);
+    return ready;
+}
+
+static inline bool ube_raw_chan_is_closed(UbeRawChan* ch) {
+    pthread_mutex_lock(&ch->lock);
+    bool closed = ch->closed;
+    pthread_mutex_unlock(&ch->lock);
+    return closed;
+}
 
 static inline UbeRawChan* ube_raw_chan_new(int64_t requested_capacity, size_t elem_size) {
     if (requested_capacity < 0 || (uint64_t)requested_capacity > SIZE_MAX / (elem_size ? elem_size : 1)) ube_panic_capacity(requested_capacity);
@@ -266,6 +370,7 @@ static inline UbeRawChan* ube_raw_chan_new(int64_t requested_capacity, size_t el
     ch->head = 0;
     ch->tail = 0;
     ch->closed = false;
+    ch->select_waiters = NULL;
     pthread_mutex_init(&ch->lock, NULL);
     pthread_cond_init(&ch->not_empty, NULL);
     pthread_cond_init(&ch->not_full, NULL);
@@ -285,6 +390,7 @@ static inline void ube_raw_chan_send(UbeRawChan* ch, const void* val) {
     ch->tail = (ch->tail + 1) % ch->capacity;
     ch->count++;
     pthread_cond_signal(&ch->not_empty);
+    ube_raw_chan_notify_select_locked(ch);
     pthread_mutex_unlock(&ch->lock);
 }
 
@@ -324,6 +430,7 @@ static inline void ube_raw_chan_close(UbeRawChan* ch) {
     ch->closed = true;
     pthread_cond_broadcast(&ch->not_empty);
     pthread_cond_broadcast(&ch->not_full);
+    ube_raw_chan_notify_select_locked(ch);
     pthread_mutex_unlock(&ch->lock);
 }
 
@@ -339,6 +446,7 @@ static void* ube_spawn_trampoline(void* raw) {
     UbeWatermark watermark = ube_scope_save();
     a->fn(a->arg);
     ube_scope_restore(watermark);
+    ube_scope_destroy();
     free(a);
     return NULL;
 }
