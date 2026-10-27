@@ -8,6 +8,10 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "lsp" {
+		runLSP()
+		return
+	}
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: ubec <source.ube> [-o output.c]")
 		os.Exit(1)

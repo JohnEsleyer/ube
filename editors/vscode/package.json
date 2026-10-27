@@ -9,6 +9,8 @@
     "url": "https://github.com/ube-lang/ube"
   },
   "icon": "icon.png",
+  "main": "./client/out/extension.js",
+  "activationEvents": ["onLanguage:ube"],
   "engines": {
     "vscode": "^1.70.0"
   },
@@ -17,6 +19,7 @@
     "Snippets"
   ],
   "contributes": {
+    "configuration": {"title":"Ube","properties":{"ube.serverPath":{"type":"string","default":"ubec","description":"Path to the ubec compiler executable"}}},
     "languages": [
       {
         "id": "ube",
@@ -54,5 +57,8 @@
         "path": "./icons/ube-icon-theme.json"
       }
     ]
-  }
+  },
+  "scripts": {"vscode:prepublish":"npm run compile","compile":"tsc -b client","watch":"tsc -b client -w"},
+  "dependencies": {"vscode-languageclient":"^9.0.1"},
+  "devDependencies": {"@types/node":"^18.19.0","@types/vscode":"^1.70.0","typescript":"^5.0.0"}
 }
