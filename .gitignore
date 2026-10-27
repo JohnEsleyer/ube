@@ -27,3 +27,6 @@ __pycache__/
 # Editor cruft
 *.swp
 *.vsix
+
+# textify
+codebase.txt

@@ -534,7 +534,7 @@ When `ubec` runs, it bundles the C source code alongside Ube's generated code in
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/your-username/ube.git
+git clone https://github.com/johnesleyer/ube.git
 cd ube
 ```
 
