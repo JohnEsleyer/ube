@@ -221,6 +221,45 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 			continue
 		}
 
+		if ch == '0' && (l.peek(1) == 'x' || l.peek(1) == 'X') {
+			l.advance() // '0'
+			l.advance() // 'x'
+			var buf strings.Builder
+			buf.WriteString("0x")
+			digits := 0
+			for l.pos < len(l.source) {
+				c := l.peek(0)
+				if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') {
+					buf.WriteRune(l.advance())
+					digits++
+					continue
+				}
+				break
+			}
+			if digits == 0 || unicode.IsLetter(l.peek(0)) || unicode.IsDigit(l.peek(0)) || l.peek(0) == '_' {
+				return nil, fmt.Errorf("[%s] Error: Invalid hexadecimal literal", loc)
+			}
+			tokens = append(tokens, Token{Type: TokenInt, Val: buf.String(), Loc: loc})
+			continue
+		}
+
+		if ch == '0' && (l.peek(1) == 'b' || l.peek(1) == 'B') {
+			l.advance() // '0'
+			l.advance() // 'b'
+			var buf strings.Builder
+			buf.WriteString("0b")
+			digits := 0
+			for l.pos < len(l.source) && (l.peek(0) == '0' || l.peek(0) == '1') {
+				buf.WriteRune(l.advance())
+				digits++
+			}
+			if digits == 0 || unicode.IsLetter(l.peek(0)) || unicode.IsDigit(l.peek(0)) || l.peek(0) == '_' {
+				return nil, fmt.Errorf("[%s] Error: Invalid binary literal", loc)
+			}
+			tokens = append(tokens, Token{Type: TokenInt, Val: buf.String(), Loc: loc})
+			continue
+		}
+
 		if unicode.IsDigit(ch) {
 			var buf strings.Builder
 			isFloat := false

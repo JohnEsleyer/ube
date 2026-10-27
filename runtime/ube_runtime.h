@@ -313,23 +313,23 @@ typedef struct { \
     T data; \
     uint32_t gen; \
     bool active; \
-} UbeSlot_##T; \
+} UbeSlot_##N; \
 typedef struct { \
-    UbeSlot_##T* slots; \
+    UbeSlot_##N* slots; \
     uint32_t* freelist; \
     size_t capacity; \
     size_t count; \
     size_t free_count; \
 } Pool_##N; \
 static inline Pool_##N* Pool_##N##_new(int64_t requested_capacity) { \
-    if (requested_capacity < 0 || (uint64_t)requested_capacity > UINT32_MAX || (uint64_t)requested_capacity > SIZE_MAX / sizeof(UbeSlot_##T) || (uint64_t)requested_capacity > SIZE_MAX / sizeof(uint32_t)) ube_panic_capacity(requested_capacity); \
+    if (requested_capacity < 0 || (uint64_t)requested_capacity > UINT32_MAX || (uint64_t)requested_capacity > SIZE_MAX / sizeof(UbeSlot_##N) || (uint64_t)requested_capacity > SIZE_MAX / sizeof(uint32_t)) ube_panic_capacity(requested_capacity); \
     size_t capacity = requested_capacity > 0 ? (size_t)requested_capacity : 16; \
     Pool_##N* p = (Pool_##N*)malloc(sizeof(Pool_##N)); \
     if (!p) { fprintf(stderr, "[Ube Panic]: Out of memory allocating Pool\n"); exit(101); } \
     p->capacity = capacity; \
     p->count = 0; \
     p->free_count = 0; \
-    p->slots = (UbeSlot_##T*)calloc(p->capacity, sizeof(UbeSlot_##T)); \
+    p->slots = (UbeSlot_##N*)calloc(p->capacity, sizeof(UbeSlot_##N)); \
     p->freelist = (uint32_t*)malloc(p->capacity * sizeof(uint32_t)); \
     if (!p->slots || !p->freelist) { fprintf(stderr, "[Ube Panic]: Out of memory allocating Pool slots\n"); exit(101); } \
     return p; \
@@ -340,9 +340,9 @@ static inline UbeHandle Pool_##N##_spawn(Pool_##N* p, T val) { \
         idx = p->freelist[--p->free_count]; \
     } else { \
         if (p->count >= p->capacity) { \
-            if (p->capacity > UINT32_MAX / 2 || p->capacity > SIZE_MAX / (2 * sizeof(UbeSlot_##T)) || p->capacity > SIZE_MAX / (2 * sizeof(uint32_t))) ube_panic_capacity((int64_t)p->capacity); \
+            if (p->capacity > UINT32_MAX / 2 || p->capacity > SIZE_MAX / (2 * sizeof(UbeSlot_##N)) || p->capacity > SIZE_MAX / (2 * sizeof(uint32_t))) ube_panic_capacity((int64_t)p->capacity); \
             p->capacity *= 2; \
-            p->slots = (UbeSlot_##T*)realloc(p->slots, p->capacity * sizeof(UbeSlot_##T)); \
+            p->slots = (UbeSlot_##N*)realloc(p->slots, p->capacity * sizeof(UbeSlot_##N)); \
             p->freelist = (uint32_t*)realloc(p->freelist, p->capacity * sizeof(uint32_t)); \
             if (!p->slots || !p->freelist) { fprintf(stderr, "[Ube Panic]: Out of memory growing Pool\n"); exit(101); } \
         } \
@@ -439,6 +439,13 @@ static inline void ube_select_unregister(UbeRawChan* ch, UbeSelectWaiter* waiter
     while (*link && *link != waiter) link = &(*link)->next;
     if (*link == waiter) *link = waiter->next;
     pthread_mutex_unlock(&ch->lock);
+}
+
+static inline bool ube_raw_chan_has_data(UbeRawChan* ch) {
+    pthread_mutex_lock(&ch->lock);
+    bool ready = ch->count > 0;
+    pthread_mutex_unlock(&ch->lock);
+    return ready;
 }
 
 static inline bool ube_raw_chan_has_data_or_closed(UbeRawChan* ch) {

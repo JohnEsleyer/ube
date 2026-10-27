@@ -539,10 +539,10 @@ func (p *Parser) parseExpr() Expr {
 
 func (p *Parser) parseOrElse() Expr {
 	node := p.parseLogicalOr()
-	if p.check(TokenOrElse) {
+	for p.check(TokenOrElse) {
 		loc := p.advance().Loc
 		rhs := p.parseLogicalOr()
-		return &OrElseExpr{At: loc, Primary: node, Fallback: rhs}
+		node = &OrElseExpr{At: loc, Primary: node, Fallback: rhs}
 	}
 	return node
 }
@@ -672,6 +672,18 @@ func (p *Parser) parsePostfix() Expr {
 	return node
 }
 
+// normalizeIntLiteral converts the lexer's binary spelling (0b1010) into a
+// decimal literal so the generated C does not rely on a compiler extension.
+// Hexadecimal literals are already valid C and are preserved verbatim.
+func normalizeIntLiteral(tok Token) string {
+	if len(tok.Val) > 2 && tok.Val[0] == '0' && (tok.Val[1] == 'b' || tok.Val[1] == 'B') {
+		if n, err := strconv.ParseUint(tok.Val[2:], 2, 64); err == nil {
+			return strconv.FormatUint(n, 10)
+		}
+	}
+	return tok.Val
+}
+
 func (p *Parser) parsePrimary() Expr {
 	tok := p.peek(0)
 	if tok.Type == TokenUnsafe {
@@ -685,7 +697,7 @@ func (p *Parser) parsePrimary() Expr {
 	switch tok.Type {
 	case TokenInt:
 		p.advance()
-		return &LiteralExpr{At: tok.Loc, Val: tok.Val, Type: PrimitiveType{Name: "i32"}}
+		return &LiteralExpr{At: tok.Loc, Val: normalizeIntLiteral(tok), Type: PrimitiveType{Name: "i32"}}
 	case TokenFloat:
 		p.advance()
 		return &LiteralExpr{At: tok.Loc, Val: tok.Val, Type: PrimitiveType{Name: "f32"}}

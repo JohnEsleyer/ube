@@ -82,6 +82,7 @@ func (e *IndexExpr) exprNode()           {}
 type SliceSubExpr struct {
 	At                 SourceLocation
 	Target, Start, End Expr
+	TargetType         UbeType
 }
 
 func (e *SliceSubExpr) Loc() SourceLocation { return e.At }
@@ -137,9 +138,10 @@ func (e *TryExpr) Loc() SourceLocation { return e.At }
 func (e *TryExpr) exprNode()           {}
 
 type OrElseExpr struct {
-	At       SourceLocation
-	Primary  Expr
-	Fallback Expr
+	At          SourceLocation
+	Primary     Expr
+	Fallback    Expr
+	PrimaryType UbeType
 }
 
 func (e *OrElseExpr) Loc() SourceLocation { return e.At }
@@ -176,20 +178,22 @@ func (s *BlockStmt) Loc() SourceLocation { return s.At }
 func (s *BlockStmt) stmtNode()           {}
 
 type LetStmt struct {
-	At    SourceLocation
-	Name  string
-	Mut   bool
-	Type  UbeType
-	Value Expr
+	At        SourceLocation
+	Name      string
+	Mut       bool
+	Type      UbeType
+	Value     Expr
+	ValueType UbeType
 }
 
 func (s *LetStmt) Loc() SourceLocation { return s.At }
 func (s *LetStmt) stmtNode()           {}
 
 type AssignStmt struct {
-	At  SourceLocation
-	LHS Expr
-	RHS Expr
+	At      SourceLocation
+	LHS     Expr
+	RHS     Expr
+	LHSType UbeType
 }
 
 func (s *AssignStmt) Loc() SourceLocation { return s.At }
@@ -247,6 +251,7 @@ type ForStmt struct {
 	At       SourceLocation
 	ItemName string
 	Iter     Expr
+	IterType UbeType
 	Body     *BlockStmt
 }
 
