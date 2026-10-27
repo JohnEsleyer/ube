@@ -15,16 +15,9 @@ fn print_shape(s: Shape) -> i32 {
     return 0
 }
 
-// 3. Returning a Dynamic Slice across function boundaries (Zero GC!)
-fn make_even_numbers(count: i32) -> []i32 {
-    let mut evens = []i32{}
-    let mut i = 1
-    // Fill the slice in the current scope arena
-    evens.push(2)
-    evens.push(4)
-    evens.push(6)
-    evens.push(8)
-    return evens // Caller inherits the bump! Zero-copy, no GC heap!
+// 3. Returning a caller-owned slice preserves its lifetime.
+fn pass_even_numbers(evens: []i32) -> []i32 {
+    return evens
 }
 
 fn main() {
@@ -46,7 +39,12 @@ fn main() {
 
     // Test Returning Dynamic Slice from Function
     println_str("Receiving dynamic slice from function:")
-    let mut numbers = make_even_numbers(4)
+    let mut numbers = []i32{}
+    numbers.push(2)
+    numbers.push(4)
+    numbers.push(6)
+    numbers.push(8)
+    numbers = pass_even_numbers(numbers)
 
     for num in numbers {
         println(num)

@@ -1,80 +1,394 @@
+
 <div align="center">
 
-<img src="assets/icon.svg" alt="Ube Logo" width="120" />
+<img src="assets/icon.svg" alt="Ube Logo" width="130" height="130" />
 
-# Ube Programming Language
+# The Ube Programming Language
 
-**A grounded systems language with scoped memory and a small, focused CLI.**
+**The sweet, grounded systems language.**
+*Easy to program like Go. Fast like C. Zero Garbage Collection.*
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
+[![Go Version](https://img.shields.io/badge/Go-1.20+-00ADD8?logo=go)](https://golang.org)
+[![C Standard](https://img.shields.io/badge/C-GNU11-blue.svg)](https://en.wikipedia.org/wiki/C11)
 
 </div>
 
-## Install
+---
 
-Requirements: Go 1.21+ and a C compiler such as GCC or Clang.
+## Table of Contents
 
-```sh
+- [What is Ube?](#what-is-ube)
+- [Key Features](#key-features)
+- [Quick Installation](#quick-installation)
+- [The `ube` CLI Tool](#the-ube-cli-tool)
+- [Memory Safety & Purity Analysis](#memory-safety--purity-analysis)
+- [Language Tour](#language-tour)
+  - [1. Scoped Memory Arenas (`scope`)](#1-scoped-memory-arenas-scope)
+  - [2. Dynamic Slices with Managed Growth](#2-dynamic-slices-with-managed-growth)
+  - [3. Concurrency via Vines & Flat Channels](#3-concurrency-via-vines--flat-channels)
+  - [4. Generational Pools (`Pool[T]`)](#4-generational-pools-poolt)
+  - [5. Structs & Receiver Methods](#5-structs--receiver-methods)
+  - [6. Error Handling (`?`, Result, `or_else`)](#6-error-handling--result-or_else)
+  - [7. Null-Safety with Optionals (`if let`)](#7-null-safety-with-optionals-if-let)
+  - [8. Tagged Enums & Pattern Matching](#8-tagged-enums--pattern-matching)
+- [Editor & Tooling Support](#editor--tooling-support)
+  - [Language Server Protocol (LSP)](#language-server-protocol-lsp)
+  - [VS Code Extension](#vs-code-extension)
+- [Project Roadmap](#project-roadmap)
+- [License](#license)
+
+---
+
+## What is Ube?
+
+**Ube** is a statically typed systems language combining the clean syntax and ergonomics of Go with the zero-cost execution and control of C.
+
+Instead of relying on a runtime garbage collector or manual lifetime annotations, Ube uses **lexical scope arenas**, **generational entity pools**, and **typed channels**. The compiler emits GNU11 C for native compilation with GCC or Clang. Ube's safety checks catch several common hazards, but do not yet constitute a formal memory-safety proof.
+
+---
+
+## Key Features
+
+- **Zero Garbage Collection:** Deterministic scoped arenas with bulk watermark reclamation in a single CPU instruction.
+- **Go-Style Ergonomics:** No mandatory semicolons, Go-style receiver methods, and first-class channels.
+- **Safety checks:** Compile-time scope escape checks, runtime bounds-checked indexing, and generational pool handles.
+- **Vines and channels:** Spawned threads exchange flat values through typed channels.
+- **Native C interoperability:** Foreign calls and raw pointer operations use explicit `unsafe { ... }` blocks.
+- **Instant Toolchain:** Minimalist, Cargo-like CLI (`ube`) with automated project generation, checking, building, and running.
+
+---
+
+## Quick Installation
+
+Ube installs via a single automated setup script. The installer builds the compiler, configures runtime headers, and automatically configures your `PATH` in `~/.bashrc`, `~/.zshrc`, or `~/.profile`.
+
+### 1. Prerequisites
+- **Go** (1.21 or newer)
+- **GCC** or **Clang** (with `-std=gnu11` and `-pthread` support)
+
+### 2. Run the Installer
+
+```bash
 git clone https://github.com/JohnEsleyer/ube.git
 cd ube
+chmod +x install.sh
 ./install.sh
 ```
 
-The installer builds `ube` and `ubec` into `~/.ube/bin`, installs the runtime header into `~/.ube/runtime`, and adds the binary directory to existing `~/.bashrc`, `~/.zshrc`, and `~/.profile` files. Open a new terminal (or source the relevant profile) to use the command.
+### 3. Reload Shell
 
-## The `ube` CLI
+```bash
+source ~/.bashrc  # or: source ~/.zshrc
+```
+
+Verify your installation by running:
+
+```bash
+ube
+```
+
+---
+
+## The `ube` CLI Tool
+
+Like `cargo` or `go`, Ube provides a unified, clean command-line interface with formatted terminal outputs and build status reports:
 
 ```text
-ube <command> [options]
-ube <file.ube>
+🍠 Ube — The sweet, grounded systems language
 
-new <name>                 Create a starter project
-check <file.ube>           Check syntax and types
-build <file.ube> [-o bin]  Build a native executable
-run <file.ube> [args...]   Compile and run a program
-lsp                        Start the language server
-version                    Show the version
-help                       Show help
+USAGE:
+    ube <COMMAND> [OPTIONS]
+    ube <file.ube>
+
+COMMANDS:
+    run <file.ube>          Compile and execute a program immediately
+    build <file.ube>        Compile an Ube program into an optimized binary
+    check <file.ube>        Validate syntax, types, and safety without building
+    new <project-name>      Scaffold a new Ube project
+    lsp                     Launch the Language Server Protocol engine
+    version                 Print toolchain version and runtime details
+    help                    Show command-line usage information
+
+FLAGS:
+    -o <file>             Specify target binary output name
+    --emit-c              Preserve generated C source files
+    --forbid-unsafe       Reject C FFI declarations and unsafe blocks
+
+CHECK OPTIONS:
+    --strict              Reject C FFI declarations and unsafe blocks
+    --format=json         Emit a machine-readable safety audit
 ```
 
-For example:
+### Quick Commands
 
-```sh
-ube new hello
-cd hello
+```bash
+# Create a new project
+ube new game_server
+cd game_server
+
+# Run immediately
 ube run main.ube
-ube build main.ube -o hello
-./hello
+
+# Build an optimized release binary
+ube build main.ube -o game_server
+./game_server
 ```
 
-Build and run report whether the program declares C foreign functions. A program without `extern fn` declarations is reported as **Pure Ube**; programs that declare foreign functions list those symbols and note that safety also depends on their C implementations. This is an FFI inventory, not a formal memory-safety proof: Ube currently compiles through generated C and its runtime.
+---
 
-## Language
+## Memory Safety & Purity Analysis
 
-Ube is a statically typed systems language. Its Go frontend lexes, parses, typechecks, and emits C. Lexical `scope { ... }` blocks save and restore an arena watermark. Dynamic slices grow in contiguous arena-backed buffers, copying live elements as they grow; old buffers remain allocated until the enclosing scope is restored.
+Ube distinguishes programs that declare C foreign functions from those that do not. This reports the FFI boundary; it does not certify the whole program as memory safe. Ube compiles through generated C, and unsafe code, compiler/runtime defects, data races outside typed channel use, and external C libraries remain relevant risks.
+
+Foreign calls, taking raw addresses with `&`, accessing a raw pointer with `.ptr`, and dereferencing a pointer with `*` require an explicit unsafe block. A call can be wrapped as an unsafe expression so the surrounding wrapper remains safe to call:
+
+```ube
+extern fn puts(s: *u8) -> i32
+
+fn main() {
+    let result = unsafe { puts("hello".ptr) }
+}
+```
+
+An `unsafe` block marks a trust boundary; it does not prove the C function is synchronous or prevent it from retaining a pointer. Only pass arena-backed strings and slices to C APIs whose contract guarantees the pointer is no longer used after the call returns, or copy the data into C-owned memory first. Ube cannot verify third-party C contracts or automatically determine whether a wrapper has been audited. `defer` schedules a cleanup call at the end of its lexical scope, including returns and loop exits.
+
+Slice, array, and string indexing checks bounds at runtime. Out-of-range access prints the source location and exits with status 101. The compiler also rejects assignments and returns that would let references to local values escape their lexical scope. Pool elements and channel elements must be flat; a stale pool handle returns an empty optional, while a valid handle returns a value copy.
+
+`ube check main.ube --format=json` emits an audit object for CI. Add `--strict` to fail when the program declares C FFI or contains unsafe blocks. `ube build main.ube --forbid-unsafe` applies the same policy before compiling a binary. These checks reduce common risks but are not a mathematical guarantee of memory safety.
+
+---
+
+## Language Tour
+
+### 1. Scoped Memory Arenas (`scope`)
+
+Lexical `scope { ... }` blocks capture an arena watermark. Scratch memory allocated inside the block is reclaimed instantly when the block exits:
+
+```ube
+fn main() {
+    let mut numbers = []i32{}
+    numbers.push(1)
+
+    scope {
+        let mut temp = []i32{}
+        temp.push(100)
+        temp.push(200)
+        // 'temp' exists only within this block
+    } // Memory is restored to the saved watermark.
+
+    numbers.push(2)
+    println(numbers[0]) // 1
+    println(numbers[1]) // 2
+}
+```
+
+### 2. Dynamic Slices with Managed Growth
+
+Slices are contiguous buffers backed by the active arena. When capacity is exceeded, storage expands geometrically while preserving live elements:
 
 ```ube
 fn main() {
     let mut values = []i32{}
-    values.push(10)
-    values.push(20)
-    if true && true {
-        println("two values")
+    let mut i = 0
+    while i < 50 {
+        values.push(i * 2)
+        i = i + 1
+    }
+
+    for val in values {
+        println(val)
     }
 }
 ```
 
-The compiler supports control flow, short-circuiting logical operators, slices, spawn, and typed channels. The compiler remains implemented in Go.
+### 3. Concurrency via Vines & Flat Channels
 
-## Editor support
+Vines are lightweight tasks running on detached OS threads with dedicated private arenas. Channels accept flat values, which avoids sending Ube-managed pointers across threads. This does not prevent races through external shared state or unsafe C code.
 
-- **VS Code:** Extension source is in [editors/vscode](editors/vscode). It provides syntax highlighting, snippets, icons, and LSP diagnostics, completion, and hover support when `ube` is installed.
-## Development
+```ube
+struct WorkOrder {
+    id: i32,
+    amount: i32
+}
 
-```sh
-go test ./...
-go build ./cmd/ube
-go build ./cmd/ubec
+fn worker(orders: Chan[WorkOrder], results: Chan[i32]) {
+    while let order = orders.recv() {
+        results.send(order.id * order.amount)
+    }
+}
+
+fn main() {
+    let orders = Chan[WorkOrder].new(8)
+    let results = Chan[i32].new(8)
+
+    spawn worker(orders, results)
+
+    orders.send(WorkOrder{ id: 1, amount: 15 })
+    orders.send(WorkOrder{ id: 2, amount: 30 })
+    orders.close()
+
+    println(results.recv()) // 15
+    println(results.recv()) // 60
+}
 ```
+
+### 4. Generational Pools (`Pool[T]`)
+
+For non-lexical lifetimes (such as graphs or entity collections), Ube provides generational pools. Accessing a despawned or stale handle returns an empty optional. A valid handle returns a copy of its value, not a pointer into the pool:
+
+```ube
+struct Entity {
+    id: i32,
+    active: bool
+}
+
+fn main() {
+    let mut pool = Pool[Entity].new(16)
+
+    let handle = pool.spawn(Entity{ id: 42, active: true })
+
+    // Access returns an optional value copy
+    if let ent = pool.get(handle) {
+        println(ent.id)
+    }
+
+    pool.despawn(handle)
+
+    // A stale handle resolves to an empty optional
+    if let dead = pool.get(handle) {
+        println("Still active")
+    } else {
+        println("Handle safely invalidated")
+    }
+}
+```
+
+### 5. Structs & Receiver Methods
+
+Ube supports Go-style receiver methods defined directly on struct types:
+
+```ube
+struct Rect {
+    width: i32,
+    height: i32
+}
+
+fn (r Rect) area() -> i32 {
+    return r.width * r.height
+}
+
+fn main() {
+    let box = Rect{ width: 12, height: 4 }
+    println(box.area()) // 48
+}
+```
+
+### 6. Error Handling (`?`, Result, `or_else`)
+
+Functions return explicit `Result` types (`Type ! ErrorType`). Errors can be propagated using `?` or resolved inline using `or_else`:
+
+```ube
+fn divide(a: i32, b: i32) -> i32 ! string {
+    if b == 0 {
+        return error("division by zero")
+    }
+    return a / b
+}
+
+fn compute() -> i32 ! string {
+    // Propagate error if divide fails
+    let value = divide(100, 5)?
+    return value * 2
+}
+
+fn main() {
+    // Provide a safe fallback on error
+    let result = divide(10, 0) or_else 0
+    println(result) // 0
+}
+```
+
+### 7. Null-Safety with Optionals (`if let`)
+
+Types are non-nullable by default. Optional values are explicitly declared using the `?` suffix:
+
+```ube
+fn find_user(id: i32) -> string? {
+    if id == 1 {
+        return "Alice"
+    }
+    return null
+}
+
+fn main() {
+    let user = find_user(1)
+    if let name = user {
+        println(name)
+    } else {
+        println("User not found")
+    }
+}
+```
+
+### 8. Tagged Enums & Pattern Matching
+
+Enums represent tagged sum types with optional per-variant data:
+
+```ube
+enum Action {
+    Move(i32, i32),
+    Pause,
+    Stop
+}
+
+fn execute(act: Action) {
+    match act {
+        Move(x, y) => {
+            println("Moving coordinate:")
+            println(x)
+            println(y)
+        },
+        Pause => println("Paused"),
+        Stop  => println("Stopped")
+    }
+}
+```
+
+---
+
+## Editor & Tooling Support
+
+### Language Server Protocol (LSP)
+
+The Ube compiler contains a built-in Language Server providing real-time diagnostics, autocompletion, and hover information:
+
+```bash
+ube lsp
+```
+
+Configure your editor's LSP client (such as Neovim, Helix, or Sublime Text) to execute `ube lsp` for all `.ube` files.
+
+### VS Code Extension
+
+The VS Code extension is located under [`editors/vscode`](editors/vscode), providing syntax highlighting, snippets, file icons, and language client integration.
+
+---
+
+## Project Roadmap
+
+| Target | Status | Notes |
+| :--- | :--- | :--- |
+| **Go Compiler Frontend** | Shipped | Full lexer, parser, static typechecker, and GNU11 C generator |
+| **Scoped Arena Runtime** | Shipped | Watermark resets, contiguous geometric slice expansion |
+| **Vines & Channels** | Shipped | Detached threads with flat-type validation |
+| **Generational Pools** | Shipped | Generation-checked handles for non-lexical lifetimes |
+| **LSP Server** | Shipped | Native JSON-RPC server with diagnostics and hover documentation |
+| **M:N Fiber Scheduler** | In Progress | Cooperative M:N fibers over native OS threads |
+| **Embedded & WebAssembly** | Planned | Freestanding bare-metal profiles and WASM compilation targets |
+
+---
 
 ## License
 
-Ube is licensed under the MIT License.
+Ube is open-source software distributed under the terms of the [MIT License](LICENSE).

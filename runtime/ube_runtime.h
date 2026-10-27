@@ -33,6 +33,8 @@ typedef struct {
     size_t top;
 } UbeWatermark;
 
+static inline void ube_panic_capacity(int64_t capacity);
+
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 static _Thread_local UbeScopeArena current_scope;
 #elif defined(__GNUC__) || defined(__clang__)
@@ -43,6 +45,7 @@ static UbeScopeArena current_scope;
 
 static inline UbeChunk* ube_chunk_alloc(size_t min_capacity) {
     size_t cap = min_capacity > UBE_SCOPE_CHUNK_SIZE ? min_capacity : UBE_SCOPE_CHUNK_SIZE;
+    if (cap > SIZE_MAX - sizeof(UbeChunk)) ube_panic_capacity((int64_t)cap);
     UbeChunk* c = (UbeChunk*)malloc(sizeof(UbeChunk) + cap);
     if (!c) {
         fprintf(stderr, "[Ube Panic]: Out of memory allocating Scope chunk!\n");
@@ -82,7 +85,7 @@ static inline void ube_scope_restore(UbeWatermark wm) {
 
 static inline void* ube_bump_alloc_unaligned(size_t size) {
     ube_init();
-    if (current_scope.top + size > current_scope.current->capacity) {
+    if (size > current_scope.current->capacity - current_scope.top) {
         UbeChunk* new_c = ube_chunk_alloc(size);
         current_scope.current->next = new_c;
         current_scope.current = new_c;
@@ -95,6 +98,7 @@ static inline void* ube_bump_alloc_unaligned(size_t size) {
 }
 
 static inline void* ube_bump_alloc(size_t size) {
+    if (size > SIZE_MAX - 7) ube_panic_capacity((int64_t)size);
     size = (size + 7) & ~7; // 8-byte alignment
     return ube_bump_alloc_unaligned(size);
 }
@@ -130,9 +134,41 @@ static inline string ube_str_slice(string s, int32_t start, int32_t end) {
 }
 
 static inline uint8_t ube_str_index(string s, int32_t index) {
-    if (index < 0 || (size_t)index >= s.len) return 0;
+    if (index < 0 || (size_t)index >= s.len) {
+        fprintf(stderr, "[Ube Panic]: String index %d out of bounds (len %zu)\n", index, s.len);
+        exit(101);
+    }
     return (uint8_t)s.data[index];
 }
+
+static inline void ube_panic_bounds(int64_t index, size_t len, const char* file, int line) {
+    fprintf(stderr, "\n[Ube Panic]: Index out of bounds at %s:%d\n", file, line);
+    fprintf(stderr, "             Attempted index: %lld, length: %zu\n\n", (long long)index, len);
+    exit(101);
+}
+
+static inline void ube_panic_capacity(int64_t capacity) {
+    fprintf(stderr, "\n[Ube Panic]: Invalid or excessive container capacity: %lld\n\n", (long long)capacity);
+    exit(101);
+}
+
+// GNU statement expressions preserve the indexed element as an lvalue, so
+// checked indexing also protects writes such as values[index] = value.
+#define UBE_SLICE_PTR(slice_expr, idx_expr, file_name, source_line) ({ \
+    __auto_type _ube_slice = (slice_expr); \
+    int64_t _ube_index = (int64_t)(idx_expr); \
+    if (_ube_index < 0 || (uint64_t)_ube_index >= _ube_slice.len) \
+        ube_panic_bounds(_ube_index, _ube_slice.len, (file_name), (source_line)); \
+    &_ube_slice.data[_ube_index]; \
+})
+
+#define UBE_ARRAY_PTR(array_expr, idx_expr, array_len, file_name, source_line) ({ \
+    __auto_type _ube_array = &(array_expr); \
+    int64_t _ube_index = (int64_t)(idx_expr); \
+    if (_ube_index < 0 || (uint64_t)_ube_index >= (size_t)(array_len)) \
+        ube_panic_bounds(_ube_index, (size_t)(array_len), (file_name), (source_line)); \
+    &_ube_array->data[_ube_index]; \
+})
 
 // --- 3. Generational Slot Pool (Pool[T]) ---
 typedef struct {
@@ -140,7 +176,7 @@ typedef struct {
     uint32_t gen;
 } UbeHandle;
 
-#define DEFINE_UBE_POOL(T) \
+#define DEFINE_UBE_POOL(T, N) \
 typedef struct { \
     T data; \
     uint32_t gen; \
@@ -152,25 +188,31 @@ typedef struct { \
     size_t capacity; \
     size_t count; \
     size_t free_count; \
-} Pool_##T; \
-static inline Pool_##T* Pool_##T##_new(size_t capacity) { \
-    Pool_##T* p = (Pool_##T*)malloc(sizeof(Pool_##T)); \
-    p->capacity = capacity > 0 ? capacity : 16; \
+} Pool_##N; \
+static inline Pool_##N* Pool_##N##_new(int64_t requested_capacity) { \
+    if (requested_capacity < 0 || (uint64_t)requested_capacity > UINT32_MAX || (uint64_t)requested_capacity > SIZE_MAX / sizeof(UbeSlot_##T) || (uint64_t)requested_capacity > SIZE_MAX / sizeof(uint32_t)) ube_panic_capacity(requested_capacity); \
+    size_t capacity = requested_capacity > 0 ? (size_t)requested_capacity : 16; \
+    Pool_##N* p = (Pool_##N*)malloc(sizeof(Pool_##N)); \
+    if (!p) { fprintf(stderr, "[Ube Panic]: Out of memory allocating Pool\n"); exit(101); } \
+    p->capacity = capacity; \
     p->count = 0; \
     p->free_count = 0; \
     p->slots = (UbeSlot_##T*)calloc(p->capacity, sizeof(UbeSlot_##T)); \
     p->freelist = (uint32_t*)malloc(p->capacity * sizeof(uint32_t)); \
+    if (!p->slots || !p->freelist) { fprintf(stderr, "[Ube Panic]: Out of memory allocating Pool slots\n"); exit(101); } \
     return p; \
 } \
-static inline UbeHandle Pool_##T##_spawn(Pool_##T* p, T val) { \
+static inline UbeHandle Pool_##N##_spawn(Pool_##N* p, T val) { \
     uint32_t idx; \
     if (p->free_count > 0) { \
         idx = p->freelist[--p->free_count]; \
     } else { \
         if (p->count >= p->capacity) { \
+            if (p->capacity > UINT32_MAX / 2 || p->capacity > SIZE_MAX / (2 * sizeof(UbeSlot_##T)) || p->capacity > SIZE_MAX / (2 * sizeof(uint32_t))) ube_panic_capacity((int64_t)p->capacity); \
             p->capacity *= 2; \
             p->slots = (UbeSlot_##T*)realloc(p->slots, p->capacity * sizeof(UbeSlot_##T)); \
             p->freelist = (uint32_t*)realloc(p->freelist, p->capacity * sizeof(uint32_t)); \
+            if (!p->slots || !p->freelist) { fprintf(stderr, "[Ube Panic]: Out of memory growing Pool\n"); exit(101); } \
         } \
         idx = (uint32_t)(p->count++); \
         p->slots[idx].gen = 1; \
@@ -180,15 +222,20 @@ static inline UbeHandle Pool_##T##_spawn(Pool_##T* p, T val) { \
     UbeHandle h = { idx, p->slots[idx].gen }; \
     return h; \
 } \
-static inline T* Pool_##T##_get(Pool_##T* p, UbeHandle h) { \
-    if (h.index >= p->count || !p->slots[h.index].active || p->slots[h.index].gen != h.gen) return NULL; \
-    return &p->slots[h.index].data; \
+static inline UbeOption_##N Pool_##N##_get(Pool_##N* p, UbeHandle h) { \
+    UbeOption_##N result = { .has_val = false }; \
+    if (h.index >= p->count || !p->slots[h.index].active || p->slots[h.index].gen != h.gen) return result; \
+    result.has_val = true; \
+    result.val = p->slots[h.index].data; \
+    return result; \
 } \
-static inline bool Pool_##T##_despawn(Pool_##T* p, UbeHandle h) { \
+static inline bool Pool_##N##_despawn(Pool_##N* p, UbeHandle h) { \
     if (h.index >= p->count || !p->slots[h.index].active || p->slots[h.index].gen != h.gen) return false; \
     p->slots[h.index].active = false; \
-    p->slots[h.index].gen++; \
-    p->freelist[p->free_count++] = h.index; \
+    if (p->slots[h.index].gen != UINT32_MAX) { \
+        p->slots[h.index].gen++; \
+        p->freelist[p->free_count++] = h.index; \
+    } \
     return true; \
 }
 
@@ -206,11 +253,15 @@ typedef struct {
     pthread_cond_t not_full;
 } UbeRawChan;
 
-static inline UbeRawChan* ube_raw_chan_new(size_t capacity, size_t elem_size) {
+static inline UbeRawChan* ube_raw_chan_new(int64_t requested_capacity, size_t elem_size) {
+    if (requested_capacity < 0 || (uint64_t)requested_capacity > SIZE_MAX / (elem_size ? elem_size : 1)) ube_panic_capacity(requested_capacity);
+    size_t capacity = requested_capacity > 0 ? (size_t)requested_capacity : 1;
     UbeRawChan* ch = (UbeRawChan*)malloc(sizeof(UbeRawChan));
-    ch->buffer = malloc((capacity > 0 ? capacity : 1) * elem_size);
+    if (!ch) { fprintf(stderr, "[Ube Panic]: Out of memory allocating channel\n"); exit(101); }
+    ch->buffer = malloc(capacity * elem_size);
+    if (!ch->buffer) { fprintf(stderr, "[Ube Panic]: Out of memory allocating channel buffer\n"); exit(101); }
     ch->elem_size = elem_size;
-    ch->capacity = capacity > 0 ? capacity : 1;
+    ch->capacity = capacity;
     ch->count = 0;
     ch->head = 0;
     ch->tail = 0;
@@ -295,9 +346,18 @@ static void* ube_spawn_trampoline(void* raw) {
 static inline void ube_spawn(void* (*fn)(void*), void* arg) {
     pthread_t th;
     UbeSpawnArgs* a = (UbeSpawnArgs*)malloc(sizeof(UbeSpawnArgs));
+    if (!a) {
+        fprintf(stderr, "[Ube Panic]: Out of memory starting Vine\n");
+        exit(101);
+    }
     a->fn = fn;
     a->arg = arg;
-    pthread_create(&th, NULL, ube_spawn_trampoline, a);
+    int status = pthread_create(&th, NULL, ube_spawn_trampoline, a);
+    if (status != 0) {
+        free(a);
+        fprintf(stderr, "[Ube Panic]: Could not start Vine (error %d)\n", status);
+        exit(101);
+    }
     pthread_detach(th);
 }
 

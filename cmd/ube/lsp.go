@@ -156,7 +156,7 @@ func publish(uri, source string) {
 }
 func completionItems() []map[string]any {
 	items := []map[string]any{}
-	for _, s := range strings.Fields("fn let mut struct enum match if else while for in scope spawn return break continue defer or_else import select extern i32 u32 i64 u64 u8 f32 f64 bool string void") {
+	for _, s := range strings.Fields("fn let mut struct enum match if else while for in scope unsafe spawn return break continue defer or_else import select extern i32 u32 i64 u64 u8 f32 f64 bool string void") {
 		items = append(items, map[string]any{"label": s, "kind": 14})
 	}
 	return items

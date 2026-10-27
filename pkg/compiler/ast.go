@@ -46,9 +46,10 @@ func (e *UnaryExpr) Loc() SourceLocation { return e.At }
 func (e *UnaryExpr) exprNode()           {}
 
 type CallExpr struct {
-	At     SourceLocation
-	Callee Expr
-	Args   []Expr
+	At       SourceLocation
+	Callee   Expr
+	Args     []Expr
+	PoolElem UbeType
 }
 
 func (e *CallExpr) Loc() SourceLocation { return e.At }
@@ -64,9 +65,10 @@ func (e *MemberExpr) Loc() SourceLocation { return e.At }
 func (e *MemberExpr) exprNode()           {}
 
 type IndexExpr struct {
-	At     SourceLocation
-	Target Expr
-	Index  Expr
+	At         SourceLocation
+	Target     Expr
+	Index      Expr
+	TargetType UbeType
 }
 
 func (e *IndexExpr) Loc() SourceLocation { return e.At }
@@ -145,6 +147,14 @@ type ErrorExpr struct {
 
 func (e *ErrorExpr) Loc() SourceLocation { return e.At }
 func (e *ErrorExpr) exprNode()           {}
+
+type UnsafeExpr struct {
+	At    SourceLocation
+	Value Expr
+}
+
+func (e *UnsafeExpr) Loc() SourceLocation { return e.At }
+func (e *UnsafeExpr) exprNode()           {}
 
 // Statements
 type Stmt interface {
@@ -246,6 +256,14 @@ type ScopeStmt struct {
 func (s *ScopeStmt) Loc() SourceLocation { return s.At }
 func (s *ScopeStmt) stmtNode()           {}
 
+type UnsafeStmt struct {
+	At   SourceLocation
+	Body *BlockStmt
+}
+
+func (s *UnsafeStmt) Loc() SourceLocation { return s.At }
+func (s *UnsafeStmt) stmtNode()           {}
+
 type LoopControlStmt struct {
 	At       SourceLocation
 	Continue bool
@@ -263,9 +281,10 @@ func (s *SpawnStmt) Loc() SourceLocation { return s.At }
 func (s *SpawnStmt) stmtNode()           {}
 
 type MatchStmt struct {
-	At   SourceLocation
-	Expr Expr
-	Arms []MatchArm
+	At       SourceLocation
+	Expr     Expr
+	Arms     []MatchArm
+	EnumName string
 }
 type MatchArm struct {
 	At       SourceLocation

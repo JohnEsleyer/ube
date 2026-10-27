@@ -61,7 +61,7 @@
       "patterns": [
         {
           "name": "keyword.control.ube",
-          "match": "\\b(if|else|while|for|in|return|break|continue|match|select|spawn|scope|defer|or_else)\\b"
+          "match": "\\b(if|else|while|for|in|return|break|continue|match|select|spawn|scope|unsafe|defer|or_else)\\b"
         },
         {
           "name": "keyword.other.ube",

@@ -29,6 +29,7 @@ var keywords = map[string]TokenType{
 	"or_else":  TokenOrElse,
 	"import":   TokenImport,
 	"defer":    TokenDefer,
+	"unsafe":   TokenUnsafe,
 	"true":     TokenBool,
 	"false":    TokenBool,
 	"null":     TokenNull,

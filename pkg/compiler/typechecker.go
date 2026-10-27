@@ -6,8 +6,10 @@ import (
 )
 
 type VarInfo struct {
-	Type  UbeType
-	IsMut bool
+	Type       UbeType
+	IsMut      bool
+	Depth      int
+	ValueDepth int
 }
 
 type FuncSignature struct {
@@ -16,13 +18,15 @@ type FuncSignature struct {
 }
 
 type TypeEnvironment struct {
-	Parent    *TypeEnvironment
-	Vars      map[string]VarInfo
-	Structs   map[string][]FieldDecl
-	Enums     map[string][]VariantDecl
-	Funcs     map[string]FuncSignature
-	CurRet    UbeType
-	LoopDepth int
+	Parent      *TypeEnvironment
+	Vars        map[string]VarInfo
+	Structs     map[string][]FieldDecl
+	Enums       map[string][]VariantDecl
+	Funcs       map[string]FuncSignature
+	CurRet      UbeType
+	LoopDepth   int
+	ScopeDepth  int
+	UnsafeDepth int
 }
 
 func NewTypeEnvironment(parent *TypeEnvironment) *TypeEnvironment {
@@ -35,6 +39,17 @@ func NewTypeEnvironment(parent *TypeEnvironment) *TypeEnvironment {
 	}
 }
 
+func childTypeEnvironment(parent *TypeEnvironment) *TypeEnvironment {
+	env := NewTypeEnvironment(parent)
+	if parent != nil {
+		env.CurRet = parent.CurRet
+		env.LoopDepth = parent.LoopDepth
+		env.ScopeDepth = parent.ScopeDepth
+		env.UnsafeDepth = parent.UnsafeDepth
+	}
+	return env
+}
+
 func (e *TypeEnvironment) LookupVar(name string) (VarInfo, bool) {
 	if v, ok := e.Vars[name]; ok {
 		return v, true
@@ -45,12 +60,125 @@ func (e *TypeEnvironment) LookupVar(name string) (VarInfo, bool) {
 	return VarInfo{}, false
 }
 
+func (e *TypeEnvironment) updateVar(name string, update func(*VarInfo)) bool {
+	if _, ok := e.Vars[name]; ok {
+		value := e.Vars[name]
+		update(&value)
+		e.Vars[name] = value
+		return true
+	}
+	if e.Parent != nil {
+		return e.Parent.updateVar(name, update)
+	}
+	return false
+}
+
 type Typechecker struct {
-	Global *TypeEnvironment
+	Global    *TypeEnvironment
+	Externs   map[string]bool
+	HasUnsafe bool
+}
+
+func (tc *Typechecker) hasLifetime(t UbeType) bool {
+	return tc.hasLifetimeSeen(t, map[string]bool{})
+}
+
+func (tc *Typechecker) hasLifetimeSeen(t UbeType, seen map[string]bool) bool {
+	switch v := t.(type) {
+	case PointerType, SliceType, StringType:
+		return true
+	case ArrayType:
+		return tc.hasLifetimeSeen(v.Elem, seen)
+	case OptionalType:
+		return tc.hasLifetimeSeen(v.Inner, seen)
+	case ResultType:
+		return tc.hasLifetimeSeen(v.Ok, seen) || tc.hasLifetimeSeen(v.Err, seen)
+	case CustomType:
+		if seen[v.Name] {
+			return false
+		}
+		seen[v.Name] = true
+		for _, field := range tc.Global.Structs[v.Name] {
+			if tc.hasLifetimeSeen(field.Type, seen) {
+				return true
+			}
+		}
+		for _, variant := range tc.Global.Enums[v.Name] {
+			for _, fieldType := range variant.Types {
+				if tc.hasLifetimeSeen(fieldType, seen) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func (tc *Typechecker) exprDepth(expr Expr, env *TypeEnvironment) int {
+	switch e := expr.(type) {
+	case *IdentExpr:
+		if info, ok := env.LookupVar(e.Name); ok {
+			return info.ValueDepth
+		}
+		return 0
+	case *LiteralExpr:
+		return 0
+	case *SliceInitExpr:
+		return env.ScopeDepth
+	case *ArrayInitExpr:
+		depth := 0
+		for _, item := range e.Elements {
+			if d := tc.exprDepth(item, env); d > depth {
+				depth = d
+			}
+		}
+		return depth
+	case *UnaryExpr:
+		if e.Op == "&" {
+			return env.ScopeDepth
+		}
+		return tc.exprDepth(e.Operand, env)
+	case *MemberExpr:
+		return tc.exprDepth(e.Target, env)
+	case *IndexExpr:
+		return tc.exprDepth(e.Target, env)
+	case *SliceSubExpr:
+		return tc.exprDepth(e.Target, env)
+	case *StructInitExpr:
+		depth := 0
+		for _, field := range e.Fields {
+			if d := tc.exprDepth(field.Val, env); d > depth {
+				depth = d
+			}
+		}
+		return depth
+	case *BinaryExpr:
+		if e.Op == "+" {
+			if left, err := tc.inferExpr(e.Left, env); err == nil && left.String() == "string" {
+				return env.ScopeDepth
+			}
+		}
+		if tc.exprDepth(e.Left, env) > tc.exprDepth(e.Right, env) {
+			return tc.exprDepth(e.Left, env)
+		}
+		return tc.exprDepth(e.Right, env)
+	case *OrElseExpr:
+		if tc.exprDepth(e.Primary, env) > tc.exprDepth(e.Fallback, env) {
+			return tc.exprDepth(e.Primary, env)
+		}
+		return tc.exprDepth(e.Fallback, env)
+	case *TryExpr:
+		return tc.exprDepth(e.Operand, env)
+	case *ErrorExpr:
+		return tc.exprDepth(e.Arg, env)
+	case *CallExpr:
+		return env.ScopeDepth
+	}
+	return env.ScopeDepth
 }
 
 func NewTypechecker() *Typechecker {
-	tc := &Typechecker{Global: NewTypeEnvironment(nil)}
+	tc := &Typechecker{Global: NewTypeEnvironment(nil), Externs: make(map[string]bool)}
 	tc.Global.Funcs["println"] = FuncSignature{RetType: PrimitiveType{Name: "void"}}
 	tc.Global.Funcs["println_str"] = FuncSignature{
 		Params:  []FieldDecl{{Name: "s", Type: StringType{}}},
@@ -72,10 +200,28 @@ func printableType(t UbeType) bool {
 	return false
 }
 
+func integerType(t UbeType) bool {
+	if p, ok := t.(PrimitiveType); ok {
+		switch p.Name {
+		case "i32", "u32", "u8", "i64", "u64":
+			return true
+		}
+	}
+	return false
+}
+
+func requireUnsafePointerUse(t UbeType, env *TypeEnvironment, loc SourceLocation) error {
+	if _, isPointer := t.(PointerType); isPointer && env.UnsafeDepth == 0 {
+		return fmt.Errorf("[%s] Safety Error: using a raw pointer requires an unsafe block", loc)
+	}
+	return nil
+}
+
 func (tc *Typechecker) checkBlock(b *BlockStmt, env *TypeEnvironment) error {
-	bEnv := NewTypeEnvironment(env)
+	bEnv := childTypeEnvironment(env)
 	bEnv.CurRet = env.CurRet
 	bEnv.LoopDepth = env.LoopDepth
+	bEnv.ScopeDepth = env.ScopeDepth + 1
 	for _, stmt := range b.Stmts {
 		if err := tc.checkStmt(stmt, bEnv); err != nil {
 			return err
@@ -100,7 +246,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			}
 			valT = s.Type
 		}
-		env.Vars[s.Name] = VarInfo{Type: valT, IsMut: s.Mut}
+		env.Vars[s.Name] = VarInfo{Type: valT, IsMut: s.Mut, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Value, env)}
 	case *DeferStmt:
 		if _, ok := s.Call.(*CallExpr); !ok {
 			return fmt.Errorf("[%s] defer requires a function call", s.At)
@@ -113,13 +259,24 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		if err != nil {
 			return err
 		}
+		if indexed, ok := s.LHS.(*IndexExpr); ok {
+			if _, isString := indexed.TargetType.(StringType); isString {
+				return fmt.Errorf("[%s] cannot assign to a string index", s.At)
+			}
+		}
 		rhsT, err := tc.inferExpr(s.RHS, env)
 		if err != nil {
 			return err
 		}
-		if id, ok := s.LHS.(*IdentExpr); ok {
-			if vInfo, found := env.LookupVar(id.Name); found && !vInfo.IsMut {
-				return fmt.Errorf("[%s] Cannot assign to immutable variable '%s'", s.At, id.Name)
+		if id := assignmentRoot(s.LHS); id != "" {
+			if vInfo, found := env.LookupVar(id); found {
+				if !vInfo.IsMut {
+					return fmt.Errorf("[%s] Cannot assign through immutable variable '%s'", s.At, id)
+				}
+				if tc.hasLifetime(lhsT) && tc.exprDepth(s.RHS, env) > vInfo.Depth {
+					return fmt.Errorf("[%s] Safety Error: value rooted at scope depth %d cannot escape into '%s' at depth %d", s.At, tc.exprDepth(s.RHS, env), id, vInfo.Depth)
+				}
+				env.updateVar(id, func(v *VarInfo) { v.ValueDepth = tc.exprDepth(s.RHS, env) })
 			}
 		}
 		return tc.assertCompat(lhsT, rhsT, s.At)
@@ -131,6 +288,9 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			if err != nil {
 				return err
 			}
+			if tc.hasLifetime(valT) && tc.exprDepth(s.Value, env) > 0 {
+				return fmt.Errorf("[%s] Safety Error: cannot return a reference rooted in this function's local scope", s.At)
+			}
 			if resT, ok := expected.(ResultType); ok {
 				if _, isErr := s.Value.(*ErrorExpr); isErr {
 					return tc.assertCompat(resT.Err, valT, s.At)
@@ -139,6 +299,9 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			} else if optT, ok := expected.(OptionalType); ok {
 				if optT.Inner.String() != "void" {
 					if _, isNull := s.Value.(*LiteralExpr); !isNull {
+						if _, alreadyOptional := valT.(OptionalType); alreadyOptional {
+							return tc.assertCompat(expected, valT, s.At)
+						}
 						return tc.assertCompat(optT.Inner, valT, s.At)
 					}
 				}
@@ -174,10 +337,8 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		if !ok {
 			return fmt.Errorf("[%s] if-let requires optional type, got '%s'", s.At, optT)
 		}
-		thenEnv := NewTypeEnvironment(env)
-		thenEnv.CurRet = env.CurRet
-		thenEnv.LoopDepth = env.LoopDepth
-		thenEnv.Vars[s.VarName] = VarInfo{Type: oType.Inner, IsMut: false}
+		thenEnv := childTypeEnvironment(env)
+		thenEnv.Vars[s.VarName] = VarInfo{Type: oType.Inner, IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Expr, env)}
 		if err := tc.checkBlock(s.Then, thenEnv); err != nil {
 			return err
 		}
@@ -196,8 +357,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		if err := tc.assertCompat(PrimitiveType{Name: "bool"}, condT, s.At); err != nil {
 			return err
 		}
-		loopEnv := NewTypeEnvironment(env)
-		loopEnv.CurRet = env.CurRet
+		loopEnv := childTypeEnvironment(env)
 		loopEnv.LoopDepth = env.LoopDepth + 1
 		return tc.checkBlock(s.Body, loopEnv)
 
@@ -206,10 +366,9 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		if err != nil {
 			return err
 		}
-		loopEnv := NewTypeEnvironment(env)
-		loopEnv.CurRet = env.CurRet
+		loopEnv := childTypeEnvironment(env)
 		loopEnv.LoopDepth = env.LoopDepth + 1
-		loopEnv.Vars[s.VarName] = VarInfo{Type: cType, IsMut: false}
+		loopEnv.Vars[s.VarName] = VarInfo{Type: cType, IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Call, env)}
 		return tc.checkBlock(s.Body, loopEnv)
 
 	case *ForStmt:
@@ -221,14 +380,18 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		if !ok {
 			return fmt.Errorf("[%s] for-in requires slice type, got '%s'", s.At, iterT)
 		}
-		loopEnv := NewTypeEnvironment(env)
-		loopEnv.CurRet = env.CurRet
+		loopEnv := childTypeEnvironment(env)
 		loopEnv.LoopDepth = env.LoopDepth + 1
-		loopEnv.Vars[s.ItemName] = VarInfo{Type: slT.Elem, IsMut: false}
+		loopEnv.Vars[s.ItemName] = VarInfo{Type: slT.Elem, IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Iter, env)}
 		return tc.checkBlock(s.Body, loopEnv)
 
 	case *ScopeStmt:
 		return tc.checkBlock(s.Body, env)
+	case *UnsafeStmt:
+		tc.HasUnsafe = true
+		unsafeEnv := childTypeEnvironment(env)
+		unsafeEnv.UnsafeDepth = env.UnsafeDepth + 1
+		return tc.checkBlock(s.Body, unsafeEnv)
 	case *LoopControlStmt:
 		if env.LoopDepth == 0 {
 			return fmt.Errorf("[%s] %s is only valid inside a loop", s.At, map[bool]string{true: "continue", false: "break"}[s.Continue])
@@ -258,10 +421,8 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 				return fmt.Errorf("[%s] select case must receive from Chan, got '%s'", sc.At, chT)
 			}
 			sc.ChanElem = chanType.Elem
-			caseEnv := NewTypeEnvironment(env)
-			caseEnv.CurRet = env.CurRet
-			caseEnv.LoopDepth = env.LoopDepth
-			caseEnv.Vars[sc.VarName] = VarInfo{Type: chanType.Elem, IsMut: false}
+			caseEnv := childTypeEnvironment(env)
+			caseEnv.Vars[sc.VarName] = VarInfo{Type: chanType.Elem, IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(sc.Chan, env)}
 			if err := tc.checkBlock(sc.Body, caseEnv); err != nil {
 				return err
 			}
@@ -281,6 +442,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		if !ok {
 			return fmt.Errorf("[%s] match target must be enum, got '%s'", s.At, mType)
 		}
+		s.EnumName = custom.Name
 		vars, ok := tc.Global.Enums[custom.Name]
 		if !ok {
 			return fmt.Errorf("[%s] unknown enum '%s'", s.At, custom.Name)
@@ -297,11 +459,9 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			if len(expected) != len(arm.Bindings) {
 				return fmt.Errorf("[%s] variant '%s' expects %d bindings, got %d", arm.At, arm.Variant, len(expected), len(arm.Bindings))
 			}
-			armEnv := NewTypeEnvironment(env)
-			armEnv.CurRet = env.CurRet
-			armEnv.LoopDepth = env.LoopDepth
+			armEnv := childTypeEnvironment(env)
 			for i, b := range arm.Bindings {
-				armEnv.Vars[b] = VarInfo{Type: expected[i], IsMut: false}
+				armEnv.Vars[b] = VarInfo{Type: expected[i], IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Expr, env)}
 			}
 			if blk, ok := arm.Body.(*BlockStmt); ok {
 				if err := tc.checkBlock(blk, armEnv); err != nil {
@@ -321,13 +481,33 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 	return nil
 }
 
+func assignmentRoot(expr Expr) string {
+	switch e := expr.(type) {
+	case *IdentExpr:
+		return e.Name
+	case *MemberExpr:
+		return assignmentRoot(e.Target)
+	case *IndexExpr:
+		return assignmentRoot(e.Target)
+	}
+	return ""
+}
+
 func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, error) {
 	switch e := expr.(type) {
+	case *UnsafeExpr:
+		tc.HasUnsafe = true
+		unsafeEnv := childTypeEnvironment(env)
+		unsafeEnv.UnsafeDepth = env.UnsafeDepth + 1
+		return tc.inferExpr(e.Value, unsafeEnv)
 	case *LiteralExpr:
 		return e.Type, nil
 
 	case *IdentExpr:
 		if v, ok := env.LookupVar(e.Name); ok {
+			if err := requireUnsafePointerUse(v.Type, env, e.At); err != nil {
+				return nil, err
+			}
 			return v.Type, nil
 		}
 		if _, ok := tc.Global.Enums[e.Name]; ok {
@@ -388,11 +568,27 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			return nil, err
 		}
 		if e.Op == "&" {
+			if env.UnsafeDepth == 0 {
+				return nil, fmt.Errorf("[%s] Safety Error: taking a raw pointer requires an unsafe block", e.At)
+			}
 			return PointerType{Base: opndT}, nil
+		}
+		if e.Op == "*" {
+			if env.UnsafeDepth == 0 {
+				return nil, fmt.Errorf("[%s] Safety Error: dereferencing a raw pointer requires an unsafe block", e.At)
+			}
+			ptr, ok := opndT.(PointerType)
+			if !ok {
+				return nil, fmt.Errorf("[%s] cannot dereference non-pointer type '%s'", e.At, opndT)
+			}
+			return ptr.Base, nil
 		}
 		return opndT, nil
 
 	case *CallExpr:
+		if id, ok := e.Callee.(*IdentExpr); ok && tc.Externs[id.Name] && env.UnsafeDepth == 0 {
+			return nil, fmt.Errorf("[%s] Safety Error: foreign function '%s' can only be called inside unsafe { ... }", e.At, id.Name)
+		}
 		if id, ok := e.Callee.(*IdentExpr); ok && id.Name == "println" {
 			if len(e.Args) != 1 {
 				return nil, fmt.Errorf("[%s] println expects one argument", e.At)
@@ -408,8 +604,25 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		}
 		if mem, ok := e.Callee.(*MemberExpr); ok {
 			if id, ok := mem.Target.(*IdentExpr); ok {
-				if _, ok := tc.Global.Enums[id.Name]; ok {
-					return CustomType{Name: id.Name}, nil
+				if variants, ok := tc.Global.Enums[id.Name]; ok {
+					for _, variant := range variants {
+						if variant.Name == mem.Member {
+							if len(e.Args) != len(variant.Types) {
+								return nil, fmt.Errorf("[%s] enum variant '%s' expects %d arguments, got %d", e.At, mem.Member, len(variant.Types), len(e.Args))
+							}
+							for i, arg := range e.Args {
+								actual, err := tc.inferExpr(arg, env)
+								if err != nil {
+									return nil, err
+								}
+								if err := tc.assertCompat(variant.Types[i], actual, arg.Loc()); err != nil {
+									return nil, err
+								}
+							}
+							return CustomType{Name: id.Name}, nil
+						}
+					}
+					return nil, fmt.Errorf("[%s] enum '%s' has no variant '%s'", e.At, id.Name, mem.Member)
 				}
 			}
 			tgtT, err := tc.inferExpr(mem.Target, env)
@@ -428,43 +641,141 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			}
 			if ch, ok := tgtT.(ChanType); ok {
 				if mem.Member == "new" {
+					if len(e.Args) != 1 {
+						return nil, fmt.Errorf("[%s] Chan.new expects a capacity", e.At)
+					}
+					capacityType, err := tc.inferExpr(e.Args[0], env)
+					if err != nil {
+						return nil, err
+					}
+					if !integerType(capacityType) {
+						return nil, fmt.Errorf("[%s] channel capacity must be an integer, got '%s'", e.At, capacityType)
+					}
 					return ch, nil
 				}
 				if mem.Member == "recv" {
+					if len(e.Args) != 0 {
+						return nil, fmt.Errorf("[%s] Chan.recv expects no arguments", e.At)
+					}
 					return ch.Elem, nil
 				}
-				if mem.Member == "send" || mem.Member == "close" {
+				if mem.Member == "close" {
+					if len(e.Args) != 0 {
+						return nil, fmt.Errorf("[%s] Chan.close expects no arguments", e.At)
+					}
+					return PrimitiveType{Name: "void"}, nil
+				}
+				if mem.Member == "send" {
+					if len(e.Args) != 1 {
+						return nil, fmt.Errorf("[%s] send expects 1 argument", e.At)
+					}
+					argT, err := tc.inferExpr(e.Args[0], env)
+					if err != nil {
+						return nil, err
+					}
+					if !argT.IsFlat(tc.Global) {
+						return nil, fmt.Errorf("[%s] cannot send non-flat type '%s' across a channel", e.At, argT)
+					}
+					if err := tc.assertCompat(ch.Elem, argT, e.At); err != nil {
+						return nil, err
+					}
 					return PrimitiveType{Name: "void"}, nil
 				}
 			}
 			if p, ok := tgtT.(PoolType); ok {
+				e.PoolElem = p.Elem
 				if mem.Member == "new" {
+					if len(e.Args) != 1 {
+						return nil, fmt.Errorf("[%s] Pool.new expects a capacity", e.At)
+					}
+					capacityType, err := tc.inferExpr(e.Args[0], env)
+					if err != nil {
+						return nil, err
+					}
+					if !integerType(capacityType) {
+						return nil, fmt.Errorf("[%s] pool capacity must be an integer, got '%s'", e.At, capacityType)
+					}
 					return p, nil
 				}
 				if mem.Member == "spawn" {
+					if len(e.Args) != 1 {
+						return nil, fmt.Errorf("[%s] Pool.spawn expects one value", e.At)
+					}
+					valueType, err := tc.inferExpr(e.Args[0], env)
+					if err != nil {
+						return nil, err
+					}
+					if err := tc.assertCompat(p.Elem, valueType, e.At); err != nil {
+						return nil, err
+					}
 					return CustomType{Name: "UbeHandle"}, nil
 				}
 				if mem.Member == "get" {
-					return PointerType{Base: p.Elem}, nil
+					if len(e.Args) != 1 {
+						return nil, fmt.Errorf("[%s] Pool.get expects a handle", e.At)
+					}
+					handleType, err := tc.inferExpr(e.Args[0], env)
+					if err != nil {
+						return nil, err
+					}
+					if err := tc.assertCompat(CustomType{Name: "UbeHandle"}, handleType, e.At); err != nil {
+						return nil, err
+					}
+					return OptionalType{Inner: p.Elem}, nil
 				}
 				if mem.Member == "despawn" {
+					if len(e.Args) != 1 {
+						return nil, fmt.Errorf("[%s] Pool.despawn expects a handle", e.At)
+					}
+					handleType, err := tc.inferExpr(e.Args[0], env)
+					if err != nil {
+						return nil, err
+					}
+					if err := tc.assertCompat(CustomType{Name: "UbeHandle"}, handleType, e.At); err != nil {
+						return nil, err
+					}
 					return PrimitiveType{Name: "bool"}, nil
 				}
 			}
 			methodKey := fmt.Sprintf("%s.%s", tgtT, mem.Member)
 			if sig, ok := tc.Global.Funcs[methodKey]; ok {
+				if err := tc.checkCallArgs(e.Args, sig.Params, env, e.At); err != nil {
+					return nil, err
+				}
+				if err := requireUnsafePointerUse(sig.RetType, env, e.At); err != nil {
+					return nil, err
+				}
 				return sig.RetType, nil
 			}
 		}
 		if id, ok := e.Callee.(*IdentExpr); ok {
 			if sig, ok := tc.Global.Funcs[id.Name]; ok {
+				if err := tc.checkCallArgs(e.Args, sig.Params, env, e.At); err != nil {
+					return nil, err
+				}
+				if err := requireUnsafePointerUse(sig.RetType, env, e.At); err != nil {
+					return nil, err
+				}
 				return sig.RetType, nil
 			}
+			return nil, fmt.Errorf("[%s] Undefined function '%s'", e.At, id.Name)
 		}
-		return PrimitiveType{Name: "void"}, nil
+		return nil, fmt.Errorf("[%s] Unsupported call target", e.At)
 
 	case *MemberExpr:
+		if id, ok := e.Target.(*IdentExpr); ok {
+			if variants, isEnum := tc.Global.Enums[id.Name]; isEnum {
+				for _, variant := range variants {
+					if variant.Name == e.Member && len(variant.Types) == 0 {
+						return CustomType{Name: id.Name}, nil
+					}
+				}
+			}
+		}
 		if e.Member == "ptr" {
+			if env.UnsafeDepth == 0 {
+				return nil, fmt.Errorf("[%s] Safety Error: raw pointer access requires an unsafe block", e.At)
+			}
 			return PointerType{Base: PrimitiveType{Name: "u8"}}, nil
 		}
 		tgtT, err := tc.inferExpr(e.Target, env)
@@ -475,6 +786,9 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			if fields, ok := tc.Global.Structs[custom.Name]; ok {
 				for _, f := range fields {
 					if f.Name == e.Member {
+						if err := requireUnsafePointerUse(f.Type, env, e.At); err != nil {
+							return nil, err
+						}
 						return f.Type, nil
 					}
 				}
@@ -488,12 +802,21 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			return nil, err
 		}
 		if sl, ok := tgtT.(SliceType); ok {
+			e.TargetType = tgtT
+			if err := requireUnsafePointerUse(sl.Elem, env, e.At); err != nil {
+				return nil, err
+			}
 			return sl.Elem, nil
 		}
 		if arr, ok := tgtT.(ArrayType); ok {
+			e.TargetType = tgtT
+			if err := requireUnsafePointerUse(arr.Elem, env, e.At); err != nil {
+				return nil, err
+			}
 			return arr.Elem, nil
 		}
 		if _, ok := tgtT.(StringType); ok {
+			e.TargetType = tgtT
 			return PrimitiveType{Name: "u8"}, nil
 		}
 		return nil, fmt.Errorf("[%s] Type '%s' does not support indexing", e.At, tgtT)
@@ -540,9 +863,11 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		return ArrayType{Elem: e.Elem, Size: e.Size}, nil
 	case *GenericTypeExpr:
 		if e.BaseType == "Chan" {
-			return ChanType{Elem: e.ElemType}, nil
+			ch := ChanType{Elem: e.ElemType}
+			return ch, tc.validateType(ch, e.At)
 		}
-		return PoolType{Elem: e.ElemType}, nil
+		pool := PoolType{Elem: e.ElemType}
+		return pool, tc.validateType(pool, e.At)
 
 	case *StructInitExpr:
 		return CustomType{Name: e.Name}, nil
@@ -577,6 +902,25 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 	return nil, fmt.Errorf("Cannot infer expression type")
 }
 
+func (tc *Typechecker) checkCallArgs(args []Expr, params []FieldDecl, env *TypeEnvironment, loc SourceLocation) error {
+	if len(args) != len(params) {
+		return fmt.Errorf("[%s] function expects %d arguments, got %d", loc, len(params), len(args))
+	}
+	for i, arg := range args {
+		actual, err := tc.inferExpr(arg, env)
+		if err != nil {
+			return err
+		}
+		if _, rawPointer := actual.(PointerType); rawPointer && env.UnsafeDepth == 0 {
+			return fmt.Errorf("[%s] Safety Error: passing a raw pointer requires an unsafe block", arg.Loc())
+		}
+		if err := tc.assertCompat(params[i].Type, actual, arg.Loc()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (tc *Typechecker) typeFromName(name string) UbeType {
 	switch name {
 	case "i32", "u32", "i64", "u64", "u8", "f32", "f64", "bool", "void":
@@ -597,6 +941,9 @@ func (tc *Typechecker) assertCompat(expected, actual UbeType, loc SourceLocation
 	}
 	if opt, ok := expected.(OptionalType); ok {
 		if actOpt, ok := actual.(OptionalType); ok && actOpt.Inner.String() == "void" {
+			return nil
+		}
+		if actOpt, ok := actual.(OptionalType); ok && opt.Inner.String() == actOpt.Inner.String() {
 			return nil
 		}
 		if opt.Inner.String() == actual.String() {
@@ -630,12 +977,24 @@ func (tc *Typechecker) validateType(t UbeType, loc SourceLocation) error {
 		if err := tc.validateType(v.Elem, loc); err != nil {
 			return err
 		}
+		if p, ok := v.Elem.(PrimitiveType); ok && p.Name == "void" {
+			return fmt.Errorf("[%s] Chan element type cannot be void", loc)
+		}
 		if !v.Elem.IsFlat(tc.Global) {
 			return fmt.Errorf("[%s] Chan element type '%s' must be flat", loc, v.Elem)
 		}
 		return nil
 	case PoolType:
-		return tc.validateType(v.Elem, loc)
+		if err := tc.validateType(v.Elem, loc); err != nil {
+			return err
+		}
+		if p, ok := v.Elem.(PrimitiveType); ok && p.Name == "void" {
+			return fmt.Errorf("[%s] Pool element type cannot be void", loc)
+		}
+		if !v.Elem.IsFlat(tc.Global) {
+			return fmt.Errorf("[%s] Pool element type '%s' must be flat", loc, v.Elem)
+		}
+		return nil
 	case CustomType:
 		return nil
 	default:
@@ -709,6 +1068,7 @@ func (tc *Typechecker) Check(prog *Program) error {
 				return err
 			}
 			tc.Global.Funcs[d.Name] = FuncSignature{Params: d.Params, RetType: d.RetType}
+			tc.Externs[d.Name] = true
 		}
 	}
 
@@ -716,11 +1076,12 @@ func (tc *Typechecker) Check(prog *Program) error {
 		if fn, ok := decl.(*FnDecl); ok {
 			env := NewTypeEnvironment(tc.Global)
 			env.CurRet = fn.RetType
+			env.ScopeDepth = 0
 			if fn.Receiver != nil {
-				env.Vars[fn.Receiver.Name] = VarInfo{Type: fn.Receiver.Type, IsMut: false}
+				env.Vars[fn.Receiver.Name] = VarInfo{Type: fn.Receiver.Type, IsMut: false, Depth: 0, ValueDepth: 0}
 			}
 			for _, p := range fn.Params {
-				env.Vars[p.Name] = VarInfo{Type: p.Type, IsMut: false}
+				env.Vars[p.Name] = VarInfo{Type: p.Type, IsMut: false, Depth: 0, ValueDepth: 0}
 			}
 			if err := tc.checkBlock(fn.Body, env); err != nil {
 				return err

@@ -44,6 +44,8 @@ dirs:
             - md
             - py
             - svg
+    editors/vscode/node_modules:
+        enabled: false
     examples:
         enabled: true
         extensions:

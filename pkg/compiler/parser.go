@@ -300,6 +300,9 @@ func (p *Parser) parseStmt() Stmt {
 	case TokenScope:
 		p.advance()
 		return &ScopeStmt{At: tok.Loc, Body: p.parseBlock()}
+	case TokenUnsafe:
+		p.advance()
+		return &UnsafeStmt{At: tok.Loc, Body: p.parseBlock()}
 	case TokenSpawn:
 		p.advance()
 		call := p.parseExpr()
@@ -561,7 +564,7 @@ func (p *Parser) parseMultiplicative() Expr {
 
 func (p *Parser) parseUnary() Expr {
 	tok := p.peek(0)
-	if tok.Type == TokenMinus || tok.Type == TokenBang || tok.Type == TokenAmp {
+	if tok.Type == TokenMinus || tok.Type == TokenBang || tok.Type == TokenAmp || tok.Type == TokenStar {
 		p.advance()
 		operand := p.parseUnary()
 		return &UnaryExpr{At: tok.Loc, Op: tok.Val, Operand: operand}
@@ -577,7 +580,12 @@ func (p *Parser) parsePostfix() Expr {
 			node = &TryExpr{At: loc, Operand: node}
 		} else if p.check(TokenDot) {
 			loc := p.advance().Loc
-			member := p.expect(TokenIdent, "Expected member name").Val
+			var member string
+			if p.check(TokenSpawn) {
+				member = p.advance().Val
+			} else {
+				member = p.expect(TokenIdent, "Expected member name").Val
+			}
 			node = &MemberExpr{At: loc, Target: node, Member: member}
 		} else if p.check(TokenLBracket) {
 			loc := p.advance().Loc
@@ -623,6 +631,13 @@ func (p *Parser) parsePostfix() Expr {
 
 func (p *Parser) parsePrimary() Expr {
 	tok := p.peek(0)
+	if tok.Type == TokenUnsafe {
+		p.advance()
+		p.expect(TokenLBrace, "Expected '{' after unsafe")
+		value := p.parseExpr()
+		p.expect(TokenRBrace, "Expected '}' after unsafe expression")
+		return &UnsafeExpr{At: tok.Loc, Value: value}
+	}
 
 	switch tok.Type {
 	case TokenInt:

@@ -35,6 +35,7 @@ const (
 	TokenOrElse   TokenType = "or_else"
 	TokenImport   TokenType = "import"
 	TokenDefer    TokenType = "defer"
+	TokenUnsafe   TokenType = "unsafe"
 
 	// Symbols & Operators
 	TokenArrow     TokenType = "->"

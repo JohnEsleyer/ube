@@ -52,7 +52,7 @@ fn main() {
     particles.push(Particle{ x: 90.0, y: 100.0, active: true })
 
     // Test B: Struct field mutation (Gap 9)
-    particles.data[0].x = 99.0
+    particles[0].x = 99.0
 
     println("Iterating generic slice []Particle:")
     for p in particles {
@@ -107,7 +107,9 @@ fn main() {
     jobs.close()
 
     // Test G: C FFI Pointer call
-    puts("Direct C FFI call executed successfully via puts(*u8)".ptr)
+    unsafe {
+        puts("Direct C FFI call executed successfully via puts(*u8)".ptr)
+    }
 
     println("=== All gap fixes successfully verified! ===")
 }

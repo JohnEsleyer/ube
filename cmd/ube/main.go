@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -21,7 +22,19 @@ const (
 	colorDim    = "\x1b[2m"
 )
 
-type purityReport struct{ externs []string }
+type purityReport struct {
+	externs   []string
+	hasUnsafe bool
+}
+
+type safetyJSON struct {
+	File             string   `json:"file"`
+	OK               bool     `json:"ok"`
+	Policy           string   `json:"policy"`
+	HasUnsafe        bool     `json:"has_unsafe"`
+	ForeignFunctions []string `json:"foreign_functions"`
+	Error            string   `json:"error,omitempty"`
+}
 type exitCodeError struct{ code int }
 
 func (e exitCodeError) Error() string { return fmt.Sprintf("program exited with status %d", e.code) }
@@ -72,34 +85,70 @@ func loadAndCheck(file string) (*compiler.Program, purityReport, error) {
 	if err != nil {
 		return nil, purityReport{}, err
 	}
-	if err = compiler.NewTypechecker().Check(ast); err != nil {
-		return nil, purityReport{}, err
-	}
-	report := purityReport{}
+	checker := compiler.NewTypechecker()
+	report := purityReport{hasUnsafe: checker.HasUnsafe}
 	for _, decl := range ast.Decls {
 		if foreign, ok := decl.(*compiler.ExternFnDecl); ok {
 			report.externs = append(report.externs, foreign.Name)
 		}
 	}
+	if err = checker.Check(ast); err != nil {
+		report.hasUnsafe = checker.HasUnsafe
+		return ast, report, err
+	}
+	report.hasUnsafe = checker.HasUnsafe
 	return ast, report, nil
 }
 
 func check(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: ube check <file.ube>")
+	formatJSON, strict, file := false, false, ""
+	for _, arg := range args {
+		switch arg {
+		case "--format=json":
+			formatJSON = true
+		case "--strict":
+			strict = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return fmt.Errorf("unknown check option %s", arg)
+			}
+			if file != "" {
+				return fmt.Errorf("check accepts one source file")
+			}
+			file = arg
+		}
+	}
+	if file == "" {
+		return fmt.Errorf("usage: ube check <file.ube> [--strict] [--format=json]")
 	}
 	start := time.Now()
-	_, report, err := loadAndCheck(args[0])
+	_, report, err := loadAndCheck(file)
 	if err != nil {
+		if formatJSON {
+			printSafetyJSON(reportJSON(file, report, false, policyName(strict), err.Error()))
+			return err
+		}
 		return err
 	}
-	fmt.Printf("%s %s (%s)\n", paint("✓ Checked", colorGreen), filepath.Base(args[0]), paint(time.Since(start).Round(time.Millisecond).String(), colorDim))
+	if strict && unsafePresent(report) {
+		err := fmt.Errorf("strict safety check failed: C FFI or unsafe blocks are present")
+		if formatJSON {
+			printSafetyJSON(reportJSON(file, report, false, "strict", err.Error()))
+			return err
+		}
+		return err
+	}
+	if formatJSON {
+		printSafetyJSON(reportJSON(file, report, true, policyName(strict), ""))
+		return nil
+	}
+	fmt.Printf("%s %s (%s)\n", paint("✓ Checked", colorGreen), filepath.Base(file), paint(time.Since(start).Round(time.Millisecond).String(), colorDim))
 	printPurity(report)
 	return nil
 }
 
 func build(args []string) error {
-	file, output, emitC, err := parseBuildArgs(args)
+	file, output, emitC, forbidUnsafe, err := parseBuildArgs(args)
 	if err != nil {
 		return err
 	}
@@ -110,6 +159,9 @@ func build(args []string) error {
 	ast, report, err := loadAndCheck(file)
 	if err != nil {
 		return err
+	}
+	if forbidUnsafe && unsafePresent(report) {
+		return fmt.Errorf("build rejected by --forbid-unsafe: C FFI or unsafe blocks are present")
 	}
 	cPath := filepath.Join(os.TempDir(), fmt.Sprintf("ube-%d.c", time.Now().UnixNano()))
 	if emitC {
@@ -154,35 +206,37 @@ func run(args []string) error {
 	return nil
 }
 
-func parseBuildArgs(args []string) (string, string, bool, error) {
+func parseBuildArgs(args []string) (string, string, bool, bool, error) {
 	if len(args) == 0 {
-		return "", "", false, fmt.Errorf("usage: ube build <file.ube> [-o binary] [--emit-c]")
+		return "", "", false, false, fmt.Errorf("usage: ube build <file.ube> [-o binary] [--emit-c] [--forbid-unsafe]")
 	}
-	file, output, emitC := "", "", false
+	file, output, emitC, forbidUnsafe := "", "", false, false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-o":
 			if i+1 >= len(args) {
-				return "", "", false, fmt.Errorf("-o requires an output path")
+				return "", "", false, false, fmt.Errorf("-o requires an output path")
 			}
 			output = args[i+1]
 			i++
 		case "--emit-c":
 			emitC = true
+		case "--forbid-unsafe":
+			forbidUnsafe = true
 		default:
 			if strings.HasPrefix(args[i], "-") {
-				return "", "", false, fmt.Errorf("unknown build option %s", args[i])
+				return "", "", false, false, fmt.Errorf("unknown build option %s", args[i])
 			}
 			if file != "" {
-				return "", "", false, fmt.Errorf("multiple source files are not supported")
+				return "", "", false, false, fmt.Errorf("multiple source files are not supported")
 			}
 			file = args[i]
 		}
 	}
 	if file == "" {
-		return "", "", false, fmt.Errorf("specify a .ube source file")
+		return "", "", false, false, fmt.Errorf("specify a .ube source file")
 	}
-	return file, output, emitC, nil
+	return file, output, emitC, forbidUnsafe, nil
 }
 
 func compileNative(ast *compiler.Program, cPath, output string, optimize bool) error {
@@ -214,13 +268,38 @@ func compileNative(ast *compiler.Program, cPath, output string, optimize bool) e
 }
 
 func printPurity(report purityReport) {
-	if len(report.externs) == 0 {
-		fmt.Println("  Program: Pure Ube (no declared C FFI)")
-		fmt.Println("  Safety:  Uses Ube-managed runtime; this label is not a formal memory-safety proof")
-		return
+	switch {
+	case report.hasUnsafe:
+		fmt.Println("  Safety: Tier 3 — Raw unsafe boundary")
+		if len(report.externs) > 0 {
+			fmt.Printf("  C FFI:  %s\n", strings.Join(report.externs, ", "))
+		}
+		fmt.Println("  Note:   Memory safety depends on the unsafe code and external library contracts")
+	case len(report.externs) > 0:
+		fmt.Println("  Safety: Tier 2 — FFI declared; no unsafe blocks detected")
+		fmt.Printf("  C FFI:  %s\n", strings.Join(report.externs, ", "))
+		fmt.Println("  Note:   Wrapper audit status cannot be inferred by the compiler")
+	default:
+		fmt.Println("  Safety: Tier 1 — Pure Ube (no C FFI or unsafe blocks)")
+		fmt.Println("  Note:   Classification is an audit aid, not a formal proof")
 	}
-	fmt.Printf("  Program: C FFI (foreign functions: %s)\n", strings.Join(report.externs, ", "))
-	fmt.Println("  Safety:  Memory safety also depends on the external C libraries")
+}
+
+func unsafePresent(report purityReport) bool { return report.hasUnsafe || len(report.externs) > 0 }
+func policyName(strict bool) string {
+	if strict {
+		return "strict"
+	}
+	return "informational"
+}
+func reportJSON(file string, report purityReport, ok bool, policy, message string) safetyJSON {
+	return safetyJSON{File: file, OK: ok, Policy: policy, HasUnsafe: report.hasUnsafe, ForeignFunctions: report.externs, Error: message}
+}
+func printSafetyJSON(value safetyJSON) {
+	if value.ForeignFunctions == nil {
+		value.ForeignFunctions = []string{}
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(value)
 }
 
 func paint(text, color string) string {
@@ -254,5 +333,5 @@ func newProject(args []string) error {
 }
 
 func help() {
-	fmt.Printf("🍠 Ube %s\n\nUsage: ube <command> [options]\n       ube <file.ube>\n\nCommands:\n  new <name>                Create a starter project\n  check <file.ube>          Check syntax and types\n  build <file.ube> [-o bin] Build a native executable\n  run <file.ube> [args...]  Compile and run a program\n  lsp                       Start the language server\n  version                   Show the version\n  help                      Show this help\n\nBuild options:\n  -o <path>                 Set executable output path\n  --emit-c                  Keep generated C beside the output\n", version)
+	fmt.Printf("🍠 Ube %s\n\nUsage: ube <command> [options]\n       ube <file.ube>\n\nCommands:\n  new <name>                Create a starter project\n  check <file.ube>          Check syntax and types\n  build <file.ube> [-o bin] Build a native executable\n  run <file.ube> [args...]  Compile and run a program\n  lsp                       Start the language server\n  version                   Show the version\n  help                      Show this help\n\nCheck options:\n  --strict                  Reject C FFI and unsafe blocks\n  --format=json             Emit a machine-readable audit report\n\nBuild options:\n  -o <path>                 Set executable output path\n  --emit-c                  Keep generated C beside the output\n  --forbid-unsafe           Reject C FFI and unsafe blocks\n", version)
 }

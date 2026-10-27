@@ -53,7 +53,7 @@ func (t ChanType) IsFlat(env *TypeEnvironment) bool { return t.Elem.IsFlat(env) 
 type PoolType struct{ Elem UbeType }
 
 func (t PoolType) String() string                   { return fmt.Sprintf("Pool[%s]", t.Elem) }
-func (t PoolType) IsFlat(env *TypeEnvironment) bool { return t.Elem.IsFlat(env) }
+func (t PoolType) IsFlat(env *TypeEnvironment) bool { return false }
 
 type CustomType struct{ Name string }
 
