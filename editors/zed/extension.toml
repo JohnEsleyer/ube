@@ -1,0 +1,11 @@
+id = "ube"
+name = "Ube"
+version = "0.1.0"
+schema_version = 1
+authors = ["Ube Language Contributors"]
+description = "Ube programming language support for Zed"
+repository = "https://github.com/JohnEsleyer/ube"
+
+[grammars.ube]
+repository = "https://github.com/JohnEsleyer/ube"
+commit = "main"

@@ -1,10 +1,10 @@
 {
   "name": "ube",
   "displayName": "Ube Language",
-  "description": "Official language support for Ube: syntax highlighting, snippets, and file icon 🍠",
-  "version": "0.4.0",
+  "description": "Syntax highlighting, language configuration, and snippets for the Ube programming language 🍠",
+  "version": "0.5.0",
   "publisher": "ube-lang",
-  "icon": "icon.png",
+  "icon": "icon.svg",
   "engines": {
     "vscode": "^1.70.0"
   },

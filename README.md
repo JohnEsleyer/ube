@@ -61,6 +61,13 @@ gcc -std=gnu11 -O2 -pthread -Iruntime output.c -o ube_app
 ./ube_app
 ```
 
+## Editor support
+
+Lightweight language recognition is available for both VS Code and Zed. The extensions provide `.ube` file association, syntax highlighting, and editor language configuration; the VS Code extension also includes snippets and a Ube icon. They do not add run buttons or other execution commands, so programs can be built and run from the terminal using the commands above.
+
+- **VS Code:** extension source and packaging files are in [`editors/vscode`](editors/vscode). See its [README](editors/vscode/README.md) for details.
+- **Zed:** extension source is in [`editors/zed`](editors/zed), including its language configuration and icon.
+
 ## License
 
 Ube is licensed under the MIT License.
