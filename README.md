@@ -7,7 +7,7 @@
 **The sweet, grounded systems language.**
 *Easy to program like Go. Fast like C. Zero Garbage Collection.*
 
-**Latest version: `0.5.4`**
+**Latest version: `0.5.5`**
 
 </div>
 
@@ -58,19 +58,31 @@ Ube uses a fast, reliable **transpilation and compilation pipeline**:
 
 Ube achieves **Zero Garbage Collection** without requiring complex manual `malloc`/`free` or strict lifetime annotations like Rust through two core pillars:
 
-### 1. Chunked Immutable Scopes (`scope { ... }`)
-Ube introduces regional arena allocation via `scope` blocks. Any dynamic collection (like `[]i32` slices or strings) allocated inside a `scope` lives in a lightweight, thread-local bump-allocated memory chunk.
+### 1. Regional Scratch Arenas (`arena { ... }`) & Safe Promotion
+Ube introduces regional arena allocation via `arena` (or `scope`) blocks. Any dynamic collection (like `[]i32` slices or strings) allocated inside an arena lives in a lightweight, thread-local bump-allocated memory chunk.
+
+To guarantee complete memory safety without complex Rust-style lifetime annotations:
+* **The Upward Reference Invariant:** Inner arenas cannot mutate outer reference containers (e.g., calling `.push()` on an outer slice from inside an arena is rejected at compile time).
+* **Explicit Promotion (`promote`):** To pass dynamic memory from an arena to an outer scope, use `promote(...)` to copy the data directly into the parent arena before the child arena is wiped.
+
 ```fn main() {
-    scope {
+    let mut final_list = []i32{}
+
+    arena {
         let mut temp_list = []i32{}
         temp_list.push(42)
-        // ... use temp_list freely
-    } // 💥 The entire arena watermark is restored in 1 instruction. Zero fragmentation, zero GC!
+        temp_list.push(100)
+
+        // Safely promotes memory into the parent arena:
+        final_list = promote(temp_list)
+    } // 💥 The entire child arena is recycled in 1 instruction. Zero fragmentation, zero GC!
+
+    println(final_list.len) // 2
 }
 ```
 
-### 2. Shared-Nothing Concurrency ("Vines" & Channels)
-Ube implements thread-safe communication channels (`Chan[T]`) and actor-like background tasks called **Vines** (`spawn`). To prevent data races and eliminate garbage collection across threads, Ube enforces a **flat type restriction**: complex pointers cannot cross channel boundaries or spawn arguments. Values are safely copied via `memcpy`, maintaining complete memory isolation between worker threads.
+### 2. Shared-Nothing Concurrency (Tasks & Channels)
+Ube implements thread-safe communication channels (`Chan[T]`) and lightweight concurrent background tasks (`spawn`). To prevent data races and eliminate garbage collection across threads, Ube enforces a **flat type restriction**: complex pointers cannot cross channel boundaries or spawn arguments. Values are safely copied via `memcpy`, maintaining complete memory isolation between worker threads.
 
 ---
 

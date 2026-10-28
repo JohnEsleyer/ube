@@ -211,6 +211,44 @@ func TestFeatures_DynamicTraitDispatch(t *testing.T) {
 }
 
 // TEST 6: Code Formatter (ube fmt)
+func TestFeatures_ArenaAndPromote(t *testing.T) {
+	// 1. Verify compile-time rejection of direct mutation across arena boundaries
+	badSrc := `
+	fn main() {
+		let mut list = []i32{}
+		arena {
+			let temp = []i32{1, 2}
+			list = temp
+		}
+	}
+	`
+	err := typecheckSource(t, badSrc)
+	if err == nil {
+		t.Fatalf("expected compile-time rejection for assigning inner slice to outer list")
+	}
+
+	// 2. Verify successful promotion across arena boundaries at runtime
+	goodSrc := `
+	fn main() {
+		let mut output = []i32{}
+		arena {
+			let mut temp = []i32{}
+			temp.push(10)
+			temp.push(20)
+			output = promote(temp)
+		}
+		println(output.len)
+		println(output[0])
+		println(output[1])
+	}
+	`
+	out := runSourceNative(t, goodSrc)
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) < 3 || lines[0] != "2" || lines[1] != "10" || lines[2] != "20" {
+		t.Fatalf("unexpected output from arena promote: %s", out)
+	}
+}
+
 func TestFeatures_CodeFormatter(t *testing.T) {
 	input := `fn test(  a:i32,b:string   )->i32{
 let x=10+20

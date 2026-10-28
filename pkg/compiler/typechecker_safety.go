@@ -72,6 +72,12 @@ func (tc *Typechecker) exprDepth(expr Expr, env *TypeEnvironment) int {
 		return env.ScopeDepth
 	case *InterpolatedStringExpr:
 		return env.ScopeDepth
+	case *PromoteExpr:
+		d := tc.exprDepth(e.Value, env)
+		if d > 0 {
+			return d - 1
+		}
+		return 0
 	case *TraitCoerceExpr:
 		return env.ScopeDepth
 	case *ArrayToSliceExpr:
@@ -223,6 +229,8 @@ func (tc *Typechecker) exprEscapesParam(expr Expr, name string) bool {
 		return tc.exprEscapesParam(e.Value, name)
 	case *RangeExpr:
 		return tc.exprEscapesParam(e.Start, name) || tc.exprEscapesParam(e.End, name)
+	case *PromoteExpr:
+		return tc.exprEscapesParam(e.Value, name)
 	case *TraitCoerceExpr:
 		return tc.exprEscapesParam(e.Value, name)
 	case *ArrayToSliceExpr:

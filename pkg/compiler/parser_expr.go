@@ -264,6 +264,13 @@ func parseInterpolatedParts(raw string, loc SourceLocation) ([]Expr, error) {
 }
 
 func (p *Parser) parsePrimary() Expr {
+	if p.check(TokenPromote) {
+		loc := p.advance().Loc
+		p.expect(TokenLParen, "Expected '(' after promote")
+		val := p.parseExpr()
+		p.expect(TokenRParen, "Expected ')' after promote argument")
+		return &PromoteExpr{At: loc, Value: val}
+	}
 	tok := p.peek(0)
 	if tok.Type == TokenUnsafe {
 		p.advance()

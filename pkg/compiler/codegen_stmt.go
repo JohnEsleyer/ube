@@ -423,11 +423,12 @@ func (g *Generator) genStmt(st Stmt) {
 	case *ScopeStmt:
 		g.emit("{")
 		g.indent++
-		mark := g.newTmp()
-		g.emit(fmt.Sprintf("UbeWatermark %s = ube_scope_save();", mark))
-		g.scopeMarks = append(g.scopeMarks, mark)
+		frameTmp := g.newTmp()
+		g.scopeMarks = append(g.scopeMarks, frameTmp)
+		g.emit(fmt.Sprintf("UbeArenaLevel %s;", frameTmp))
+		g.emit(fmt.Sprintf("ube_arena_enter(&%s);", frameTmp))
 		g.genBlock(s.Body)
-		g.emit("ube_scope_restore(" + mark + ");")
+		g.emit(fmt.Sprintf("ube_arena_exit(&%s);", frameTmp))
 		g.scopeMarks = g.scopeMarks[:len(g.scopeMarks)-1]
 		g.indent--
 		g.emit("}")

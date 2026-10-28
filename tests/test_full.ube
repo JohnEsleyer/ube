@@ -10,10 +10,10 @@ fn parse_number(code: i32) -> i32 ! string {
     return code * 10
 }
 
-fn vine_fn(ch: Chan[i32], done: Chan[i32]) {
-    println_str("Spawned Vine active on background thread!")
+fn worker_task(ch: Chan[i32], done: Chan[i32]) {
+    println_str("Spawned Task active on background thread!")
     let val = ch.recv()
-    println_str("Vine received value from channel:")
+    println_str("Task received value from channel:")
     println(val)
     done.send(1)
     return
@@ -25,8 +25,8 @@ fn main() {
     let channel = Chan[i32].new(5)
     let done = Chan[i32].new(1)
 
-    println_str("Main thread spawning Vine...")
-    spawn vine_fn(channel, done)
+    println_str("Main thread spawning Task...")
+    spawn worker_task(channel, done)
     channel.send(42)
 
     let finished = done.recv()

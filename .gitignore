@@ -39,3 +39,6 @@ instructions/
 
 # Folders used by my CLI dev tools
 patcher/
+
+# Textify Folder
+textify/

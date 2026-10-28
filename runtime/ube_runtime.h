@@ -20,12 +20,19 @@
 
 #define UBE_SCOPE_CHUNK_SIZE (64 * 1024)
 
-// --- 1. Chunked Immutable Scopes (Arena Allocator with per-thread recycling) ---
+// --- 1. Chunked Immutable Arenas (with per-thread recycling and arena stack) ---
 typedef struct UbeChunk {
     struct UbeChunk* next;
     size_t capacity;
     uint8_t memory[];
 } UbeChunk;
+
+typedef struct UbeArenaLevel {
+    UbeChunk* head;
+    UbeChunk* current;
+    size_t top;
+    struct UbeArenaLevel* parent;
+} UbeArenaLevel;
 
 typedef struct {
     UbeChunk* head;
@@ -34,6 +41,7 @@ typedef struct {
     size_t total_chunks;
     UbeChunk* freelist;
     size_t freelist_count;
+    UbeArenaLevel* active_level;
 } UbeScopeArena;
 
 typedef struct {
@@ -85,7 +93,57 @@ static inline void ube_init(void) {
         current_scope.current = current_scope.head;
         current_scope.top = 0;
         current_scope.total_chunks = 1;
+        current_scope.active_level = NULL;
     }
+}
+
+static inline void ube_arena_enter(UbeArenaLevel* level) {
+    ube_init();
+    level->parent = current_scope.active_level;
+    level->head = ube_chunk_alloc(UBE_SCOPE_CHUNK_SIZE);
+    level->current = level->head;
+    level->top = 0;
+    current_scope.active_level = level;
+}
+
+static inline void ube_arena_exit(UbeArenaLevel* level) {
+    if (!level || !level->head) return;
+    UbeChunk* c = level->head;
+    UbeChunk* tail = c;
+    size_t count = 1;
+    while (tail->next) { tail = tail->next; count++; }
+    tail->next = current_scope.freelist;
+    current_scope.freelist = c;
+    current_scope.freelist_count += count;
+    if (current_scope.total_chunks >= count) current_scope.total_chunks -= count;
+    current_scope.active_level = level->parent;
+    level->head = NULL;
+    level->current = NULL;
+}
+
+static inline void* ube_bump_alloc_parent(size_t size) {
+    ube_init();
+    if (size > SIZE_MAX - 7) ube_panic_capacity((int64_t)size);
+    size = (size + 7) & ~7;
+    UbeChunk** phead = &current_scope.head;
+    UbeChunk** pcurrent = &current_scope.current;
+    size_t* ptop = &current_scope.top;
+    if (current_scope.active_level && current_scope.active_level->parent) {
+        phead = &current_scope.active_level->parent->head;
+        pcurrent = &current_scope.active_level->parent->current;
+        ptop = &current_scope.active_level->parent->top;
+    }
+    if (size > (*pcurrent)->capacity - *ptop) {
+        UbeChunk* new_c = ube_chunk_alloc(size);
+        (*pcurrent)->next = new_c;
+        *pcurrent = new_c;
+        *ptop = 0;
+        if (!*phead) *phead = new_c;
+        current_scope.total_chunks++;
+    }
+    void* ptr = &(*pcurrent)->memory[*ptop];
+    *ptop += size;
+    return ptr;
 }
 
 static inline UbeWatermark ube_scope_save(void) {
@@ -127,16 +185,24 @@ static inline void ube_scope_destroy(void) {
 
 static inline void* ube_bump_alloc_unaligned(size_t size) {
     ube_init();
-    if (size > current_scope.current->capacity - current_scope.top) {
+    UbeChunk** phead = &current_scope.head;
+    UbeChunk** pcurrent = &current_scope.current;
+    size_t* ptop = &current_scope.top;
+    if (current_scope.active_level) {
+        phead = &current_scope.active_level->head;
+        pcurrent = &current_scope.active_level->current;
+        ptop = &current_scope.active_level->top;
+    }
+    if (size > (*pcurrent)->capacity - *ptop) {
         UbeChunk* new_c = ube_chunk_alloc(size);
-        current_scope.current->next = new_c;
-        current_scope.current = new_c;
-        current_scope.top = 0;
-        if (!current_scope.head) current_scope.head = new_c;
+        (*pcurrent)->next = new_c;
+        *pcurrent = new_c;
+        *ptop = 0;
+        if (!*phead) *phead = new_c;
         current_scope.total_chunks++;
     }
-    void* ptr = &current_scope.current->memory[current_scope.top];
-    current_scope.top += size;
+    void* ptr = &(*pcurrent)->memory[*ptop];
+    *ptop += size;
     return ptr;
 }
 
@@ -155,6 +221,14 @@ typedef struct {
 static inline string ube_str_lit(const char* lit) {
     string s = { lit, lit ? strlen(lit) : 0 };
     return s;
+}
+
+static inline string ube_str_promote(string s) {
+    if (!s.data || s.len == 0) return s;
+    char* dest = (char*)ube_bump_alloc_parent(s.len + 1);
+    memcpy(dest, s.data, s.len);
+    dest[s.len] = '\0';
+    return (string){ dest, s.len };
 }
 
 static inline string ube_str_concat(string a, string b) {

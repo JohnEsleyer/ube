@@ -263,7 +263,7 @@ func (g *Generator) returnCleanupCode() string {
 	}
 	for i := len(g.scopeMarks) - 1; i >= 0; i-- {
 		if g.scopeMarks[i] != "__watermark" {
-			b.WriteString("ube_scope_restore(" + g.scopeMarks[i] + "); ")
+			b.WriteString("ube_arena_exit(&" + g.scopeMarks[i] + "); ")
 		}
 	}
 	if len(g.scopeMarks) > 0 && g.scopeMarks[0] == "__watermark" {
@@ -278,7 +278,7 @@ func (g *Generator) emitReturnArenaCleanup() {
 	}
 	for i := len(g.scopeMarks) - 1; i >= 0; i-- {
 		if g.scopeMarks[i] != "__watermark" {
-			g.emit("ube_scope_restore(" + g.scopeMarks[i] + ");")
+			g.emit("ube_arena_exit(&" + g.scopeMarks[i] + ");")
 		}
 	}
 	if len(g.scopeMarks) > 0 && g.scopeMarks[0] == "__watermark" {

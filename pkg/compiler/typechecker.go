@@ -312,6 +312,11 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 				if !vInfo.IsMut {
 					return fmt.Errorf("[%s] Cannot assign through immutable variable '%s'", s.At, id)
 				}
+				if env.ScopeDepth > vInfo.Depth && !vInfo.Type.IsFlat(env) {
+					if _, isPromote := s.RHS.(*PromoteExpr); !isPromote {
+						return fmt.Errorf("[%s] Safety Error: cannot mutate outer reference '%s' from inside a nested arena/scope (use 'promote(...)' to promote values to the outer arena)", s.At, id)
+					}
+				}
 				if tc.hasLifetime(lhsT) && tc.exprDepth(s.RHS, env) > vInfo.Depth {
 					return fmt.Errorf("[%s] Safety Error: value rooted at scope depth %d cannot escape into '%s' at depth %d", s.At, tc.exprDepth(s.RHS, env), id, vInfo.Depth)
 				}

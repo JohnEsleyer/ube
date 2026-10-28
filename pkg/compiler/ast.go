@@ -167,6 +167,15 @@ type UnsafeExpr struct {
 func (e *UnsafeExpr) Loc() SourceLocation { return e.At }
 func (e *UnsafeExpr) exprNode()           {}
 
+type PromoteExpr struct {
+	At    SourceLocation
+	Value Expr
+	Type  UbeType
+}
+
+func (e *PromoteExpr) Loc() SourceLocation { return e.At }
+func (e *PromoteExpr) exprNode()           {}
+
 type InterpolatedStringExpr struct {
 	At    SourceLocation
 	Parts []Expr

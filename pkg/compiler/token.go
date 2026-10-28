@@ -27,6 +27,8 @@ const (
 	TokenIn       TokenType = "in"
 	TokenReturn   TokenType = "return"
 	TokenScope    TokenType = "scope"
+	TokenArena    TokenType = "arena"
+	TokenPromote  TokenType = "promote"
 	TokenSpawn    TokenType = "spawn"
 	TokenBreak    TokenType = "break"
 	TokenContinue TokenType = "continue"

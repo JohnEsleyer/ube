@@ -30,6 +30,14 @@ func integerType(t UbeType) bool {
 
 func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, error) {
 	switch e := expr.(type) {
+	case *PromoteExpr:
+		t, err := tc.inferExpr(e.Value, env)
+		if err != nil {
+			return nil, err
+		}
+		e.Type = t
+		return t, nil
+
 	case *TraitCoerceExpr:
 		_, err := tc.inferExpr(e.Value, env)
 		if err != nil {

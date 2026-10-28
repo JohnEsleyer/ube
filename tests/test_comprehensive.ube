@@ -33,8 +33,8 @@ fn validate_particle(p: Particle) -> Particle ! string {
     return p
 }
 
-// 6. Spawned vine for channels & while let (Gap 7)
-fn vine_task(ch: Chan[i32]) {
+// 6. Spawned background task for channels & while let
+fn worker_task(ch: Chan[i32]) {
     while let job = ch.recv() {
         println(job)
     }
@@ -101,7 +101,7 @@ fn main() {
 
     // Test F: Channel Concurrency & while let
     let jobs = Chan[i32].new(4)
-    spawn vine_task(jobs)
+    spawn worker_task(jobs)
     jobs.send(777)
     jobs.send(888)
     jobs.close()

@@ -16,6 +16,24 @@ func isRValue(expr Expr) bool {
 
 func (g *Generator) genExpr(expr Expr) string {
 	switch e := expr.(type) {
+	case *PromoteExpr:
+		valCode := g.genExpr(e.Value)
+		if sl, ok := e.Type.(SliceType); ok {
+			m := g.sliceElemMangle(sl.Elem)
+			ct := g.toCType(sl.Elem)
+			return fmt.Sprintf("({ UbeSlice_%s _sl = %s; if (_sl.data && _sl.len > 0) { %s* _nd = (%s*)ube_bump_alloc_parent(_sl.len * sizeof(%s)); memcpy(_nd, _sl.data, _sl.len * sizeof(%s)); _sl.data = _nd; _sl.cap = _sl.len; } _sl; })",
+				m, valCode, ct, ct, ct, ct)
+		}
+		if _, ok := e.Type.(StringType); ok {
+			return fmt.Sprintf("ube_str_promote(%s)", valCode)
+		}
+		if pt, ok := e.Type.(PointerType); ok {
+			ct := g.toCType(pt.Base)
+			return fmt.Sprintf("({ %s* _src = %s; %s* _dst = (%s*)ube_bump_alloc_parent(sizeof(%s)); if (_src) { *_dst = *_src; } _dst; })",
+				ct, valCode, ct, ct, ct)
+		}
+		return valCode
+
 	case *TraitCoerceExpr:
 		vtable := g.registerTraitVtable(e.Trait, e.Concrete)
 		concCT := g.toCType(e.Concrete)
