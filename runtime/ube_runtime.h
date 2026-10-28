@@ -215,6 +215,77 @@ typedef struct { bool ok; union { int64_t val; string err; }; } UbeResult_i64_st
 #define UbeSlice_string_DEFINED
 typedef struct { string* data; size_t len; size_t cap; } UbeSlice_string;
 #endif
+#ifndef UbeOption_string_DEFINED
+#define UbeOption_string_DEFINED
+typedef struct { bool has_val; string val; } UbeOption_string;
+#endif
+
+static inline string ube_str_trim(string s) {
+    if (s.len == 0) return s;
+    size_t start = 0;
+    while (start < s.len && (s.data[start] == ' ' || s.data[start] == '\t' || s.data[start] == '\n' || s.data[start] == '\r')) {
+        start++;
+    }
+    size_t end = s.len;
+    while (end > start && (s.data[end - 1] == ' ' || s.data[end - 1] == '\t' || s.data[end - 1] == '\n' || s.data[end - 1] == '\r')) {
+        end--;
+    }
+    return (string){ s.data + start, end - start };
+}
+
+static inline int32_t ube_str_index_of(string s, string substr) {
+    if (substr.len == 0) return 0;
+    if (s.len < substr.len) return -1;
+    for (size_t i = 0; i + substr.len <= s.len; i++) {
+        if (memcmp(s.data + i, substr.data, substr.len) == 0) return (int32_t)i;
+    }
+    return -1;
+}
+
+static inline UbeSlice_string ube_str_split(string s, string delim) {
+    if (delim.len == 0) {
+        UbeSlice_string res;
+        res.len = res.cap = s.len;
+        res.data = s.len ? (string*)ube_bump_alloc(s.len * sizeof(string)) : NULL;
+        for (size_t i = 0; i < s.len; i++) {
+            res.data[i] = (string){ s.data + i, 1 };
+        }
+        return res;
+    }
+    size_t count = 1;
+    for (size_t i = 0; i + delim.len <= s.len; ) {
+        if (memcmp(s.data + i, delim.data, delim.len) == 0) {
+            count++;
+            i += delim.len;
+        } else {
+            i++;
+        }
+    }
+    string* parts = (string*)ube_bump_alloc(count * sizeof(string));
+    size_t idx = 0;
+    size_t last = 0;
+    for (size_t i = 0; i + delim.len <= s.len; ) {
+        if (memcmp(s.data + i, delim.data, delim.len) == 0) {
+            parts[idx++] = (string){ s.data + last, i - last };
+            i += delim.len;
+            last = i;
+        } else {
+            i++;
+        }
+    }
+    parts[idx++] = (string){ s.data + last, s.len - last };
+    return (UbeSlice_string){ .data = parts, .len = idx, .cap = idx };
+}
+
+static inline UbeOption_string ube_env_get(string key) {
+    char buf[512];
+    if (key.len >= sizeof(buf)) return (UbeOption_string){ .has_val = false };
+    memcpy(buf, key.data, key.len);
+    buf[key.len] = '\0';
+    const char* val = getenv(buf);
+    if (!val) return (UbeOption_string){ .has_val = false };
+    return (UbeOption_string){ .has_val = true, .val = ube_str_lit(val) };
+}
 
 static inline string ube_int_to_str(int64_t val) {
     char buf[32]; int n = snprintf(buf, sizeof(buf), "%lld", (long long)val);
@@ -372,10 +443,14 @@ static inline UbeOption_##N Pool_##N##_get(Pool_##N* p, UbeHandle h) { \
 static inline bool Pool_##N##_despawn(Pool_##N* p, UbeHandle h) { \
     if (h.index >= p->count || !p->slots[h.index].active || p->slots[h.index].gen != h.gen) return false; \
     p->slots[h.index].active = false; \
-    if (p->slots[h.index].gen != UINT32_MAX) { \
-        p->slots[h.index].gen++; \
-        p->freelist[p->free_count++] = h.index; \
+    if (p->slots[h.index].gen == UINT32_MAX) { \
+        /* Generation exhausted: tombstone the slot for this cycle, then \
+           restart it at generation 1 so capacity is reclaimed instead of \
+           leaking the slot from the freelist forever. */ \
+        p->slots[h.index].gen = 0; \
     } \
+    p->slots[h.index].gen++; \
+    p->freelist[p->free_count++] = h.index; \
     return true; \
 }
 

@@ -53,6 +53,8 @@ const (
 	TokenLte       TokenType = "<="
 	TokenGt        TokenType = ">"
 	TokenGte       TokenType = ">="
+	TokenShl       TokenType = "<<"
+	TokenShr       TokenType = ">>"
 	TokenAnd       TokenType = "&&"
 	TokenOr        TokenType = "||"
 	TokenPlus      TokenType = "+"
@@ -61,6 +63,9 @@ const (
 	TokenSlash     TokenType = "/"
 	TokenPercent   TokenType = "%"
 	TokenAmp       TokenType = "&"
+	TokenPipe      TokenType = "|"
+	TokenCaret     TokenType = "^"
+	TokenTilde     TokenType = "~"
 
 	// Delimiters
 	TokenLParen   TokenType = "("

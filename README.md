@@ -8,7 +8,7 @@
 **The sweet, grounded systems language.**
 *Easy to program like Go. Fast like C. Zero Garbage Collection.*
 
-**Latest version: `0.5.1`**
+**Latest version: `0.5.2`**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.20+-00ADD8?logo=go)](https://golang.org)
@@ -107,6 +107,7 @@ COMMANDS:
     run <file.ube>          Compile and execute a program immediately
     build <file.ube>        Compile an Ube program into an optimized binary
     check <file.ube>        Validate syntax, types, and safety without building
+    test [dir|file]         Discover and run test files and test_ functions
     new <project-name>      Scaffold a new Ube project
     lsp                     Launch the Language Server Protocol engine
     version                 Print toolchain version and runtime details
@@ -135,6 +136,9 @@ ube run main.ube
 # Build an optimized release binary
 ube build main.ube -o game_server
 ./game_server
+
+# Discover and run tests (files ending in _test.ube or functions named test_*)
+ube test .
 ```
 
 ---

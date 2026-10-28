@@ -70,11 +70,33 @@ func (g *Generator) genExpr(expr Expr) string {
 				return fmt.Sprintf("({ %s %s = {0}; (void)ube_raw_chan_recv(%s, &%s); %s; })", ct, tmp, g.genExpr(mem.Target), tmp, tmp)
 			}
 		}
-		if id, ok := e.Callee.(*IdentExpr); ok && (id.Name == "println" || id.Name == "println_str") && len(e.Args) == 1 {
-			return fmt.Sprintf("UBE_PRINTLN(%s)", g.genExpr(e.Args[0]))
+		if id, ok := e.Callee.(*IdentExpr); ok && (id.Name == "println" || id.Name == "print") {
+			if len(e.Args) == 0 {
+				if id.Name == "println" {
+					return `puts("")`
+				}
+				return "((void)0)"
+			}
+			if len(e.Args) == 1 {
+				if id.Name == "println" {
+					return fmt.Sprintf("UBE_PRINTLN(%s)", g.genExpr(e.Args[0]))
+				}
+				return fmt.Sprintf("UBE_PRINT(%s)", g.genExpr(e.Args[0]))
+			}
+			calls := make([]string, 0, len(e.Args)*2)
+			for i, arg := range e.Args {
+				if i > 0 {
+					calls = append(calls, `fputs(" ", stdout)`)
+				}
+				calls = append(calls, fmt.Sprintf("UBE_PRINT(%s)", g.genExpr(arg)))
+			}
+			if id.Name == "println" {
+				calls = append(calls, `fputs("\n", stdout)`)
+			}
+			return fmt.Sprintf("({ %s; })", strings.Join(calls, "; "))
 		}
-		if id, ok := e.Callee.(*IdentExpr); ok && id.Name == "print" && len(e.Args) == 1 {
-			return fmt.Sprintf("UBE_PRINT(%s)", g.genExpr(e.Args[0]))
+		if id, ok := e.Callee.(*IdentExpr); ok && id.Name == "println_str" && len(e.Args) == 1 {
+			return fmt.Sprintf("UBE_PRINTLN(%s)", g.genExpr(e.Args[0]))
 		}
 		if id, ok := e.Callee.(*IdentExpr); ok {
 			builtins := map[string]string{
@@ -82,6 +104,8 @@ func (g *Generator) genExpr(expr Expr) string {
 				"exit_process": "ube_exit_process", "int_to_str": "ube_int_to_str", "str_to_int": "ube_str_to_int",
 				"read_file": "ube_read_file", "write_file": "ube_write_file", "os_args": "ube_os_args",
 				"str_contains": "ube_str_contains", "str_starts_with": "ube_str_starts_with", "str_ends_with": "ube_str_ends_with",
+				"str_trim": "ube_str_trim", "str_index_of": "ube_str_index_of", "str_split": "ube_str_split",
+				"env_get": "ube_env_get",
 			}
 			if fn, ok := builtins[id.Name]; ok {
 				args := make([]string, len(e.Args))

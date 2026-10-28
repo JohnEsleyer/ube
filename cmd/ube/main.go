@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const version = "0.5.1"
+const version = "0.5.2"
 
 const (
 	colorReset  = "\x1b[0m"
@@ -21,9 +21,15 @@ func (e exitCodeError) Error() string { return fmt.Sprintf("program exited with 
 
 func main() {
 	if err := execute(os.Args[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		if e, ok := err.(exitCodeError); ok {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(e.code)
+		}
+		formatted := formatDiagnostic(err)
+		if formatted == err.Error() {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		} else {
+			fmt.Fprintln(os.Stderr, formatted)
 		}
 		os.Exit(1)
 	}
@@ -52,6 +58,8 @@ func execute(args []string) error {
 		return build(args[1:])
 	case "run":
 		return run(args[1:])
+	case "test":
+		return runTests(args[1:])
 	default:
 		if strings.HasSuffix(args[0], ".ube") {
 			return run(args)

@@ -2,7 +2,7 @@
   "name": "ube",
   "displayName": "Ube Language",
   "description": "Syntax highlighting, language configuration, and snippets for the Ube programming language 🍠",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "publisher": "ube-lang",
   "repository": {
     "type": "git",

@@ -467,11 +467,25 @@ func (g *Generator) genStmt(st Stmt) {
 		}
 		if s.Default != nil {
 			selected := g.newTmp()
+			offset := g.newTmp()
+			iter := g.newTmp()
+			caseIdx := g.newTmp()
+			doneLabel := g.newTmp() + "_default_done"
 			g.emit("do {")
 			g.indent++
+			// Round-robin the starting case so repeatedly-ready channels do
+			// not starve the rest of the select.
+			g.emit(fmt.Sprintf("static _Thread_local size_t %s = 0;", offset))
+			if len(s.Cases) > 1 {
+				g.emit(fmt.Sprintf("%s = (%s + 1) %% %d;", offset, offset, len(s.Cases)))
+			}
 			g.emit(fmt.Sprintf("bool %s = false;", selected))
+			g.emit(fmt.Sprintf("for (size_t %s = 0; %s < %d; %s++) {", iter, iter, len(s.Cases), iter))
+			g.indent++
+			g.emit(fmt.Sprintf("size_t %s = (%s + %s) %% %d;", caseIdx, iter, offset, len(s.Cases)))
+			g.emit(fmt.Sprintf("switch (%s) {", caseIdx))
 			for i, c := range s.Cases {
-				g.emit("{")
+				g.emit(fmt.Sprintf("case %d: {", i))
 				g.indent++
 				ct := c.ChanElem
 				if ct == nil {
@@ -481,12 +495,18 @@ func (g *Generator) genStmt(st Stmt) {
 				g.emit(fmt.Sprintf("if (ube_raw_chan_try_recv(%s, &%s)) {", channels[i], c.VarName))
 				g.indent++
 				g.genBlock(c.Body)
-				g.emit(fmt.Sprintf("%s = true; break;", selected))
+				g.emit(fmt.Sprintf("%s = true;", selected))
+				g.emit(fmt.Sprintf("goto %s;", doneLabel))
 				g.indent--
 				g.emit("}")
+				g.emit("break;")
 				g.indent--
 				g.emit("}")
 			}
+			g.emit("}")
+			g.indent--
+			g.emit("}")
+			g.emit(doneLabel + ":;")
 			g.emit(fmt.Sprintf("if (!%s) {", selected))
 			g.indent++
 			g.genBlock(s.Default)
@@ -499,10 +519,24 @@ func (g *Generator) genStmt(st Stmt) {
 			g.selectGroups = append(g.selectGroups, group)
 			g.emit(fmt.Sprintf("UbeSelectGroup %s;", group))
 			g.emit(fmt.Sprintf("ube_select_group_init(&%s);", group))
+			offset := g.newTmp()
+			iter := g.newTmp()
+			caseIdx := g.newTmp()
+			// Static keeps the round-robin position across repeated executions
+			// of this select statement, matching Go's fair select behavior.
+			g.emit(fmt.Sprintf("static _Thread_local size_t %s = 0;", offset))
 			g.emit("while (1) {")
 			g.indent++
+			// Fair select: start each polling pass at a rotating offset.
+			if len(s.Cases) > 1 {
+				g.emit(fmt.Sprintf("%s = (%s + 1) %% %d;", offset, offset, len(s.Cases)))
+			}
+			g.emit(fmt.Sprintf("for (size_t %s = 0; %s < %d; %s++) {", iter, iter, len(s.Cases), iter))
+			g.indent++
+			g.emit(fmt.Sprintf("size_t %s = (%s + %s) %% %d;", caseIdx, iter, offset, len(s.Cases)))
+			g.emit(fmt.Sprintf("switch (%s) {", caseIdx))
 			for i, c := range s.Cases {
-				g.emit("{")
+				g.emit(fmt.Sprintf("case %d: {", i))
 				g.indent++
 				ct := c.ChanElem
 				if ct == nil {
@@ -515,9 +549,13 @@ func (g *Generator) genStmt(st Stmt) {
 				g.emit(fmt.Sprintf("goto %s;", label))
 				g.indent--
 				g.emit("}")
+				g.emit("break;")
 				g.indent--
 				g.emit("}")
 			}
+			g.emit("}")
+			g.indent--
+			g.emit("}")
 			var allClosed []string
 			if len(channels) > 0 {
 				allClosed = make([]string, len(channels))

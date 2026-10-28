@@ -5,11 +5,107 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/JohnEsleyer/ube/pkg/compiler"
 )
+
+var errLocPattern = regexp.MustCompile(`^\[([^\[\]]+):(\d+):(\d+)\]\s*(.*)$`)
+
+// formatDiagnostic rewrites `[file:line:col] message` diagnostics into a
+// source snippet with a caret pointing at the offending column. Any line that
+// does not carry a source location is passed through unchanged.
+func formatDiagnostic(rawErr error) string {
+	if rawErr == nil {
+		return ""
+	}
+	var formatted []string
+	for _, l := range strings.Split(rawErr.Error(), "\n") {
+		m := errLocPattern.FindStringSubmatch(strings.TrimSpace(l))
+		if len(m) != 5 {
+			formatted = append(formatted, l)
+			continue
+		}
+		file, lineStr, colStr, msg := m[1], m[2], m[3], m[4]
+		lineNum, _ := strconv.Atoi(lineStr)
+		colNum, _ := strconv.Atoi(colStr)
+		content, readErr := os.ReadFile(file)
+		if readErr != nil {
+			formatted = append(formatted, l)
+			continue
+		}
+		fileLines := strings.Split(string(content), "\n")
+		if lineNum < 1 || lineNum > len(fileLines) {
+			formatted = append(formatted, l)
+			continue
+		}
+		sourceLine := fileLines[lineNum-1]
+		caretLen := tokenLenAt(sourceLine, colNum)
+		pointer := strings.Repeat(" ", maxInt(colNum-1, 0)) + strings.Repeat("^", caretLen)
+		formatted = append(formatted, fmt.Sprintf(
+			"%s: %s\n  --> %s:%d:%d\n   |\n%4d | %s\n   | %s",
+			paintStderr("Error", "\x1b[38;5;196m"),
+			msg,
+			file, lineNum, colNum,
+			lineNum, sourceLine,
+			paintStderr(pointer, "\x1b[38;5;196m"),
+		))
+	}
+	return strings.Join(formatted, "\n")
+}
+
+func tokenLenAt(line string, col int) int {
+	if col < 1 {
+		col = 1
+	}
+	if col > len(line) {
+		return 1
+	}
+	start := col - 1
+	if line[start] == '"' {
+		for i := start + 1; i < len(line); i++ {
+			if line[i] == '\\' {
+				i++
+				continue
+			}
+			if line[i] == '"' {
+				return i - start + 1
+			}
+		}
+		return len(line) - start
+	}
+	end := start
+	for end < len(line) {
+		switch line[end] {
+		case ' ', '\t', '\n', '\r', ',', ';', ':', ')', ']', '}':
+			goto done
+		}
+		end++
+	}
+done:
+	if end == start {
+		return 1
+	}
+	return end - start
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func paintStderr(text, color string) string {
+	info, err := os.Stderr.Stat()
+	if err != nil || info.Mode()&os.ModeCharDevice == 0 {
+		return text
+	}
+	return color + text + colorReset
+}
 
 type purityReport struct {
 	externs   []string

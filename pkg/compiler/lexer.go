@@ -106,6 +106,18 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 		}
 
 		loc := SourceLocation{File: l.file, Line: l.line, Col: l.col}
+		if ch == '<' && l.peek(1) == '<' {
+			l.advance()
+			l.advance()
+			tokens = append(tokens, Token{Type: TokenShl, Val: "<<", Loc: loc})
+			continue
+		}
+		if ch == '>' && l.peek(1) == '>' {
+			l.advance()
+			l.advance()
+			tokens = append(tokens, Token{Type: TokenShr, Val: ">>", Loc: loc})
+			continue
+		}
 		if ch == '&' && l.peek(1) == '&' {
 			l.advance()
 			l.advance()
@@ -160,7 +172,8 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 			':': TokenColon, ',': TokenComma, '.': TokenDot, ';': TokenSemicolon,
 			'=': TokenAssign, '?': TokenQuestion, '!': TokenBang, '<': TokenLt,
 			'>': TokenGt, '+': TokenPlus, '-': TokenMinus, '*': TokenStar,
-			'/': TokenSlash, '%': TokenPercent, '&': TokenAmp, '(': TokenLParen,
+			'/': TokenSlash, '%': TokenPercent, '&': TokenAmp, '|': TokenPipe,
+			'^': TokenCaret, '~': TokenTilde, '(': TokenLParen,
 			')': TokenRParen, '{': TokenLBrace, '}': TokenRBrace, '[': TokenLBracket,
 			']': TokenRBracket,
 		}

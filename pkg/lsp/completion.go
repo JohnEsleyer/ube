@@ -43,8 +43,8 @@ func CompletionItems(source string, p lspPosition) []map[string]any {
 		items = append(items, map[string]any{"label": t, "kind": 7})
 	}
 	builtins := []struct{ name, sig string }{
-		{"println", "println(x)"},
-		{"print", "print(x)"},
+		{"println", "println(x, ...)"},
+		{"print", "print(x, ...)"},
 		{"time_now_ms", "time_now_ms() -> i64"},
 		{"sleep_ms", "sleep_ms(ms: i32)"},
 		{"yield", "yield()"},
@@ -57,6 +57,10 @@ func CompletionItems(source string, p lspPosition) []map[string]any {
 		{"str_contains", "str_contains(s: string, substr: string) -> bool"},
 		{"str_starts_with", "str_starts_with(s: string, prefix: string) -> bool"},
 		{"str_ends_with", "str_ends_with(s: string, suffix: string) -> bool"},
+		{"str_trim", "str_trim(s: string) -> string"},
+		{"str_index_of", "str_index_of(s: string, substr: string) -> i32"},
+		{"str_split", "str_split(s: string, delim: string) -> []string"},
+		{"env_get", "env_get(key: string) -> string?"},
 	}
 	for _, b := range builtins {
 		items = append(items, map[string]any{"label": b.name, "kind": 3, "detail": b.sig})

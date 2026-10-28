@@ -119,6 +119,15 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			}
 			e.Type = lT
 			return lT, tc.assertCompat(lT, rT, e.At)
+		case "&", "|", "^", "<<", ">>":
+			if !integerType(lT) {
+				return nil, fmt.Errorf("[%s] bitwise operator '%s' requires integer operand, got '%s'", e.At, e.Op, lT)
+			}
+			if !integerType(rT) {
+				return nil, fmt.Errorf("[%s] bitwise operator '%s' requires integer operand, got '%s'", e.At, e.Op, rT)
+			}
+			e.Type = lT
+			return lT, nil
 		default: // -, *, /, %
 			if !integerType(lT) && lT.String() != "f32" && lT.String() != "f64" {
 				return nil, fmt.Errorf("[%s] operator '%s' is only supported on numeric types, got '%s'", e.At, e.Op, lT)
@@ -137,6 +146,12 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				return nil, fmt.Errorf("[%s] operator '!' expects bool, got '%s'", e.At, opndT)
 			}
 			return PrimitiveType{Name: "bool"}, nil
+		}
+		if e.Op == "~" {
+			if !integerType(opndT) {
+				return nil, fmt.Errorf("[%s] operator '~' expects integer type, got '%s'", e.At, opndT)
+			}
+			return opndT, nil
 		}
 		if e.Op == "-" {
 			if !integerType(opndT) && opndT.String() != "f32" && opndT.String() != "f64" {
@@ -167,17 +182,16 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			return nil, fmt.Errorf("[%s] Safety Error: foreign function '%s' can only be called inside unsafe { ... }", e.At, id.Name)
 		}
 		if id, ok := e.Callee.(*IdentExpr); ok && (id.Name == "println" || id.Name == "print") {
-			if len(e.Args) != 1 {
-				return nil, fmt.Errorf("[%s] %s expects one argument", e.At, id.Name)
+			for _, arg := range e.Args {
+				argT, err := tc.inferExpr(arg, env)
+				if err != nil {
+					return nil, err
+				}
+				if !printableType(argT) {
+					return nil, fmt.Errorf("[%s] %s does not support type '%s'", e.At, id.Name, argT)
+				}
 			}
-			argT, err := tc.inferExpr(e.Args[0], env)
-			if err != nil {
-				return nil, err
-			}
-			if !printableType(argT) {
-				return nil, fmt.Errorf("[%s] %s does not support type '%s'", e.At, id.Name, argT)
-			}
-			return PrimitiveType{Name: "void"}, err
+			return PrimitiveType{Name: "void"}, nil
 		}
 		if id, ok := e.Callee.(*IdentExpr); ok && id.Name == "int_to_str" && len(e.Args) == 1 {
 			argType, err := tc.inferExpr(e.Args[0], env)

@@ -96,9 +96,13 @@ func NewTypechecker() *Typechecker {
 	tc.Global.Funcs["read_file"] = FuncSignature{Params: []FieldDecl{{Name: "path", Type: str}}, RetType: ResultType{Ok: str, Err: str}}
 	tc.Global.Funcs["write_file"] = FuncSignature{Params: []FieldDecl{{Name: "path", Type: str}, {Name: "content", Type: str}}, RetType: ResultType{Ok: boolType, Err: str}}
 	tc.Global.Funcs["os_args"] = FuncSignature{RetType: SliceType{Elem: str}}
+	tc.Global.Funcs["env_get"] = FuncSignature{Params: []FieldDecl{{Name: "key", Type: str}}, RetType: OptionalType{Inner: str}}
 	tc.Global.Funcs["str_contains"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}, {Name: "substr", Type: str}}, RetType: boolType}
 	tc.Global.Funcs["str_starts_with"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}, {Name: "prefix", Type: str}}, RetType: boolType}
 	tc.Global.Funcs["str_ends_with"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}, {Name: "suffix", Type: str}}, RetType: boolType}
+	tc.Global.Funcs["str_trim"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}}, RetType: str}
+	tc.Global.Funcs["str_index_of"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}, {Name: "substr", Type: str}}, RetType: i32}
+	tc.Global.Funcs["str_split"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}, {Name: "delim", Type: str}}, RetType: SliceType{Elem: str}}
 	return tc
 }
 

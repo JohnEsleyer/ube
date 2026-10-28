@@ -29,8 +29,35 @@ func (p *Parser) parseLogicalOr() Expr {
 }
 
 func (p *Parser) parseLogicalAnd() Expr {
-	node := p.parseEquality()
+	node := p.parseBitwiseOr()
 	for p.check(TokenAnd) {
+		opTok := p.advance()
+		node = &BinaryExpr{At: opTok.Loc, Left: node, Op: opTok.Val, Right: p.parseBitwiseOr()}
+	}
+	return node
+}
+
+func (p *Parser) parseBitwiseOr() Expr {
+	node := p.parseBitwiseXor()
+	for p.check(TokenPipe) {
+		opTok := p.advance()
+		node = &BinaryExpr{At: opTok.Loc, Left: node, Op: opTok.Val, Right: p.parseBitwiseXor()}
+	}
+	return node
+}
+
+func (p *Parser) parseBitwiseXor() Expr {
+	node := p.parseBitwiseAnd()
+	for p.check(TokenCaret) {
+		opTok := p.advance()
+		node = &BinaryExpr{At: opTok.Loc, Left: node, Op: opTok.Val, Right: p.parseBitwiseAnd()}
+	}
+	return node
+}
+
+func (p *Parser) parseBitwiseAnd() Expr {
+	node := p.parseEquality()
+	for p.check(TokenAmp) {
 		opTok := p.advance()
 		node = &BinaryExpr{At: opTok.Loc, Left: node, Op: opTok.Val, Right: p.parseEquality()}
 	}
@@ -48,8 +75,18 @@ func (p *Parser) parseEquality() Expr {
 }
 
 func (p *Parser) parseRelational() Expr {
-	node := p.parseAdditive()
+	node := p.parseShift()
 	for p.check(TokenLt) || p.check(TokenLte) || p.check(TokenGt) || p.check(TokenGte) {
+		opTok := p.advance()
+		right := p.parseShift()
+		node = &BinaryExpr{At: opTok.Loc, Left: node, Op: opTok.Val, Right: right}
+	}
+	return node
+}
+
+func (p *Parser) parseShift() Expr {
+	node := p.parseAdditive()
+	for p.check(TokenShl) || p.check(TokenShr) {
 		opTok := p.advance()
 		right := p.parseAdditive()
 		node = &BinaryExpr{At: opTok.Loc, Left: node, Op: opTok.Val, Right: right}
@@ -79,7 +116,7 @@ func (p *Parser) parseMultiplicative() Expr {
 
 func (p *Parser) parseUnary() Expr {
 	tok := p.peek(0)
-	if tok.Type == TokenMinus || tok.Type == TokenBang || tok.Type == TokenAmp || tok.Type == TokenStar {
+	if tok.Type == TokenMinus || tok.Type == TokenBang || tok.Type == TokenAmp || tok.Type == TokenStar || tok.Type == TokenTilde {
 		p.advance()
 		operand := p.parseUnary()
 		return &UnaryExpr{At: tok.Loc, Op: tok.Val, Operand: operand}
