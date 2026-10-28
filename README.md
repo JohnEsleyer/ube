@@ -1,200 +1,92 @@
-<search>
+<div align="center">
+
+<img src="editors/vscode/icons/ube.svg" width="120" height="120" alt="Ube Logo">
+
 # The Ube Programming Language
 
 **The sweet, grounded systems language.**
 *Easy to program like Go. Fast like C. Zero Garbage Collection.*
 
 **Latest version: `0.5.4`**
-</search>
-<with>
-# The Ube Programming Language
 
-**The sweet, grounded systems language.**
-*Easy to program like Go. Fast like C. Zero Garbage Collection.*
+</div>
 
-**Latest version: `0.5.3`**
-</with>
-</replace>
+---
 
-<replace path="cmd/ube/main.go">
-<search>
-const version = "0.5.2"
-</search>
-<with>
-const version = "0.5.3"
-</with>
-</replace>
+## 🍠 Overview
 
-<replace path="cmd/ube/main.go">
-<search>
-	case "fmt":
-		return runFmt(args[1:])
-	default:
-</search>
-<with>
-	case "fmt":
-		return runFmt(args[1:])
-	case "doc":
-		return runDoc(args[1:])
-	default:
-</with>
-</replace>
+Ube is a modern, high-performance systems programming language designed to bridge the gap between low-level control and high-level ergonomics. It delivers the speed and deterministic performance of C with the clean syntax, safety features, and concurrency primitives of Go.
 
-<replace path="cmd/ube/project.go">
-<search>
-  fmt [dir|file]            Format Ube source files (--check or -w)
-  lsp                       Start the language server
-</search>
-<with>
-  fmt [dir|file]            Format Ube source files (--check or -w)
-  doc <file.ube>            Generate Markdown documentation from source
-  lsp                       Start the language server
-</with>
-</replace>
+Ube is built with **Zero Garbage Collection (GC)**, making it ideal for game engines, embedded systems, real-time networking, and high-performance CLI tools where pause-free execution is mandatory.
 
-<file path="cmd/ube/doc.go">
-package main
+---
 
-import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
+## 🚀 Installation
 
-	"github.com/JohnEsleyer/ube/pkg/compiler"
-)
+You can install Ube instantly using our installation script:
 
-func runDoc(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: ube doc <file.ube>")
-	}
-	file := args[0]
-	content, err := os.ReadFile(file)
-	if err != nil {
-		return err
-	}
+```sh
+curl -sSL https://raw.githubusercontent.com/JohnEsleyer/ube/main/install.sh | bash
+```
 
-	tokens, err := compiler.NewLexer(file, string(content)).Tokenize()
-	if err != nil {
-		return err
-	}
-	prog, err := compiler.NewParser(tokens).ParseProgram()
-	if err != nil {
-		return err
-	}
+### Manual Build from Source
+If you prefer to build from source (requires Go 1.18+ and GCC/Clang):
+```sh
+git clone https://github.com/JohnEsleyer/ube.git
+cd ube
+go build -o bin/ube ./cmd/ube
+sudo cp bin/ube /usr/local/bin/ube
+```
 
-	baseName := filepath.Base(file)
-	fmt.Printf("# Module `%s`\n\n", strings.TrimSuffix(baseName, filepath.Ext(baseName)))
+Verify your installation:
+```sh
+ube version
+```
 
-	var structs []*compiler.StructDecl
-	var enums []*compiler.EnumDecl
-	var traits []*compiler.TraitDecl
-	var functions []*compiler.FnDecl
-	var externs []*compiler.ExternFnDecl
+---
 
-	for _, decl := range prog.Decls {
-		switch d := decl.(type) {
-		case *compiler.StructDecl:
-			structs = append(structs, d)
-		case *compiler.EnumDecl:
-			enums = append(enums, d)
-		case *compiler.TraitDecl:
-			traits = append(traits, d)
-		case *compiler.FnDecl:
-			functions = append(functions, d)
-		case *compiler.ExternFnDecl:
-			externs = append(externs, d)
-		}
-	}
+## 🧁 How It Works
 
-	if len(structs) > 0 {
-		fmt.Println("## Structs\n")
-		for _, s := range structs {
-			fmt.Printf("### `struct %s`\n\n", s.Name)
-			if len(s.Fields) > 0 {
-				fmt.Println("| Field | Type |")
-				fmt.Println("| :--- | :--- |")
-				for _, f := range s.Fields {
-					fmt.Printf("| `%s` | `%s` |\n", f.Name, f.Type)
-				}
-				fmt.Println()
-			}
-		}
-	}
+Ube uses a fast, reliable **transpilation and compilation pipeline**:
+1. **Frontend Parsing & Type Checking**: The Go compiler frontend parses `.ube` source files, monomorphizes generics, validates types, and runs compile-time safety and lifetime audits.
+2. **C Code Generation**: Valid programs are compiled into optimized, readable standard C code (`.c`).
+3. **Native Compilation**: Ube invokes your system's C compiler (`gcc` or `clang`) with optimizations (`-O2`) to produce a standalone, lightning-fast native binary with zero runtime dependencies.
 
-	if len(enums) > 0 {
-		fmt.Println("## Enums\n")
-		for _, e := range enums {
-			fmt.Printf("### `enum %s`\n\n", e.Name)
-			for _, v := range e.Variants {
-				if len(v.Types) > 0 {
-					var types []string
-					for _, t := range v.Types {
-						types = append(types, t.String())
-					}
-					fmt.Printf("- `%s(%s)`\n", v.Name, strings.Join(types, ", "))
-				} else {
-					fmt.Printf("- `%s`\n", v.Name)
-				}
-			}
-			fmt.Println()
-		}
-	}
+---
 
-	if len(traits) > 0 {
-		fmt.Println("## Traits\n")
-		for _, tr := range traits {
-			fmt.Printf("### `trait %s`\n\n", tr.Name)
-			for _, m := range tr.Methods {
-				var params []string
-				for _, p := range m.Params {
-					params = append(params, fmt.Sprintf("%s: %s", p.Name, p.Type))
-				}
-				ret := "void"
-				if m.RetType != nil {
-					ret = m.RetType.String()
-				}
-				fmt.Printf("- `fn %s(%s) -> %s`\n", m.Name, strings.Join(params, ", "), ret)
-			}
-			fmt.Println()
-		}
-	}
+## 🧠 Memory Management Concepts
 
-	if len(functions) > 0 {
-		fmt.Println("## Functions\n")
-		for _, fn := range functions {
-			var params []string
-			for _, p := range fn.Params {
-				params = append(params, fmt.Sprintf("%s: %s", p.Name, p.Type))
-			}
-			ret := "void"
-			if fn.RetType != nil {
-				ret = fn.RetType.String()
-			}
-			if fn.Receiver != nil {
-				fmt.Printf("- `fn (%s %s) %s(%s) -> %s`\n", fn.Receiver.Name, fn.Receiver.Type, fn.Name, strings.Join(params, ", "), ret)
-			} else {
-				fmt.Printf("- `fn %s(%s) -> %s`\n", fn.Name, strings.Join(params, ", "), ret)
-			}
-		}
-		fmt.Println()
-	}
+Ube achieves **Zero Garbage Collection** without requiring complex manual `malloc`/`free` or strict lifetime annotations like Rust through two core pillars:
 
-	if len(externs) > 0 {
-		fmt.Println("## External Foreign Functions (C FFI)\n")
-		for _, ex := range externs {
-			var params []string
-			for _, p := range ex.Params {
-				params = append(params, fmt.Sprintf("%s: %s", p.Name, p.Type))
-			}
-			ret := "void"
-			if ex.RetType != nil {
-				ret = ex.RetType.String()
-			}
-			fmt.Printf("- `extern fn %s(%s) -> %s`\n", ex.Name, strings.Join(params, ", "), ret)
-		}
-		fmt.Println()
-	}
-
-	return nil
+### 1. Chunked Immutable Scopes (`scope { ... }`)
+Ube introduces regional arena allocation via `scope` blocks. Any dynamic collection (like `[]i32` slices or strings) allocated inside a `scope` lives in a lightweight, thread-local bump-allocated memory chunk.
+```fn main() {
+    scope {
+        let mut temp_list = []i32{}
+        temp_list.push(42)
+        // ... use temp_list freely
+    } // 💥 The entire arena watermark is restored in 1 instruction. Zero fragmentation, zero GC!
 }
+```
+
+### 2. Shared-Nothing Concurrency ("Vines" & Channels)
+Ube implements thread-safe communication channels (`Chan[T]`) and actor-like background tasks called **Vines** (`spawn`). To prevent data races and eliminate garbage collection across threads, Ube enforces a **flat type restriction**: complex pointers cannot cross channel boundaries or spawn arguments. Values are safely copied via `memcpy`, maintaining complete memory isolation between worker threads.
+
+---
+
+## 💡 Quickstart
+
+Initialize a starter project:
+```sh
+ube init
+```
+
+Run your program directly:
+```sh
+ube run main.ube
+```
+
+Build an optimized standalone native executable:
+```sh
+ube build main.ube -o my_app
+```
