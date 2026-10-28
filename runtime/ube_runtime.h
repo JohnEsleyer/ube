@@ -367,6 +367,66 @@ static inline UbeOption_string ube_env_get(string key) {
     return (UbeOption_string){ .has_val = true, .val = ube_str_lit(val) };
 }
 
+static inline bool ube_file_exists(string path) {
+    char buf[1024];
+    if (path.len >= sizeof(buf)) return false;
+    memcpy(buf, path.data, path.len);
+    buf[path.len] = '\0';
+    FILE* f = fopen(buf, "rb");
+    if (f) {
+        fclose(f);
+        return true;
+    }
+    return false;
+}
+
+static inline string ube_path_join(string a, string b) {
+    if (a.len == 0) return b;
+    if (b.len == 0) return a;
+    bool a_ends_slash = a.data[a.len - 1] == '/';
+    bool b_starts_slash = b.data[0] == '/';
+    size_t extra = (a_ends_slash || b_starts_slash) ? 0 : 1;
+    if (a_ends_slash && b_starts_slash) {
+        b.data++;
+        b.len--;
+    }
+    size_t total = a.len + extra + b.len;
+    char* dest = (char*)ube_bump_alloc(total + 1);
+    memcpy(dest, a.data, a.len);
+    if (extra) dest[a.len] = '/';
+    memcpy(dest + a.len + extra, b.data, b.len);
+    dest[total] = '\0';
+    return (string){ dest, total };
+}
+
+static inline string ube_str_replace(string s, string old_s, string new_s) {
+    if (old_s.len == 0 || s.len == 0) return s;
+    size_t occurrences = 0;
+    for (size_t i = 0; i + old_s.len <= s.len; ) {
+        if (memcmp(s.data + i, old_s.data, old_s.len) == 0) {
+            occurrences++;
+            i += old_s.len;
+        } else {
+            i++;
+        }
+    }
+    if (occurrences == 0) return s;
+    size_t new_len = s.len + occurrences * (new_s.len - old_s.len);
+    char* dest = (char*)ube_bump_alloc(new_len + 1);
+    size_t src_i = 0, dest_i = 0;
+    while (src_i < s.len) {
+        if (src_i + old_s.len <= s.len && memcmp(s.data + src_i, old_s.data, old_s.len) == 0) {
+            if (new_s.len) memcpy(dest + dest_i, new_s.data, new_s.len);
+            dest_i += new_s.len;
+            src_i += old_s.len;
+        } else {
+            dest[dest_i++] = s.data[src_i++];
+        }
+    }
+    dest[new_len] = '\0';
+    return (string){ dest, new_len };
+}
+
 static inline string ube_int_to_str(int64_t val) {
     char buf[32]; int n = snprintf(buf, sizeof(buf), "%lld", (long long)val);
     if (n < 0) n = 0;

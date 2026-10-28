@@ -185,6 +185,16 @@ type TraitCoerceExpr struct {
 func (e *TraitCoerceExpr) Loc() SourceLocation { return e.At }
 func (e *TraitCoerceExpr) exprNode()           {}
 
+type ArrayToSliceExpr struct {
+	At        SourceLocation
+	ArrayExpr Expr
+	ElemType  UbeType
+	Size      int
+}
+
+func (e *ArrayToSliceExpr) Loc() SourceLocation { return e.At }
+func (e *ArrayToSliceExpr) exprNode()           {}
+
 // Statements
 type Stmt interface {
 	Node

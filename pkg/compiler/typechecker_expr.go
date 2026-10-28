@@ -37,6 +37,13 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		}
 		return TraitType{Name: e.Trait}, nil
 
+	case *ArrayToSliceExpr:
+		_, err := tc.inferExpr(e.ArrayExpr, env)
+		if err != nil {
+			return nil, err
+		}
+		return SliceType{Elem: e.ElemType}, nil
+
 	case *InterpolatedStringExpr:
 		for _, part := range e.Parts {
 			pType, err := tc.inferExpr(part, env)
@@ -766,6 +773,12 @@ func (tc *Typechecker) checkCallArgs(args []Expr, params []FieldDecl, escaping [
 			if c, isCustom := actual.(CustomType); isCustom && tc.structImplementsTrait(c.Name, tr.Name) {
 				args[i] = &TraitCoerceExpr{At: arg.Loc(), Value: arg, Trait: tr.Name, Concrete: c}
 				actual = tr
+			}
+		}
+		if targetSlice, isSlice := paramType.(SliceType); isSlice {
+			if arrT, isArr := actual.(ArrayType); isArr && arrT.Elem.String() == targetSlice.Elem.String() {
+				args[i] = &ArrayToSliceExpr{At: arg.Loc(), ArrayExpr: arg, ElemType: arrT.Elem, Size: arrT.Size}
+				actual = targetSlice
 			}
 		}
 		if err := tc.assertCompat(paramType, actual, arg.Loc()); err != nil {

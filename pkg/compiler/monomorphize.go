@@ -290,6 +290,13 @@ func (m *Monomorphizer) Process(prog *Program) error {
 				}
 				e.Concrete = ct
 				return scanExpr(e.Value)
+			case *ArrayToSliceExpr:
+				ct, err := scanType(e.ElemType)
+				if err != nil {
+					return err
+				}
+				e.ElemType = ct
+				return scanExpr(e.ArrayExpr)
 			case *GenericTypeExpr:
 				elem, err := scanType(e.ElemType)
 				if err != nil {
@@ -849,6 +856,8 @@ func substituteExpr(expr Expr, subMap map[string]UbeType) Expr {
 		return &InterpolatedStringExpr{At: e.At, Parts: parts}
 	case *TraitCoerceExpr:
 		return &TraitCoerceExpr{At: e.At, Value: substituteExpr(e.Value, subMap), Trait: e.Trait, Concrete: substituteType(e.Concrete, subMap)}
+	case *ArrayToSliceExpr:
+		return &ArrayToSliceExpr{At: e.At, ArrayExpr: substituteExpr(e.ArrayExpr, subMap), ElemType: substituteType(e.ElemType, subMap), Size: e.Size}
 	case *IdentExpr:
 		return &IdentExpr{At: e.At, Name: e.Name}
 	case *StructInitExpr:

@@ -8,7 +8,7 @@ import (
 
 func isRValue(expr Expr) bool {
 	switch expr.(type) {
-	case *CallExpr, *ArrayInitExpr, *SliceInitExpr, *StructInitExpr, *BinaryExpr, *UnaryExpr, *TryExpr, *OrElseExpr, *InterpolatedStringExpr, *TraitCoerceExpr:
+	case *CallExpr, *ArrayInitExpr, *SliceInitExpr, *StructInitExpr, *BinaryExpr, *UnaryExpr, *TryExpr, *OrElseExpr, *InterpolatedStringExpr, *TraitCoerceExpr, *ArrayToSliceExpr:
 		return true
 	}
 	return false
@@ -21,6 +21,13 @@ func (g *Generator) genExpr(expr Expr) string {
 		concCT := g.toCType(e.Concrete)
 		val := g.genExpr(e.Value)
 		return fmt.Sprintf("({ %s* __b = (%s*)ube_bump_alloc(sizeof(%s)); *__b = %s; (%s){ .self = (void*)__b, .vtable = &%s }; })", concCT, concCT, concCT, val, e.Trait, vtable)
+
+	case *ArrayToSliceExpr:
+		m := g.sliceElemMangle(e.ElemType)
+		ct := g.toCType(e.ElemType)
+		val := g.genExpr(e.ArrayExpr)
+		return fmt.Sprintf("({ __auto_type _src_arr = %s; %s* _dst = (%s*)ube_bump_alloc(%d * sizeof(%s)); memcpy(_dst, _src_arr.data, %d * sizeof(%s)); (UbeSlice_%s){ .data = _dst, .len = %d, .cap = %d }; })",
+			val, ct, ct, e.Size, ct, e.Size, ct, m, e.Size, e.Size)
 
 	case *InterpolatedStringExpr:
 		sbTmp := g.newTmp()
@@ -146,7 +153,8 @@ func (g *Generator) genExpr(expr Expr) string {
 				"read_file": "ube_read_file", "write_file": "ube_write_file", "os_args": "ube_os_args",
 				"str_contains": "ube_str_contains", "str_starts_with": "ube_str_starts_with", "str_ends_with": "ube_str_ends_with",
 				"str_trim": "ube_str_trim", "str_index_of": "ube_str_index_of", "str_split": "ube_str_split",
-				"env_get": "ube_env_get",
+				"env_get": "ube_env_get", "file_exists": "ube_file_exists", "path_join": "ube_path_join",
+				"str_replace": "ube_str_replace",
 			}
 			if fn, ok := builtins[id.Name]; ok {
 				args := make([]string, len(e.Args))

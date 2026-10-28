@@ -106,6 +106,9 @@ func NewTypechecker() *Typechecker {
 	tc.Global.Funcs["write_file"] = FuncSignature{Params: []FieldDecl{{Name: "path", Type: str}, {Name: "content", Type: str}}, RetType: ResultType{Ok: boolType, Err: str}}
 	tc.Global.Funcs["os_args"] = FuncSignature{RetType: SliceType{Elem: str}}
 	tc.Global.Funcs["env_get"] = FuncSignature{Params: []FieldDecl{{Name: "key", Type: str}}, RetType: OptionalType{Inner: str}}
+	tc.Global.Funcs["file_exists"] = FuncSignature{Params: []FieldDecl{{Name: "path", Type: str}}, RetType: boolType}
+	tc.Global.Funcs["path_join"] = FuncSignature{Params: []FieldDecl{{Name: "a", Type: str}, {Name: "b", Type: str}}, RetType: str}
+	tc.Global.Funcs["str_replace"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}, {Name: "old_s", Type: str}, {Name: "new_s", Type: str}}, RetType: str}
 	tc.Global.Funcs["str_contains"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}, {Name: "substr", Type: str}}, RetType: boolType}
 	tc.Global.Funcs["str_starts_with"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}, {Name: "prefix", Type: str}}, RetType: boolType}
 	tc.Global.Funcs["str_ends_with"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}, {Name: "suffix", Type: str}}, RetType: boolType}
@@ -190,6 +193,12 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 					valT = s.Type
 				}
 			}
+			if targetSlice, isSlice := s.Type.(SliceType); isSlice {
+				if arrT, isArr := valT.(ArrayType); isArr && arrT.Elem.String() == targetSlice.Elem.String() {
+					s.Value = &ArrayToSliceExpr{At: s.Value.Loc(), ArrayExpr: s.Value, ElemType: arrT.Elem, Size: arrT.Size}
+					valT = s.Type
+				}
+			}
 			if err := tc.assertCompat(s.Type, valT, s.At); err != nil {
 				return err
 			}
@@ -232,6 +241,12 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 				rhsT = tr
 			}
 		}
+		if sl, isSlice := lhsT.(SliceType); isSlice {
+			if arrT, isArr := rhsT.(ArrayType); isArr && arrT.Elem.String() == sl.Elem.String() {
+				s.RHS = &ArrayToSliceExpr{At: s.RHS.Loc(), ArrayExpr: s.RHS, ElemType: arrT.Elem, Size: arrT.Size}
+				rhsT = sl
+			}
+		}
 		if id := assignmentRoot(s.LHS); id != "" {
 			if vInfo, found := env.LookupVar(id); found {
 				if !vInfo.IsMut {
@@ -272,6 +287,12 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			s.ValueType = valT
 			if tc.hasLifetime(valT) && tc.exprDepth(s.Value, env) > 0 {
 				return fmt.Errorf("[%s] Safety Error: cannot return a reference rooted in this function's local scope", s.At)
+			}
+			if targetSlice, isSlice := expected.(SliceType); isSlice {
+				if arrT, isArr := valT.(ArrayType); isArr && arrT.Elem.String() == targetSlice.Elem.String() {
+					s.Value = &ArrayToSliceExpr{At: s.Value.Loc(), ArrayExpr: s.Value, ElemType: arrT.Elem, Size: arrT.Size}
+					valT = expected
+				}
 			}
 			if resT, ok := expected.(ResultType); ok {
 				if _, isErr := s.Value.(*ErrorExpr); isErr {

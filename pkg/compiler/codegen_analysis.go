@@ -76,6 +76,8 @@ func (g *Generator) exprMutatesName(expr Expr, name string) bool {
 		return g.exprMutatesName(e.Value, name)
 	case *TraitCoerceExpr:
 		return g.exprMutatesName(e.Value, name)
+	case *ArrayToSliceExpr:
+		return g.exprMutatesName(e.ArrayExpr, name)
 	case *InterpolatedStringExpr:
 		for _, part := range e.Parts {
 			if g.exprMutatesName(part, name) {
