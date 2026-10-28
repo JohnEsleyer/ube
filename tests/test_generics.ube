@@ -1,0 +1,21 @@
+struct Box[T] {
+    val: T
+}
+
+fn identity[T](x: T) -> T {
+    return x
+}
+
+fn main() {
+    let b1 = Box[i32]{ val: 42 }
+    let b2 = Box[string]{ val: "Generics in Ube" }
+
+    println(b1.val)
+    println(b2.val)
+
+    let n = identity[i32](100)
+    let s = identity[string]("Monomorphized")
+
+    println(n)
+    println(s)
+}

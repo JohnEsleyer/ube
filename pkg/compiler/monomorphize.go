@@ -113,9 +113,16 @@ func (m *Monomorphizer) Process(prog *Program) error {
 				return nil, nil
 			}
 			switch v := t.(type) {
+			case CustomType:
+				if _, isTrait := m.traits[v.Name]; isTrait {
+					return TraitType{Name: v.Name}, nil
+				}
+				return v, nil
+			case TraitType:
+				return v, nil
 			case GenericInstanceType:
-				args := make([]UbeType, len(v.Args))
-				for i, arg := range v.Args {
+				args := make([]UbeType, len(v.TypeArgs))
+				for i, arg := range v.TypeArgs {
 					ct, err := scanType(arg)
 					if err != nil {
 						return nil, err
@@ -129,7 +136,7 @@ func (m *Monomorphizer) Process(prog *Program) error {
 					}
 					return CustomType{Name: name}, nil
 				}
-				return GenericInstanceType{Base: v.Base, Args: args}, nil
+				return GenericInstanceType{Base: v.Base, TypeArgs: args}, nil
 			case SliceType:
 				el, err := scanType(v.Elem)
 				if err != nil {
@@ -276,6 +283,13 @@ func (m *Monomorphizer) Process(prog *Program) error {
 						return err
 					}
 				}
+			case *TraitCoerceExpr:
+				ct, err := scanType(e.Concrete)
+				if err != nil {
+					return err
+				}
+				e.Concrete = ct
+				return scanExpr(e.Value)
 			case *GenericTypeExpr:
 				elem, err := scanType(e.ElemType)
 				if err != nil {
@@ -522,7 +536,7 @@ func (m *Monomorphizer) specializeStruct(base string, args []UbeType, pending *[
 
 	subMap := make(map[string]UbeType, len(tmpl.TypeParams))
 	for i, param := range tmpl.TypeParams {
-		subMap[param] = args[i]
+		subMap[param.Name] = args[i]
 	}
 
 	fields := make([]FieldDecl, 0, len(tmpl.Fields))
@@ -677,11 +691,11 @@ func substituteType(t UbeType, subMap map[string]UbeType) UbeType {
 		}
 		return v
 	case GenericInstanceType:
-		newArgs := make([]UbeType, len(v.Args))
-		for i, arg := range v.Args {
+		newArgs := make([]UbeType, len(v.TypeArgs))
+		for i, arg := range v.TypeArgs {
 			newArgs[i] = substituteType(arg, subMap)
 		}
-		return GenericInstanceType{Base: v.Base, Args: newArgs}
+		return GenericInstanceType{Base: v.Base, TypeArgs: newArgs}
 	case SliceType:
 		return SliceType{Elem: substituteType(v.Elem, subMap)}
 	case ArrayType:

@@ -171,6 +171,12 @@ func (g *Generator) toCType(t UbeType) string {
 		}
 	case StringType:
 		return "string"
+	case StringBuilderType:
+		return "UbeStringBuilder"
+	case TraitType:
+		return v.Name
+	case GenericInstanceType:
+		return v.Base
 	case PointerType:
 		return g.toCType(v.Base) + "*"
 	case SliceType:
@@ -202,14 +208,6 @@ func (g *Generator) toCType(t UbeType) string {
 		return fmt.Sprintf("Pool_%s*", m)
 	case CustomType:
 		return v.Name
-	case GenericInstanceType:
-		// Should already be monomorphized; fall back to the base name so
-		// diagnostics stay readable if a generic leaks through.
-		return v.Base
-	case TraitType:
-		return v.Name
-	case StringBuilderType:
-		return "UbeStringBuilder"
 	default:
 		return "void*"
 	}
@@ -316,8 +314,7 @@ func (g *Generator) Generate() string {
 	}
 	g.emit("")
 
-	// Pre-register aggregate types referenced by declarations so that their
-	// typedefs are emitted before the declarations that use them.
+	// Pre-register aggregate types
 	for _, decl := range g.Program.Decls {
 		switch d := decl.(type) {
 		case *StructDecl:
@@ -365,6 +362,7 @@ func (g *Generator) Generate() string {
 			g.emit("")
 		}
 	}
+
 	for _, decl := range g.Program.Decls {
 		if tr, ok := decl.(*TraitDecl); ok {
 			g.emit(fmt.Sprintf("typedef struct %s %s;", tr.Name, tr.Name))
@@ -373,6 +371,7 @@ func (g *Generator) Generate() string {
 			g.emit("")
 		}
 	}
+
 	for _, m := range g.sliceKeys {
 		ct := g.slices[m]
 		g.registerOption(m, ct)
@@ -415,6 +414,7 @@ func (g *Generator) Generate() string {
 		ct := g.pools[m]
 		g.emit(fmt.Sprintf("DEFINE_UBE_POOL(%s, %s)", ct, m))
 	}
+
 	for _, decl := range g.Program.Decls {
 		if tr, ok := decl.(*TraitDecl); ok {
 			g.emit(fmt.Sprintf("struct %s_VTable {", tr.Name))
@@ -429,6 +429,7 @@ func (g *Generator) Generate() string {
 			g.emit("")
 		}
 	}
+
 	for _, decl := range g.Program.Decls {
 		if fn, ok := decl.(*FnDecl); ok {
 			name := fn.Name
@@ -465,6 +466,7 @@ func (g *Generator) Generate() string {
 			g.emit(fmt.Sprintf("extern %s %s(%s);", g.toCType(fn.RetType), fn.Name, strings.Join(params, ", ")))
 		}
 	}
+
 	for _, key := range g.traitVtableKeys {
 		info := g.traitVtables[key]
 		trait := g.traitDecls[info.Trait]
@@ -495,6 +497,7 @@ func (g *Generator) Generate() string {
 		}
 		g.emit(fmt.Sprintf("static const %s_VTable %s_vtable = { %s };", info.Trait, key, strings.Join(entries, ", ")))
 	}
+
 	for _, wrapper := range g.spawnWrappers {
 		g.buf.WriteString(wrapper)
 	}

@@ -96,7 +96,7 @@ func TestFeatures_BuiltinFormat(t *testing.T) {
 }
 
 // TEST 4b: Arena-backed StringBuilder
-func TestFeatures_StringBuilder(t *testing.T) {
+func TestFeatures_StringBuilderV06(t *testing.T) {
 	src := `fn main() {
 		let mut sb = StringBuilder.new(64)
 		sb.append_str("count=")

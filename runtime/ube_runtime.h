@@ -7,7 +7,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
-#include <stdarg.h>
 #include <math.h>
 #include <errno.h>
 #include <time.h>
@@ -141,7 +140,7 @@ static inline void* ube_bump_alloc_unaligned(size_t size) {
 
 static inline void* ube_bump_alloc(size_t size) {
     if (size > SIZE_MAX - 7) ube_panic_capacity((int64_t)size);
-    size = (size + 7) & ~7; // 8-byte alignment
+    size = (size + 7) & ~7;
     return ube_bump_alloc_unaligned(size);
 }
 
@@ -199,6 +198,86 @@ static inline bool ube_str_starts_with(string s, string prefix) {
 static inline bool ube_str_ends_with(string s, string suffix) {
     return s.len >= suffix.len && (suffix.len == 0 || memcmp(s.data + s.len - suffix.len, suffix.data, suffix.len) == 0);
 }
+
+// --- 2.1 StringBuilder Type ---
+typedef struct {
+    char* data;
+    size_t len;
+    size_t cap;
+} UbeStringBuilder;
+
+static inline UbeStringBuilder ube_string_builder_new(int64_t initial_cap) {
+    size_t cap = initial_cap > 0 ? (size_t)initial_cap : 16;
+    char* data = (char*)ube_bump_alloc(cap + 1);
+    data[0] = '\0';
+    return (UbeStringBuilder){ .data = data, .len = 0, .cap = cap };
+}
+
+static inline void ube_string_builder_append_str(UbeStringBuilder* sb, string s) {
+    if (s.len == 0) return;
+    if (sb->len + s.len >= sb->cap) {
+        size_t new_cap = (sb->cap + s.len) * 2;
+        char* new_data = (char*)ube_bump_alloc(new_cap + 1);
+        if (sb->len > 0) memcpy(new_data, sb->data, sb->len);
+        sb->data = new_data;
+        sb->cap = new_cap;
+    }
+    memcpy(sb->data + sb->len, s.data, s.len);
+    sb->len += s.len;
+    sb->data[sb->len] = '\0';
+}
+
+static inline void ube_string_builder_append_int(UbeStringBuilder* sb, int64_t val) {
+    char buf[32];
+    int n = snprintf(buf, sizeof(buf), "%lld", (long long)val);
+    if (n > 0) {
+        ube_string_builder_append_str(sb, (string){ buf, (size_t)n });
+    }
+}
+
+static inline void ube_string_builder_append_i64(UbeStringBuilder* sb, int64_t val) {
+    ube_string_builder_append_int(sb, val);
+}
+
+static inline void ube_string_builder_append_char(UbeStringBuilder* sb, int64_t val) {
+    char c = (char)val;
+    ube_string_builder_append_str(sb, (string){ &c, 1 });
+}
+
+static inline void ube_string_builder_append_bool(UbeStringBuilder* sb, bool val) {
+    if (val) {
+        ube_string_builder_append_str(sb, (string){ "true", 4 });
+    } else {
+        ube_string_builder_append_str(sb, (string){ "false", 5 });
+    }
+}
+
+static inline string ube_string_builder_to_str(UbeStringBuilder* sb) {
+    return (string){ .data = sb->data, .len = sb->len };
+}
+
+static inline void ube_sb_append_any_str(UbeStringBuilder* sb, string s) { ube_string_builder_append_str(sb, s); }
+static inline void ube_sb_append_any_bool(UbeStringBuilder* sb, bool b) { ube_string_builder_append_bool(sb, b); }
+static inline void ube_sb_append_any_i64(UbeStringBuilder* sb, int64_t v) { ube_string_builder_append_int(sb, v); }
+static inline void ube_sb_append_any_u64(UbeStringBuilder* sb, uint64_t v) {
+    char buf[32]; int n = snprintf(buf, sizeof(buf), "%llu", (unsigned long long)v);
+    if (n > 0) ube_string_builder_append_str(sb, (string){ buf, (size_t)n });
+}
+static inline void ube_sb_append_any_f64(UbeStringBuilder* sb, double v) {
+    char buf[64]; int n = snprintf(buf, sizeof(buf), "%g", v);
+    if (n > 0) ube_string_builder_append_str(sb, (string){ buf, (size_t)n });
+}
+
+#define UBE_SB_APPEND(SB, X) _Generic((X), \
+    string: ube_sb_append_any_str, \
+    bool: ube_sb_append_any_bool, \
+    float: ube_sb_append_any_f64, \
+    double: ube_sb_append_any_f64, \
+    unsigned int: ube_sb_append_any_u64, \
+    unsigned long: ube_sb_append_any_u64, \
+    unsigned long long: ube_sb_append_any_u64, \
+    default: ube_sb_append_any_i64 \
+)((SB), (X))
 
 #ifndef UbeResult_string_string_DEFINED
 #define UbeResult_string_string_DEFINED
@@ -356,8 +435,6 @@ static inline void ube_panic_capacity(int64_t capacity) {
     exit(101);
 }
 
-// GNU statement expressions preserve the indexed element as an lvalue, so
-// checked indexing also protects writes such as values[index] = value.
 #define UBE_SLICE_PTR(slice_expr, idx_expr, file_name, source_line) ({ \
     __auto_type _ube_slice = (slice_expr); \
     int64_t _ube_index = (int64_t)(idx_expr); \
@@ -445,9 +522,6 @@ static inline bool Pool_##N##_despawn(Pool_##N* p, UbeHandle h) { \
     if (h.index >= p->count || !p->slots[h.index].active || p->slots[h.index].gen != h.gen) return false; \
     p->slots[h.index].active = false; \
     if (p->slots[h.index].gen == UINT32_MAX) { \
-        /* Generation exhausted: tombstone the slot for this cycle, then \
-           restart it at generation 1 so capacity is reclaimed instead of \
-           leaking the slot from the freelist forever. */ \
         p->slots[h.index].gen = 0; \
     } \
     p->slots[h.index].gen++; \
@@ -704,143 +778,5 @@ static inline void ube_print_raw_bool(bool v) { fputs(v ? "true" : "false", stdo
     int32_t: ube_print_raw_int, uint32_t: ube_print_raw_u32, uint8_t: ube_print_raw_u8, \
     int64_t: ube_print_raw_i64, uint64_t: ube_print_raw_u64, float: ube_print_raw_f32, \
     double: ube_print_raw_f64, default: ube_print_ptr)(X)
-
-// --- 2b. Arena-backed StringBuilder & Formatting ---
-typedef struct {
-    char* data;
-    size_t len;
-    size_t cap;
-} UbeStringBuilder;
-
-static inline UbeStringBuilder ube_sb_new_cap(size_t cap) {
-    if (cap < 16) cap = 16;
-    UbeStringBuilder sb;
-    sb.cap = cap;
-    sb.len = 0;
-    sb.data = (char*)ube_bump_alloc(sb.cap);
-    sb.data[0] = '\0';
-    return sb;
-}
-
-static inline UbeStringBuilder ube_sb_new(void) {
-    return ube_sb_new_cap(64);
-}
-
-static inline void ube_sb_grow(UbeStringBuilder* sb, size_t needed) {
-    if (needed > SIZE_MAX - sb->len - 1) ube_panic_capacity((int64_t)(sb->len + needed));
-    if (sb->len + needed + 1 > sb->cap) {
-        size_t new_cap = sb->cap * 2;
-        if (new_cap < sb->len + needed + 1) new_cap = sb->len + needed + 64;
-        char* new_data = (char*)ube_bump_alloc(new_cap);
-        if (sb->len) memcpy(new_data, sb->data, sb->len);
-        sb->data = new_data;
-        sb->cap = new_cap;
-    }
-}
-
-static inline void ube_sb_append_str(UbeStringBuilder* sb, string s) {
-    if (s.len == 0) return;
-    ube_sb_grow(sb, s.len);
-    memcpy(sb->data + sb->len, s.data, s.len);
-    sb->len += s.len;
-    sb->data[sb->len] = '\0';
-}
-
-static inline void ube_sb_append_cstr(UbeStringBuilder* sb, const char* s) {
-    if (!s) return;
-    size_t slen = strlen(s);
-    ube_sb_grow(sb, slen);
-    memcpy(sb->data + sb->len, s, slen);
-    sb->len += slen;
-    sb->data[sb->len] = '\0';
-}
-
-static inline void ube_sb_append_char(UbeStringBuilder* sb, char c) {
-    ube_sb_grow(sb, 1);
-    sb->data[sb->len++] = c;
-    sb->data[sb->len] = '\0';
-}
-
-static inline void ube_sb_append_i64(UbeStringBuilder* sb, int64_t v) {
-    char buf[32];
-    int n = snprintf(buf, sizeof(buf), "%lld", (long long)v);
-    if (n > 0) {
-        ube_sb_grow(sb, (size_t)n);
-        memcpy(sb->data + sb->len, buf, (size_t)n);
-        sb->len += (size_t)n;
-        sb->data[sb->len] = '\0';
-    }
-}
-
-static inline void ube_sb_append_u64(UbeStringBuilder* sb, uint64_t v) {
-    char buf[32];
-    int n = snprintf(buf, sizeof(buf), "%llu", (unsigned long long)v);
-    if (n > 0) {
-        ube_sb_grow(sb, (size_t)n);
-        memcpy(sb->data + sb->len, buf, (size_t)n);
-        sb->len += (size_t)n;
-        sb->data[sb->len] = '\0';
-    }
-}
-
-static inline void ube_sb_append_u8(UbeStringBuilder* sb, uint8_t v) {
-    ube_sb_append_u64(sb, (uint64_t)v);
-}
-
-static inline void ube_sb_append_f64(UbeStringBuilder* sb, double v) {
-    char buf[64];
-    int n = snprintf(buf, sizeof(buf), "%g", v);
-    if (n > 0) {
-        ube_sb_grow(sb, (size_t)n);
-        memcpy(sb->data + sb->len, buf, (size_t)n);
-        sb->len += (size_t)n;
-        sb->data[sb->len] = '\0';
-    }
-}
-
-static inline void ube_sb_append_bool(UbeStringBuilder* sb, bool v) {
-    ube_sb_append_cstr(sb, v ? "true" : "false");
-}
-
-static inline string ube_sb_to_string(UbeStringBuilder* sb) {
-    return (string){ sb->data, sb->len };
-}
-
-// Arena-backed printf-style formatting. Interpolated strings and the
-// format(...) builtin use UbeStringBuilder directly, but this helper is kept
-// for C-level integrations and extern declarations.
-static inline string ube_format(const char* fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    va_list copy;
-    va_copy(copy, args);
-    int needed = vsnprintf(NULL, 0, fmt, copy);
-    va_end(copy);
-    if (needed < 0) {
-        va_end(args);
-        string empty = { "", 0 };
-        return empty;
-    }
-    char* buffer = (char*)ube_bump_alloc((size_t)needed + 1);
-    vsnprintf(buffer, (size_t)needed + 1, fmt, args);
-    va_end(args);
-    string s = { buffer, (size_t)needed };
-    return s;
-}
-
-#define ube_sb_append_any(sb, X) _Generic((X), \
-    string: ube_sb_append_str, \
-    const char*: ube_sb_append_cstr, \
-    char*: ube_sb_append_cstr, \
-    bool: ube_sb_append_bool, \
-    char: ube_sb_append_char, \
-    int32_t: ube_sb_append_i64, \
-    uint32_t: ube_sb_append_u64, \
-    uint8_t: ube_sb_append_u8, \
-    int64_t: ube_sb_append_i64, \
-    uint64_t: ube_sb_append_u64, \
-    float: ube_sb_append_f64, \
-    double: ube_sb_append_f64 \
-)((sb), (X))
 
 #endif // UBE_RUNTIME_H

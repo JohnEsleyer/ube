@@ -1,6 +1,8 @@
 package compiler_test
 
 import (
+	"bufio"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +11,55 @@ import (
 
 	"github.com/JohnEsleyer/ube/pkg/compiler"
 )
+
+func TestMain(m *testing.M) {
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		os.Exit(m.Run())
+	}
+	os.Stdout = w
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		reader := bufio.NewReader(r)
+		noColor := os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb"
+		for {
+			line, err := reader.ReadString('\n')
+			if len(line) > 0 {
+				if noColor {
+					fmt.Fprint(origStdout, line)
+				} else {
+					trimmed := strings.TrimRight(line, "\r\n")
+					content := strings.TrimSpace(trimmed)
+					indent := trimmed[:len(trimmed)-len(strings.TrimLeft(trimmed, " \t"))]
+					switch {
+					case strings.HasPrefix(content, "--- PASS:"):
+						fmt.Fprintf(origStdout, "%s\x1b[1;32m%s\x1b[0m\n", indent, content)
+					case strings.HasPrefix(content, "--- FAIL:"):
+						fmt.Fprintf(origStdout, "%s\x1b[1;31m%s\x1b[0m\n", indent, content)
+					case content == "PASS":
+						fmt.Fprintln(origStdout, "\x1b[1;32mPASS\x1b[0m")
+					case strings.HasPrefix(content, "FAIL"):
+						fmt.Fprintf(origStdout, "\x1b[1;31m%s\x1b[0m\n", trimmed)
+					default:
+						fmt.Fprint(origStdout, line)
+					}
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+	}()
+
+	code := m.Run()
+	_ = w.Close()
+	<-done
+	os.Stdout = origStdout
+	os.Exit(code)
+}
 
 func compilePipeline(t *testing.T, source string) (*compiler.Program, error) {
 	t.Helper()

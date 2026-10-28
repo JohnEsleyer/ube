@@ -65,7 +65,7 @@
         },
         {
           "name": "keyword.other.ube",
-          "match": "\\b(import|struct|enum|let|mut|fn|extern)\\b"
+          "match": "\\b(import|struct|enum|trait|let|mut|fn|extern)\\b"
         }
       ]
     },
@@ -77,7 +77,7 @@
         },
         {
           "name": "support.type.collection.ube",
-          "match": "\\b(Chan|Pool|UbeHandle)\\b"
+          "match": "\\b(Chan|Pool|UbeHandle|StringBuilder)\\b"
         },
         {
           "name": "entity.name.type.ube",

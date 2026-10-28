@@ -1,0 +1,34 @@
+trait Describable {
+    fn describe() -> string
+}
+
+struct Book {
+    title: string
+}
+
+fn (b Book) describe() -> string {
+    return "Book: " + b.title
+}
+
+struct Song {
+    title: string
+}
+
+fn (s Song) describe() -> string {
+    return "Song: " + s.title
+}
+
+fn print_info(item: Describable) {
+    println(item.describe())
+}
+
+fn main() {
+    let b = Book{ title: "The Systems Language" }
+    let s = Song{ title: "Sweet Roots" }
+
+    let d1: Describable = b
+    let d2: Describable = s
+
+    print_info(d1)
+    print_info(d2)
+}

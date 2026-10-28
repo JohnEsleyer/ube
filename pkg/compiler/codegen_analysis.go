@@ -74,6 +74,14 @@ func (g *Generator) exprMutatesName(expr Expr, name string) bool {
 		return g.exprMutatesName(e.Arg, name)
 	case *UnsafeExpr:
 		return g.exprMutatesName(e.Value, name)
+	case *TraitCoerceExpr:
+		return g.exprMutatesName(e.Value, name)
+	case *InterpolatedStringExpr:
+		for _, part := range e.Parts {
+			if g.exprMutatesName(part, name) {
+				return true
+			}
+		}
 	}
 	return false
 }

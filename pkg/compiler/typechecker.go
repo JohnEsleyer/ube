@@ -16,26 +16,30 @@ type FuncSignature struct {
 }
 
 type TypeEnvironment struct {
-	Parent      *TypeEnvironment
-	Vars        map[string]VarInfo
-	Structs     map[string][]FieldDecl
-	Enums       map[string][]VariantDecl
-	Funcs       map[string]FuncSignature
-	Traits      map[string]*TraitDecl
-	CurRet      UbeType
-	LoopDepth   int
-	ScopeDepth  int
-	UnsafeDepth int
+	Parent         *TypeEnvironment
+	Vars           map[string]VarInfo
+	Structs        map[string][]FieldDecl
+	Enums          map[string][]VariantDecl
+	Traits         map[string]*TraitDecl
+	Funcs          map[string]FuncSignature
+	GenericStructs map[string]*StructDecl
+	GenericFuncs   map[string]*FnDecl
+	CurRet         UbeType
+	LoopDepth      int
+	ScopeDepth     int
+	UnsafeDepth    int
 }
 
 func NewTypeEnvironment(parent *TypeEnvironment) *TypeEnvironment {
 	return &TypeEnvironment{
-		Parent:  parent,
-		Vars:    make(map[string]VarInfo),
-		Structs: make(map[string][]FieldDecl),
-		Enums:   make(map[string][]VariantDecl),
-		Funcs:   make(map[string]FuncSignature),
-		Traits:  make(map[string]*TraitDecl),
+		Parent:         parent,
+		Vars:           make(map[string]VarInfo),
+		Structs:        make(map[string][]FieldDecl),
+		Enums:          make(map[string][]VariantDecl),
+		Traits:         make(map[string]*TraitDecl),
+		Funcs:          make(map[string]FuncSignature),
+		GenericStructs: make(map[string]*StructDecl),
+		GenericFuncs:   make(map[string]*FnDecl),
 	}
 }
 
@@ -46,6 +50,9 @@ func childTypeEnvironment(parent *TypeEnvironment) *TypeEnvironment {
 		env.LoopDepth = parent.LoopDepth
 		env.ScopeDepth = parent.ScopeDepth
 		env.UnsafeDepth = parent.UnsafeDepth
+		env.Traits = parent.Traits
+		env.GenericStructs = parent.GenericStructs
+		env.GenericFuncs = parent.GenericFuncs
 	}
 	return env
 }
@@ -105,7 +112,47 @@ func NewTypechecker() *Typechecker {
 	tc.Global.Funcs["str_trim"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}}, RetType: str}
 	tc.Global.Funcs["str_index_of"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}, {Name: "substr", Type: str}}, RetType: i32}
 	tc.Global.Funcs["str_split"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}, {Name: "delim", Type: str}}, RetType: SliceType{Elem: str}}
+
+	// StringBuilder receiver methods
+	tc.Global.Funcs["format"] = FuncSignature{RetType: str}
+	tc.Global.Funcs["StringBuilder.append"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}}, RetType: void}
+	tc.Global.Funcs["StringBuilder.append_str"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}}, RetType: void}
+	tc.Global.Funcs["StringBuilder.append_int"] = FuncSignature{Params: []FieldDecl{{Name: "val", Type: i64}}, RetType: void}
+	tc.Global.Funcs["StringBuilder.append_i64"] = FuncSignature{Params: []FieldDecl{{Name: "val", Type: i64}}, RetType: void}
+	tc.Global.Funcs["StringBuilder.append_char"] = FuncSignature{Params: []FieldDecl{{Name: "val", Type: i32}}, RetType: void}
+	tc.Global.Funcs["StringBuilder.append_bool"] = FuncSignature{Params: []FieldDecl{{Name: "val", Type: boolType}}, RetType: void}
+	tc.Global.Funcs["StringBuilder.to_string"] = FuncSignature{RetType: str}
+
 	return tc
+}
+
+func (tc *Typechecker) resolveType(t UbeType) UbeType {
+	if t == nil {
+		return nil
+	}
+	switch v := t.(type) {
+	case CustomType:
+		if _, isTrait := tc.Global.Traits[v.Name]; isTrait {
+			return TraitType{Name: v.Name}
+		}
+		return v
+	case SliceType:
+		return SliceType{Elem: tc.resolveType(v.Elem)}
+	case ArrayType:
+		return ArrayType{Elem: tc.resolveType(v.Elem), Size: v.Size}
+	case OptionalType:
+		return OptionalType{Inner: tc.resolveType(v.Inner)}
+	case ResultType:
+		return ResultType{Ok: tc.resolveType(v.Ok), Err: tc.resolveType(v.Err)}
+	case ChanType:
+		return ChanType{Elem: tc.resolveType(v.Elem)}
+	case PoolType:
+		return PoolType{Elem: tc.resolveType(v.Elem)}
+	case PointerType:
+		return PointerType{Base: tc.resolveType(v.Base)}
+	default:
+		return t
+	}
 }
 
 func (tc *Typechecker) checkBlock(b *BlockStmt, env *TypeEnvironment) error {
@@ -133,16 +180,17 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		}
 		s.ValueType = valT
 		if s.Type != nil {
+			s.Type = tc.resolveType(s.Type)
 			if err := tc.validateType(s.Type, s.At); err != nil {
 				return err
 			}
-			coerced, err := tc.coerceTraitValue(s.Value, s.Type, valT, s.At)
-			if err != nil {
-				return err
+			if tr, isTrait := s.Type.(TraitType); isTrait {
+				if c, isCustom := valT.(CustomType); isCustom && tc.structImplementsTrait(c.Name, tr.Name) {
+					s.Value = &TraitCoerceExpr{At: s.Value.Loc(), Value: s.Value, Trait: tr.Name, Concrete: c}
+					valT = s.Type
+				}
 			}
-			if _, isCoerce := coerced.(*TraitCoerceExpr); isCoerce {
-				s.Value = coerced
-			} else if err := tc.assertCompat(s.Type, valT, s.At); err != nil {
+			if err := tc.assertCompat(s.Type, valT, s.At); err != nil {
 				return err
 			}
 			valT = s.Type
@@ -174,16 +222,15 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		if err != nil {
 			return err
 		}
+		lhsT = tc.resolveType(lhsT)
+		rhsT = tc.resolveType(rhsT)
 		s.LHSType = lhsT
 		s.RHSType = rhsT
-		coerced, err := tc.coerceTraitValue(s.RHS, lhsT, rhsT, s.At)
-		if err != nil {
-			return err
-		}
-		if _, isCoerce := coerced.(*TraitCoerceExpr); isCoerce {
-			s.RHS = coerced
-			s.RHSType = lhsT
-			return nil
+		if tr, isTrait := lhsT.(TraitType); isTrait {
+			if c, isCustom := rhsT.(CustomType); isCustom && tc.structImplementsTrait(c.Name, tr.Name) {
+				s.RHS = &TraitCoerceExpr{At: s.RHS.Loc(), Value: s.RHS, Trait: tr.Name, Concrete: c}
+				rhsT = tr
+			}
 		}
 		if id := assignmentRoot(s.LHS); id != "" {
 			if vInfo, found := env.LookupVar(id); found {
@@ -225,17 +272,6 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			s.ValueType = valT
 			if tc.hasLifetime(valT) && tc.exprDepth(s.Value, env) > 0 {
 				return fmt.Errorf("[%s] Safety Error: cannot return a reference rooted in this function's local scope", s.At)
-			}
-			if expected != nil {
-				coerced, err := tc.coerceTraitValue(s.Value, expected, valT, s.At)
-				if err != nil {
-					return err
-				}
-				if _, isCoerce := coerced.(*TraitCoerceExpr); isCoerce {
-					s.Value = coerced
-					s.ValueType = expected
-					return nil
-				}
 			}
 			if resT, ok := expected.(ResultType); ok {
 				if _, isErr := s.Value.(*ErrorExpr); isErr {
@@ -478,6 +514,11 @@ func (tc *Typechecker) Check(prog *Program) error {
 		{Name: "gen", Type: PrimitiveType{Name: "u32"}},
 	}
 
+	// 1. Monomorphization Pass for Generics
+	if err := tc.monomorphize(prog); err != nil {
+		return err
+	}
+
 	for _, decl := range prog.Decls {
 		switch d := decl.(type) {
 		case *StructDecl:
@@ -503,6 +544,17 @@ func (tc *Typechecker) Check(prog *Program) error {
 					if err := tc.validateType(vt, d.At); err != nil {
 						return err
 					}
+				}
+			}
+		case *TraitDecl:
+			for _, m := range d.Methods {
+				for _, p := range m.Params {
+					if err := tc.validateType(p.Type, m.At); err != nil {
+						return err
+					}
+				}
+				if err := tc.validateType(m.RetType, m.At); err != nil {
+					return err
 				}
 			}
 		}

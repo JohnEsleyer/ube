@@ -1,0 +1,11 @@
+fn main() {
+    let mut sb = StringBuilder.new(32)
+    sb.append("Ube")
+    sb.append(" version ")
+    sb.append_int(1)
+    sb.append(".")
+    sb.append_int(0)
+
+    let res = sb.to_string()
+    println(res)
+}

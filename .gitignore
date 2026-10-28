@@ -36,3 +36,6 @@ codebase.txt
 
 # AI Prompts
 instructions/
+
+# Folders used by my CLI dev tools
+patcher/

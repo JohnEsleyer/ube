@@ -28,57 +28,27 @@ func integerType(t UbeType) bool {
 	return false
 }
 
-// traitForType reports the trait name when t denotes a trait object type.
-// Trait names are parsed as CustomType before the typechecker knows which
-// declarations are traits, so both forms are accepted here.
-func (tc *Typechecker) traitForType(t UbeType) (string, bool) {
-	switch v := t.(type) {
-	case TraitType:
-		return v.Name, true
-	case CustomType:
-		if _, ok := tc.Global.Traits[v.Name]; ok {
-			return v.Name, true
-		}
-	}
-	return "", false
-}
-
-func (tc *Typechecker) traitSatisfiedBy(concrete UbeType, traitName string, loc SourceLocation) error {
-	trait, ok := tc.Global.Traits[traitName]
-	if !ok {
-		return fmt.Errorf("[%s] unknown trait '%s'", loc, traitName)
-	}
-	base := concrete.String()
-	for _, required := range trait.Methods {
-		key := fmt.Sprintf("%s.%s", base, required.Name)
-		if _, found := tc.Global.Funcs[key]; !found {
-			return fmt.Errorf("[%s] type '%s' does not satisfy trait '%s': missing method '%s'", loc, concrete, traitName, required.Name)
-		}
-	}
-	return nil
-}
-
-// coerceTraitValue wraps a concrete value when it is assigned to a trait
-// object, validating structural satisfaction at the same time.
-func (tc *Typechecker) coerceTraitValue(expr Expr, expected, actual UbeType, loc SourceLocation) (Expr, error) {
-	traitName, expectedTrait := tc.traitForType(expected)
-	if !expectedTrait {
-		return expr, nil
-	}
-	if actualTrait, actualIsTrait := tc.traitForType(actual); actualIsTrait {
-		if actualTrait != traitName {
-			return expr, fmt.Errorf("[%s] Type mismatch: expected '%s', got '%s'", loc, expected, actual)
-		}
-		return expr, nil
-	}
-	if err := tc.traitSatisfiedBy(actual, traitName, loc); err != nil {
-		return expr, err
-	}
-	return &TraitCoerceExpr{At: loc, Value: expr, Trait: traitName, Concrete: actual}, nil
-}
-
 func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, error) {
 	switch e := expr.(type) {
+	case *TraitCoerceExpr:
+		_, err := tc.inferExpr(e.Value, env)
+		if err != nil {
+			return nil, err
+		}
+		return TraitType{Name: e.Trait}, nil
+
+	case *InterpolatedStringExpr:
+		for _, part := range e.Parts {
+			pType, err := tc.inferExpr(part, env)
+			if err != nil {
+				return nil, err
+			}
+			if !printableType(pType) && pType.String() != "string" {
+				return nil, fmt.Errorf("[%s] cannot interpolate expression of type '%s'", part.Loc(), pType)
+			}
+		}
+		return StringType{}, nil
+
 	case *UnsafeExpr:
 		tc.HasUnsafe = true
 		unsafeEnv := childTypeEnvironment(env)
@@ -88,33 +58,21 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 	case *LiteralExpr:
 		return e.Type, nil
 
-	case *InterpolatedStringExpr:
-		for _, part := range e.Parts {
-			partType, err := tc.inferExpr(part, env)
-			if err != nil {
-				return nil, err
-			}
-			if _, isLiteral := part.(*LiteralExpr); isLiteral {
-				continue
-			}
-			if !printableType(partType) {
-				return nil, fmt.Errorf("[%s] cannot interpolate value of type '%s'", e.At, partType)
-			}
-		}
-		return StringType{}, nil
-
 	case *IdentExpr:
+		if e.Name == "StringBuilder" {
+			return StringBuilderType{}, nil
+		}
 		if v, ok := env.LookupVar(e.Name); ok {
 			if err := requireUnsafePointerUse(v.Type, env, e.At); err != nil {
 				return nil, err
 			}
 			return v.Type, nil
 		}
-		if e.Name == "StringBuilder" {
-			return StringBuilderType{}, nil
-		}
 		if _, ok := tc.Global.Enums[e.Name]; ok {
 			return CustomType{Name: e.Name}, nil
+		}
+		if _, ok := tc.Global.Traits[e.Name]; ok {
+			return TraitType{Name: e.Name}, nil
 		}
 		if strings.HasPrefix(e.Name, "Chan[") && strings.HasSuffix(e.Name, "]") {
 			elemName := e.Name[5 : len(e.Name)-1]
@@ -248,6 +206,28 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		if id, ok := e.Callee.(*IdentExpr); ok && tc.Externs[id.Name] && env.UnsafeDepth == 0 {
 			return nil, fmt.Errorf("[%s] Safety Error: foreign function '%s' can only be called inside unsafe { ... }", e.At, id.Name)
 		}
+		if id, ok := e.Callee.(*IdentExpr); ok && id.Name == "format" {
+			if len(e.Args) == 0 {
+				return nil, fmt.Errorf("[%s] format expects at least a format string", e.At)
+			}
+			fmtT, err := tc.inferExpr(e.Args[0], env)
+			if err != nil {
+				return nil, err
+			}
+			if err := tc.assertCompat(StringType{}, fmtT, e.Args[0].Loc()); err != nil {
+				return nil, err
+			}
+			for _, arg := range e.Args[1:] {
+				argT, err := tc.inferExpr(arg, env)
+				if err != nil {
+					return nil, err
+				}
+				if !printableType(argT) && argT.String() != "string" {
+					return nil, fmt.Errorf("[%s] format does not support type '%s'", arg.Loc(), argT)
+				}
+			}
+			return StringType{}, nil
+		}
 		if id, ok := e.Callee.(*IdentExpr); ok && (id.Name == "println" || id.Name == "print") {
 			for _, arg := range e.Args {
 				argT, err := tc.inferExpr(arg, env)
@@ -270,53 +250,23 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			}
 			return StringType{}, nil
 		}
-		if id, ok := e.Callee.(*IdentExpr); ok && id.Name == "format" {
-			if len(e.Args) < 1 {
-				return nil, fmt.Errorf("[%s] format expects a template string", e.At)
-			}
-			tmplType, err := tc.inferExpr(e.Args[0], env)
-			if err != nil {
-				return nil, err
-			}
-			if _, isString := tmplType.(StringType); !isString {
-				return nil, fmt.Errorf("[%s] format template must be a string, got '%s'", e.At, tmplType)
-			}
-			if _, isLiteral := e.Args[0].(*LiteralExpr); !isLiteral {
-				return nil, fmt.Errorf("[%s] format template must be a string literal", e.At)
-			}
-			template := e.Args[0].(*LiteralExpr).Val
-			if placeholders := strings.Count(template, "{}"); placeholders != len(e.Args)-1 {
-				return nil, fmt.Errorf("[%s] format template expects %d arguments, got %d", e.At, placeholders, len(e.Args)-1)
-			}
-			for _, arg := range e.Args[1:] {
-				argType, err := tc.inferExpr(arg, env)
-				if err != nil {
-					return nil, err
-				}
-				if !printableType(argType) {
-					return nil, fmt.Errorf("[%s] format does not support type '%s'", e.At, argType)
-				}
-			}
-			return StringType{}, nil
-		}
 		if mem, ok := e.Callee.(*MemberExpr); ok {
 			if id, ok := mem.Target.(*IdentExpr); ok && id.Name == "StringBuilder" && mem.Member == "new" {
 				if len(e.Args) > 1 {
-					return nil, fmt.Errorf("[%s] StringBuilder.new expects at most one capacity argument", e.At)
+					return nil, fmt.Errorf("[%s] StringBuilder.new takes at most 1 capacity argument", e.At)
 				}
 				if len(e.Args) == 1 {
-					capType, err := tc.inferExpr(e.Args[0], env)
+					argT, err := tc.inferExpr(e.Args[0], env)
 					if err != nil {
 						return nil, err
 					}
-					if !integerType(capType) {
-						return nil, fmt.Errorf("[%s] StringBuilder capacity must be an integer, got '%s'", e.At, capType)
+					if !integerType(argT) {
+						return nil, fmt.Errorf("[%s] StringBuilder capacity must be an integer", e.At)
 					}
 				}
 				return StringBuilderType{}, nil
 			}
-		}
-		if mem, ok := e.Callee.(*MemberExpr); ok {
+
 			if id, ok := mem.Target.(*IdentExpr); ok {
 				if variants, ok := tc.Global.Enums[id.Name]; ok {
 					for _, variant := range variants {
@@ -344,58 +294,85 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				return nil, err
 			}
 			mem.TargetType = tgtT
+
+			// StringBuilder instance methods
 			if _, isSB := tgtT.(StringBuilderType); isSB {
+				e.ReceiverType = tgtT
 				switch mem.Member {
-				case "append_str":
+				case "append", "append_str":
 					if len(e.Args) != 1 {
-						return nil, fmt.Errorf("[%s] append_str expects one string", e.At)
+						return nil, fmt.Errorf("[%s] %s expects 1 string argument", e.At, mem.Member)
 					}
-					argT, err := tc.inferExpr(e.Args[0], env)
+					aT, err := tc.inferExpr(e.Args[0], env)
 					if err != nil {
 						return nil, err
 					}
-					if _, isStr := argT.(StringType); !isStr {
-						return nil, fmt.Errorf("[%s] append_str expects string, got '%s'", e.At, argT)
+					if err := tc.assertCompat(StringType{}, aT, e.At); err != nil {
+						return nil, err
+					}
+					return PrimitiveType{Name: "void"}, nil
+				case "append_int", "append_i64":
+					if len(e.Args) != 1 {
+						return nil, fmt.Errorf("[%s] %s expects 1 integer argument", e.At, mem.Member)
+					}
+					aT, err := tc.inferExpr(e.Args[0], env)
+					if err != nil {
+						return nil, err
+					}
+					if !integerType(aT) {
+						return nil, fmt.Errorf("[%s] %s expects an integer", e.At, mem.Member)
 					}
 					return PrimitiveType{Name: "void"}, nil
 				case "append_char":
 					if len(e.Args) != 1 {
-						return nil, fmt.Errorf("[%s] append_char expects one character", e.At)
+						return nil, fmt.Errorf("[%s] append_char expects 1 integer argument", e.At)
 					}
-					argT, err := tc.inferExpr(e.Args[0], env)
+					aT, err := tc.inferExpr(e.Args[0], env)
 					if err != nil {
 						return nil, err
 					}
-					if !integerType(argT) {
-						return nil, fmt.Errorf("[%s] append_char expects an integer character code, got '%s'", e.At, argT)
+					if !integerType(aT) {
+						return nil, fmt.Errorf("[%s] append_char expects an integer", e.At)
 					}
 					return PrimitiveType{Name: "void"}, nil
-				case "append_i64", "append_f64", "append_bool":
+				case "append_bool":
 					if len(e.Args) != 1 {
-						return nil, fmt.Errorf("[%s] %s expects one argument", e.At, mem.Member)
+						return nil, fmt.Errorf("[%s] append_bool expects 1 bool argument", e.At)
 					}
-					argT, err := tc.inferExpr(e.Args[0], env)
+					aT, err := tc.inferExpr(e.Args[0], env)
 					if err != nil {
 						return nil, err
 					}
-					if mem.Member == "append_bool" {
-						if err := tc.assertCompat(PrimitiveType{Name: "bool"}, argT, e.At); err != nil {
-							return nil, err
-						}
-					} else if !integerType(argT) && argT.String() != "f32" && argT.String() != "f64" {
-						return nil, fmt.Errorf("[%s] %s expects a numeric argument, got '%s'", e.At, mem.Member, argT)
+					if err := tc.assertCompat(PrimitiveType{Name: "bool"}, aT, e.At); err != nil {
+						return nil, err
 					}
 					return PrimitiveType{Name: "void"}, nil
 				case "to_string":
 					if len(e.Args) != 0 {
-						return nil, fmt.Errorf("[%s] to_string expects no arguments", e.At)
+						return nil, fmt.Errorf("[%s] to_string expects 0 arguments", e.At)
 					}
 					return StringType{}, nil
-				case "len":
-					return PrimitiveType{Name: "i32"}, nil
+				default:
+					return nil, fmt.Errorf("[%s] unknown StringBuilder method '%s'", e.At, mem.Member)
 				}
-				return nil, fmt.Errorf("[%s] StringBuilder has no method '%s'", e.At, mem.Member)
 			}
+
+			// Trait dynamic method calls
+			if tr, isTrait := tgtT.(TraitType); isTrait {
+				e.ReceiverType = tgtT
+				if tDecl, ok := tc.Global.Traits[tr.Name]; ok {
+					for _, m := range tDecl.Methods {
+						if m.Name == mem.Member {
+							if err := tc.checkCallArgs(e.Args, m.Params, nil, env, e.At); err != nil {
+								return nil, err
+							}
+							return m.RetType, nil
+						}
+					}
+					return nil, fmt.Errorf("[%s] trait '%s' has no method '%s'", e.At, tr.Name, mem.Member)
+				}
+			}
+
 			if sl, ok := tgtT.(SliceType); ok && mem.Member == "push" {
 				if len(e.Args) != 1 {
 					return nil, fmt.Errorf("[%s] push expects 1 argument", e.At)
@@ -515,23 +492,6 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					}
 					return PrimitiveType{Name: "bool"}, nil
 				}
-			}
-			if traitName, isTrait := tc.traitForType(tgtT); isTrait {
-				trait := tc.Global.Traits[traitName]
-				for _, method := range trait.Methods {
-					if method.Name != mem.Member {
-						continue
-					}
-					if err := tc.checkCallArgs(e.Args, method.Params, nil, env, e.At); err != nil {
-						return nil, err
-					}
-					if err := requireUnsafePointerUse(method.RetType, env, e.At); err != nil {
-						return nil, err
-					}
-					e.TraitName = traitName
-					return method.RetType, nil
-				}
-				return nil, fmt.Errorf("[%s] trait '%s' has no method '%s'", e.At, traitName, mem.Member)
 			}
 			methodKey := fmt.Sprintf("%s.%s", tgtT, mem.Member)
 			if sig, ok := tc.Global.Funcs[methodKey]; ok {
@@ -673,18 +633,18 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		return nil, fmt.Errorf("[%s] Type '%s' does not support slicing", e.At, t)
 
 	case *SliceInitExpr:
+		e.Elem = tc.resolveType(e.Elem)
 		for i, el := range e.Elements {
 			t, err := tc.inferExpr(el, env)
 			if err != nil {
 				return nil, err
 			}
-			coerced, err := tc.coerceTraitValue(el, e.Elem, t, el.Loc())
-			if err != nil {
-				return nil, err
-			}
-			if _, isCoerce := coerced.(*TraitCoerceExpr); isCoerce {
-				e.Elements[i] = coerced
-				continue
+			t = tc.resolveType(t)
+			if tr, isTrait := e.Elem.(TraitType); isTrait {
+				if c, isCustom := t.(CustomType); isCustom && tc.structImplementsTrait(c.Name, tr.Name) {
+					e.Elements[i] = &TraitCoerceExpr{At: el.Loc(), Value: el, Trait: tr.Name, Concrete: c}
+					continue
+				}
 			}
 			if err := tc.assertCompat(e.Elem, t, el.Loc()); err != nil {
 				return nil, err
@@ -696,18 +656,10 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		if len(e.Elements) > e.Size {
 			return nil, fmt.Errorf("[%s] too many array initializer elements", e.At)
 		}
-		for i, el := range e.Elements {
+		for _, el := range e.Elements {
 			t, err := tc.inferExpr(el, env)
 			if err != nil {
 				return nil, err
-			}
-			coerced, err := tc.coerceTraitValue(el, e.Elem, t, el.Loc())
-			if err != nil {
-				return nil, err
-			}
-			if _, isCoerce := coerced.(*TraitCoerceExpr); isCoerce {
-				e.Elements[i] = coerced
-				continue
 			}
 			if err := tc.assertCompat(e.Elem, t, el.Loc()); err != nil {
 				return nil, err
@@ -733,8 +685,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			fieldMap[f.Name] = f.Type
 		}
 		provided := make(map[string]bool)
-		for i := range e.Fields {
-			init := &e.Fields[i]
+		for _, init := range e.Fields {
 			expectedType, exists := fieldMap[init.Name]
 			if !exists {
 				return nil, fmt.Errorf("[%s] struct '%s' has no field '%s'", init.Val.Loc(), e.Name, init.Name)
@@ -746,14 +697,6 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			valT, err := tc.inferExpr(init.Val, env)
 			if err != nil {
 				return nil, err
-			}
-			coerced, err := tc.coerceTraitValue(init.Val, expectedType, valT, init.Val.Loc())
-			if err != nil {
-				return nil, err
-			}
-			if _, isCoerce := coerced.(*TraitCoerceExpr); isCoerce {
-				init.Val = coerced
-				continue
 			}
 			if err := tc.assertCompat(expectedType, valT, init.Val.Loc()); err != nil {
 				return nil, fmt.Errorf("[%s] field '%s' type mismatch: expected '%s', got '%s'", init.Val.Loc(), init.Name, expectedType, valT)
@@ -817,19 +760,45 @@ func (tc *Typechecker) checkCallArgs(args []Expr, params []FieldDecl, escaping [
 		if params[i].Type == nil {
 			continue
 		}
-		coerced, err := tc.coerceTraitValue(arg, params[i].Type, actual, arg.Loc())
-		if err != nil {
-			return err
+		paramType := tc.resolveType(params[i].Type)
+		actual = tc.resolveType(actual)
+		if tr, isTrait := paramType.(TraitType); isTrait {
+			if c, isCustom := actual.(CustomType); isCustom && tc.structImplementsTrait(c.Name, tr.Name) {
+				args[i] = &TraitCoerceExpr{At: arg.Loc(), Value: arg, Trait: tr.Name, Concrete: c}
+				actual = tr
+			}
 		}
-		args[i] = coerced
-		if _, isCoerce := coerced.(*TraitCoerceExpr); isCoerce {
-			continue
-		}
-		if err := tc.assertCompat(params[i].Type, actual, arg.Loc()); err != nil {
+		if err := tc.assertCompat(paramType, actual, arg.Loc()); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (tc *Typechecker) structImplementsTrait(structName, traitName string) bool {
+	tr, ok := tc.Global.Traits[traitName]
+	if !ok {
+		return false
+	}
+	for _, m := range tr.Methods {
+		key := fmt.Sprintf("%s.%s", structName, m.Name)
+		sig, ok := tc.Global.Funcs[key]
+		if !ok {
+			return false
+		}
+		if len(sig.Params) != len(m.Params) {
+			return false
+		}
+		for i, p := range m.Params {
+			if sig.Params[i].Type.String() != p.Type.String() {
+				return false
+			}
+		}
+		if sig.RetType.String() != m.RetType.String() {
+			return false
+		}
+	}
+	return true
 }
 
 func (tc *Typechecker) typeFromName(name string) UbeType {
@@ -838,7 +807,12 @@ func (tc *Typechecker) typeFromName(name string) UbeType {
 		return PrimitiveType{Name: name}
 	case "string":
 		return StringType{}
+	case "StringBuilder":
+		return StringBuilderType{}
 	default:
+		if _, ok := tc.Global.Traits[name]; ok {
+			return TraitType{Name: name}
+		}
 		return CustomType{Name: name}
 	}
 }
@@ -847,8 +821,18 @@ func (tc *Typechecker) assertCompat(expected, actual UbeType, loc SourceLocation
 	if expected == nil || actual == nil {
 		return nil
 	}
+	expected = tc.resolveType(expected)
+	actual = tc.resolveType(actual)
 	if expected.String() == actual.String() {
 		return nil
+	}
+	if tr, isTrait := expected.(TraitType); isTrait {
+		if c, isCustom := actual.(CustomType); isCustom {
+			if tc.structImplementsTrait(c.Name, tr.Name) {
+				return nil
+			}
+			return fmt.Errorf("[%s] type '%s' does not implement trait '%s'", loc, c.Name, tr.Name)
+		}
 	}
 	if integerType(expected) && integerType(actual) {
 		return nil
@@ -892,7 +876,12 @@ func (tc *Typechecker) assertCompat(expected, actual UbeType, loc SourceLocation
 
 func (tc *Typechecker) validateType(t UbeType, loc SourceLocation) error {
 	switch v := t.(type) {
-	case PrimitiveType, StringType, StringBuilderType, TraitType:
+	case PrimitiveType, StringType, StringBuilderType:
+		return nil
+	case TraitType:
+		if _, ok := tc.Global.Traits[v.Name]; !ok {
+			return fmt.Errorf("[%s] unknown trait '%s'", loc, v.Name)
+		}
 		return nil
 	case PointerType:
 		return tc.validateType(v.Base, loc)
@@ -903,13 +892,6 @@ func (tc *Typechecker) validateType(t UbeType, loc SourceLocation) error {
 			return fmt.Errorf("[%s] array size must be greater than 0", loc)
 		}
 		return tc.validateType(v.Elem, loc)
-	case GenericInstanceType:
-		for _, arg := range v.Args {
-			if err := tc.validateType(arg, loc); err != nil {
-				return err
-			}
-		}
-		return nil
 	case OptionalType:
 		return tc.validateType(v.Inner, loc)
 	case ResultType:

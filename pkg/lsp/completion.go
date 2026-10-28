@@ -36,10 +36,10 @@ func CompletionItems(source string, p lspPosition) []map[string]any {
 		return items
 	}
 
-	for _, s := range strings.Fields("fn let mut struct enum match if else while for in scope unsafe spawn return break continue defer or_else import select extern") {
+	for _, s := range strings.Fields("fn let mut struct enum trait match if else while for in scope unsafe spawn return break continue defer or_else import select extern") {
 		items = append(items, map[string]any{"label": s, "kind": 14})
 	}
-	for _, t := range strings.Fields("i32 u32 i64 u64 u8 f32 f64 bool string void Chan Pool UbeHandle") {
+	for _, t := range strings.Fields("i32 u32 i64 u64 u8 f32 f64 bool string void Chan Pool UbeHandle StringBuilder") {
 		items = append(items, map[string]any{"label": t, "kind": 7})
 	}
 	builtins := []struct{ name, sig string }{

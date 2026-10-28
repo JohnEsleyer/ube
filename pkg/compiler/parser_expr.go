@@ -3,7 +3,6 @@ package compiler
 import (
 	"fmt"
 	"strconv"
-	"strings"
 )
 
 func (p *Parser) parseExpr() Expr {
@@ -191,117 +190,67 @@ func normalizeIntLiteral(tok Token) string {
 	return tok.Val
 }
 
-// tryParseTypeArgs parses a bracketed list of type arguments starting at '['.
-// It restores the parser position and reports false on any syntax mismatch.
-func (p *Parser) tryParseTypeArgs() (args []UbeType, ok bool) {
-	saved := p.pos
-	defer func() {
-		if r := recover(); r != nil {
-			if _, isParseErr := r.(parseError); isParseErr {
-				p.pos = saved
-				args = nil
-				ok = false
-				return
-			}
-			panic(r)
-		}
-	}()
-	p.advance() // '['
-	for !p.check(TokenRBracket) && !p.check(TokenEOF) {
-		args = append(args, p.parseType())
-		if p.check(TokenComma) {
-			p.advance()
-		}
-	}
-	if !p.check(TokenRBracket) {
-		p.pos = saved
-		return nil, false
-	}
-	p.advance() // ']'
-	return args, true
-}
-
-// tryGenericTypeArgs parses type arguments only when the token following the
-// closing bracket is one of the supplied tokens. This disambiguates generic
-// specializations such as Pair[i32]{...} from ordinary indexing like a[i].
-func (p *Parser) tryGenericTypeArgs(following ...TokenType) ([]UbeType, bool) {
-	saved := p.pos
-	args, ok := p.tryParseTypeArgs()
-	if !ok {
-		p.pos = saved
-		return nil, false
-	}
-	for _, ft := range following {
-		if p.check(ft) {
-			return args, true
-		}
-	}
-	p.pos = saved
-	return nil, false
-}
-
-func (p *Parser) parseInterpolatedString(tok Token) Expr {
-	raw := tok.Val
+func parseInterpolatedParts(raw string, loc SourceLocation) ([]Expr, error) {
 	var parts []Expr
-	var buf strings.Builder
-	for i := 0; i < len(raw); i++ {
-		ch := raw[i]
-		if ch == '\\' && i+1 < len(raw) && (raw[i+1] == '{' || raw[i+1] == '}') {
-			buf.WriteByte(raw[i+1])
-			i++
-			continue
-		}
-		if ch == '{' {
-			if buf.Len() > 0 {
-				parts = append(parts, &LiteralExpr{At: tok.Loc, Val: buf.String(), Type: StringType{}})
-				buf.Reset()
+	i := 0
+	start := 0
+	for i < len(raw) {
+		if raw[i] == '{' {
+			if i > start {
+				parts = append(parts, &LiteralExpr{
+					At:   loc,
+					Val:  raw[start:i],
+					Type: StringType{},
+				})
 			}
-			i++
-			start := i
-			depth := 1
-			for i < len(raw) && depth > 0 {
-				if raw[i] == '{' {
-					depth++
-				} else if raw[i] == '}' {
-					depth--
-					if depth == 0 {
-						break
+			i++ // skip '{'
+			exprStart := i
+			braceDepth := 1
+			inSubString := false
+			for i < len(raw) && braceDepth > 0 {
+				if raw[i] == '"' && (i == 0 || raw[i-1] != '\\') {
+					inSubString = !inSubString
+				} else if !inSubString {
+					if raw[i] == '{' {
+						braceDepth++
+					} else if raw[i] == '}' {
+						braceDepth--
+						if braceDepth == 0 {
+							break
+						}
 					}
 				}
 				i++
 			}
-			if depth != 0 {
-				p.errorAt(tok.Loc, "Unmatched '{' in formatted string literal")
+			if braceDepth != 0 {
+				return nil, fmt.Errorf("unterminated '{' in interpolated string")
 			}
-			exprSource := raw[start:i]
-			subToks, err := NewLexer(tok.Loc.File, exprSource).Tokenize()
+			exprText := raw[exprStart:i]
+			i++
+			start = i
+
+			subTokens, err := NewLexer(loc.File, exprText).Tokenize()
 			if err != nil {
-				p.errorAt(tok.Loc, fmt.Sprintf("In formatted string: %v", err))
+				return nil, fmt.Errorf("in interpolated string: %w", err)
 			}
-			subExpr, perr := func() (expr Expr, perr error) {
-				defer func() {
-					if r := recover(); r != nil {
-						if pe, isParseErr := r.(parseError); isParseErr {
-							perr = fmt.Errorf("%s", pe.msg)
-							return
-						}
-						panic(r)
-					}
-				}()
-				return NewParser(subToks).parseExpr(), nil
-			}()
-			if perr != nil {
-				p.errorAt(tok.Loc, fmt.Sprintf("In formatted string: %v", perr))
-			}
-			parts = append(parts, subExpr)
-			continue
+			subParser := NewParser(subTokens)
+			parsedExpr := subParser.parseExpr()
+			parts = append(parts, parsedExpr)
+		} else {
+			i++
 		}
-		buf.WriteByte(ch)
 	}
-	if buf.Len() > 0 {
-		parts = append(parts, &LiteralExpr{At: tok.Loc, Val: buf.String(), Type: StringType{}})
+	if start < len(raw) {
+		parts = append(parts, &LiteralExpr{
+			At:   loc,
+			Val:  raw[start:],
+			Type: StringType{},
+		})
 	}
-	return &InterpolatedStringExpr{At: tok.Loc, Parts: parts}
+	if len(parts) == 0 {
+		parts = append(parts, &LiteralExpr{At: loc, Val: "", Type: StringType{}})
+	}
+	return parts, nil
 }
 
 func (p *Parser) parsePrimary() Expr {
@@ -314,12 +263,14 @@ func (p *Parser) parsePrimary() Expr {
 		return &UnsafeExpr{At: tok.Loc, Value: value}
 	}
 
-	if tok.Type == TokenFormatString {
-		p.advance()
-		return p.parseInterpolatedString(tok)
-	}
-
 	switch tok.Type {
+	case TokenFormatString:
+		p.advance()
+		parts, err := parseInterpolatedParts(tok.Val, tok.Loc)
+		if err != nil {
+			p.errorAt(tok.Loc, err.Error())
+		}
+		return &InterpolatedStringExpr{At: tok.Loc, Parts: parts}
 	case TokenInt:
 		p.advance()
 		return &LiteralExpr{At: tok.Loc, Val: normalizeIntLiteral(tok), Type: PrimitiveType{Name: "i32"}}
@@ -388,6 +339,11 @@ func (p *Parser) parsePrimary() Expr {
 		return &GenericTypeExpr{At: tok.Loc, BaseType: "Pool", ElemType: elemT}
 	}
 
+	if tok.Type == TokenIdent && tok.Val == "StringBuilder" {
+		idTok := p.advance()
+		return &IdentExpr{At: idTok.Loc, Name: idTok.Val}
+	}
+
 	if tok.Type == TokenIdent && tok.Val == "error" && p.peek(1).Type == TokenLParen {
 		loc := p.advance().Loc
 		p.advance()
@@ -399,35 +355,92 @@ func (p *Parser) parsePrimary() Expr {
 	if tok.Type == TokenIdent {
 		idTok := p.advance()
 
-		// Explicit generic specialization: swap[i32](...) or Pair[i32]{...}
-		if p.check(TokenLBracket) {
-			if typeArgs, ok := p.tryGenericTypeArgs(TokenLParen, TokenLBrace); ok {
-				if p.check(TokenLParen) {
-					loc := p.advance().Loc
-					var args []Expr
-					for !p.check(TokenRParen) && !p.check(TokenEOF) {
-						args = append(args, p.parseExpr())
+		// Generic struct init or generic call: Name[T1, T2]{...} or Name[T1, T2](...)
+		if p.check(TokenLBracket) && len(idTok.Val) > 0 {
+			hasGenericFollower := false
+			depth := 0
+			for i := p.pos; i < len(p.tokens); i++ {
+				if p.tokens[i].Type == TokenLBracket {
+					depth++
+				} else if p.tokens[i].Type == TokenRBracket {
+					depth--
+					if depth == 0 {
+						if i+1 < len(p.tokens) {
+							nextT := p.tokens[i+1].Type
+							if nextT == TokenLParen || (nextT == TokenLBrace && idTok.Val[0] >= 'A' && idTok.Val[0] <= 'Z') {
+								hasGenericFollower = true
+							}
+						}
+						break
+					}
+				} else if p.tokens[i].Type == TokenEOF || p.tokens[i].Type == TokenSemicolon {
+					break
+				}
+			}
+
+			if hasGenericFollower {
+				savedPos := p.pos
+				parsedGeneric := func() (expr Expr) {
+					defer func() {
+						if r := recover(); r != nil {
+							if _, ok := r.(parseError); ok {
+								expr = nil
+							} else {
+								panic(r)
+							}
+						}
+					}()
+					p.advance() // consume '['
+					var typeArgs []UbeType
+					for !p.check(TokenRBracket) && !p.check(TokenEOF) {
+						t := p.parseType()
+						typeArgs = append(typeArgs, t)
 						if p.check(TokenComma) {
 							p.advance()
 						}
 					}
-					p.expect(TokenRParen, "Expected ')'")
-					return &CallExpr{At: loc, Callee: &IdentExpr{At: idTok.Loc, Name: idTok.Val}, TypeArgs: typeArgs, Args: args}
-				}
-				// Struct literal with explicit type arguments.
-				p.advance() // '{'
-				var fields []FieldInit
-				for !p.check(TokenRBrace) && !p.check(TokenEOF) {
-					fName := p.expect(TokenIdent, "Expected field name").Val
-					p.expect(TokenColon, "Expected ':'")
-					fVal := p.parseExpr()
-					fields = append(fields, FieldInit{Name: fName, Val: fVal})
-					if p.check(TokenComma) {
-						p.advance()
+					if !p.check(TokenRBracket) {
+						return nil
 					}
+					p.advance() // consume ']'
+					if p.check(TokenLBrace) && idTok.Val[0] >= 'A' && idTok.Val[0] <= 'Z' {
+						p.advance()
+						var fields []FieldInit
+						for !p.check(TokenRBrace) && !p.check(TokenEOF) {
+							fName := p.expect(TokenIdent, "Expected field name").Val
+							p.expect(TokenColon, "Expected ':'")
+							fVal := p.parseExpr()
+							fields = append(fields, FieldInit{Name: fName, Val: fVal})
+							if p.check(TokenComma) {
+								p.advance()
+							}
+						}
+						p.expect(TokenRBrace, "Expected '}' closing generic struct literal")
+						return &StructInitExpr{At: idTok.Loc, Name: idTok.Val, Fields: fields, TypeArgs: typeArgs}
+					}
+					if p.check(TokenLParen) {
+						loc := p.advance().Loc
+						var args []Expr
+						for !p.check(TokenRParen) && !p.check(TokenEOF) {
+							args = append(args, p.parseExpr())
+							if p.check(TokenComma) {
+								p.advance()
+							}
+						}
+						p.expect(TokenRParen, "Expected ')'")
+						return &CallExpr{
+							At:       loc,
+							Callee:   &IdentExpr{At: idTok.Loc, Name: idTok.Val},
+							Args:     args,
+							TypeArgs: typeArgs,
+						}
+					}
+					return nil
+				}()
+				if parsedGeneric != nil {
+					return parsedGeneric
 				}
-				p.expect(TokenRBrace, "Expected '}' closing struct literal")
-				return &StructInitExpr{At: idTok.Loc, Name: idTok.Val, TypeArgs: typeArgs, Fields: fields}
+				p.pos = savedPos
 			}
 		}
 

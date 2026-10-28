@@ -8,7 +8,7 @@ import (
 
 func isRValue(expr Expr) bool {
 	switch expr.(type) {
-	case *CallExpr, *ArrayInitExpr, *SliceInitExpr, *StructInitExpr, *BinaryExpr, *UnaryExpr, *TryExpr, *OrElseExpr:
+	case *CallExpr, *ArrayInitExpr, *SliceInitExpr, *StructInitExpr, *BinaryExpr, *UnaryExpr, *TryExpr, *OrElseExpr, *InterpolatedStringExpr, *TraitCoerceExpr:
 		return true
 	}
 	return false
@@ -16,15 +16,25 @@ func isRValue(expr Expr) bool {
 
 func (g *Generator) genExpr(expr Expr) string {
 	switch e := expr.(type) {
+	case *TraitCoerceExpr:
+		vtable := g.registerTraitVtable(e.Trait, e.Concrete)
+		concCT := g.toCType(e.Concrete)
+		val := g.genExpr(e.Value)
+		return fmt.Sprintf("({ %s* __b = (%s*)ube_bump_alloc(sizeof(%s)); *__b = %s; (%s){ .self = (void*)__b, .vtable = &%s }; })", concCT, concCT, concCT, val, e.Trait, vtable)
+
+	case *InterpolatedStringExpr:
+		sbTmp := g.newTmp()
+		var stmts []string
+		stmts = append(stmts, fmt.Sprintf("UbeStringBuilder %s = ube_string_builder_new(32)", sbTmp))
+		for _, part := range e.Parts {
+			partCode := g.genExpr(part)
+			stmts = append(stmts, fmt.Sprintf("UBE_SB_APPEND(&%s, %s)", sbTmp, partCode))
+		}
+		stmts = append(stmts, fmt.Sprintf("ube_string_builder_to_str(&%s)", sbTmp))
+		return fmt.Sprintf("({ %s; })", strings.Join(stmts, "; "))
+
 	case *UnsafeExpr:
 		return fmt.Sprintf("({ __auto_type __ube_unsafe_value = %s; __ube_unsafe_value; })", g.genExpr(e.Value))
-
-	case *TraitCoerceExpr:
-		concrete := g.toCType(e.Concrete)
-		vtable := g.registerTraitVtable(e.Trait, e.Concrete)
-		tmp := g.newTmp()
-		return fmt.Sprintf("({ %s* %s = (%s*)ube_bump_alloc(sizeof(%s)); *%s = %s; (%s){ .self = %s, .vtable = &%s }; })",
-			concrete, tmp, concrete, concrete, tmp, g.genExpr(e.Value), e.Trait, tmp, vtable)
 
 	case *LiteralExpr:
 		if e.Type.String() == "string" {
@@ -34,19 +44,6 @@ func (g *Generator) genExpr(expr Expr) string {
 			return fmt.Sprintf("((bool)%s)", e.Val)
 		}
 		return e.Val
-
-	case *InterpolatedStringExpr:
-		sb := g.newTmp()
-		calls := []string{fmt.Sprintf("UbeStringBuilder %s = ube_sb_new()", sb)}
-		for _, part := range e.Parts {
-			if lit, ok := part.(*LiteralExpr); ok && lit.Type.String() == "string" {
-				calls = append(calls, fmt.Sprintf("ube_sb_append_cstr(&%s, %s)", sb, strconv.Quote(lit.Val)))
-			} else {
-				calls = append(calls, fmt.Sprintf("ube_sb_append_any(&%s, (%s))", sb, g.genExpr(part)))
-			}
-		}
-		calls = append(calls, fmt.Sprintf("ube_sb_to_string(&%s)", sb))
-		return fmt.Sprintf("({ %s; })", strings.Join(calls, "; "))
 
 	case *IdentExpr:
 		if g.sliceParamVars[e.Name] {
@@ -90,6 +87,30 @@ func (g *Generator) genExpr(expr Expr) string {
 				return fmt.Sprintf("({ %s %s = {0}; (void)ube_raw_chan_recv(%s, &%s); %s; })", ct, tmp, g.genExpr(mem.Target), tmp, tmp)
 			}
 		}
+		if id, ok := e.Callee.(*IdentExpr); ok && id.Name == "format" {
+			if len(e.Args) == 0 {
+				return `ube_str_lit("")`
+			}
+			if lit, ok := e.Args[0].(*LiteralExpr); ok && lit.Type.String() == "string" {
+				parts := strings.Split(lit.Val, "{}")
+				sbTmp := g.newTmp()
+				var stmts []string
+				stmts = append(stmts, fmt.Sprintf("UbeStringBuilder %s = ube_string_builder_new(32)", sbTmp))
+				argIdx := 1
+				for i, part := range parts {
+					if len(part) > 0 {
+						stmts = append(stmts, fmt.Sprintf("ube_string_builder_append_str(&%s, ube_str_lit(%s))", sbTmp, strconv.Quote(part)))
+					}
+					if i < len(parts)-1 && argIdx < len(e.Args) {
+						argVal := g.genExpr(e.Args[argIdx])
+						stmts = append(stmts, fmt.Sprintf("UBE_SB_APPEND(&%s, %s)", sbTmp, argVal))
+						argIdx++
+					}
+				}
+				stmts = append(stmts, fmt.Sprintf("ube_string_builder_to_str(&%s)", sbTmp))
+				return fmt.Sprintf("({ %s; })", strings.Join(stmts, "; "))
+			}
+		}
 		if id, ok := e.Callee.(*IdentExpr); ok && (id.Name == "println" || id.Name == "print") {
 			if len(e.Args) == 0 {
 				if id.Name == "println" {
@@ -118,23 +139,6 @@ func (g *Generator) genExpr(expr Expr) string {
 		if id, ok := e.Callee.(*IdentExpr); ok && id.Name == "println_str" && len(e.Args) == 1 {
 			return fmt.Sprintf("UBE_PRINTLN(%s)", g.genExpr(e.Args[0]))
 		}
-		if id, ok := e.Callee.(*IdentExpr); ok && id.Name == "format" && len(e.Args) >= 1 {
-			if lit, isLit := e.Args[0].(*LiteralExpr); isLit && lit.Type.String() == "string" {
-				sb := g.newTmp()
-				calls := []string{fmt.Sprintf("UbeStringBuilder %s = ube_sb_new()", sb)}
-				parts := strings.Split(lit.Val, "{}")
-				for i, part := range parts {
-					if len(part) > 0 {
-						calls = append(calls, fmt.Sprintf("ube_sb_append_cstr(&%s, %s)", sb, strconv.Quote(part)))
-					}
-					if i < len(e.Args)-1 {
-						calls = append(calls, fmt.Sprintf("ube_sb_append_any(&%s, (%s))", sb, g.genExpr(e.Args[i+1])))
-					}
-				}
-				calls = append(calls, fmt.Sprintf("ube_sb_to_string(&%s)", sb))
-				return fmt.Sprintf("({ %s; })", strings.Join(calls, "; "))
-			}
-		}
 		if id, ok := e.Callee.(*IdentExpr); ok {
 			builtins := map[string]string{
 				"time_now_ms": "ube_time_now_ms", "sleep_ms": "ube_sleep_ms", "yield": "ube_yield",
@@ -153,40 +157,39 @@ func (g *Generator) genExpr(expr Expr) string {
 			}
 		}
 		if mem, ok := e.Callee.(*MemberExpr); ok {
-			if e.TraitName != "" {
-				tmp := g.newTmp()
-				args := []string{tmp + ".self"}
-				for _, arg := range e.Args {
-					args = append(args, g.genExpr(arg))
-				}
-				call := fmt.Sprintf("%s.vtable->%s(%s)", tmp, mem.Member, strings.Join(args, ", "))
-				return fmt.Sprintf("({ %s %s = %s; %s; })", e.TraitName, tmp, g.genExpr(mem.Target), call)
-			}
 			if id, ok := mem.Target.(*IdentExpr); ok && id.Name == "StringBuilder" && mem.Member == "new" {
-				if len(e.Args) == 0 {
-					return "ube_sb_new()"
+				capArg := "16"
+				if len(e.Args) == 1 {
+					capArg = g.genExpr(e.Args[0])
 				}
-				return fmt.Sprintf("ube_sb_new_cap((size_t)(%s))", g.genExpr(e.Args[0]))
+				return fmt.Sprintf("ube_string_builder_new(%s)", capArg)
 			}
+
 			if _, isSB := mem.TargetType.(StringBuilderType); isSB {
-				target := fmt.Sprintf("&(%s)", g.genExpr(mem.Target))
 				switch mem.Member {
-				case "append_str":
-					return fmt.Sprintf("ube_sb_append_str(%s, %s)", target, g.genExpr(e.Args[0]))
+				case "append", "append_str":
+					return fmt.Sprintf("ube_string_builder_append_str(&(%s), %s)", g.genExpr(mem.Target), g.genExpr(e.Args[0]))
+				case "append_int", "append_i64":
+					return fmt.Sprintf("ube_string_builder_append_int(&(%s), %s)", g.genExpr(mem.Target), g.genExpr(e.Args[0]))
 				case "append_char":
-					return fmt.Sprintf("ube_sb_append_char(%s, (char)(%s))", target, g.genExpr(e.Args[0]))
-				case "append_i64":
-					return fmt.Sprintf("ube_sb_append_i64(%s, (int64_t)(%s))", target, g.genExpr(e.Args[0]))
-				case "append_f64":
-					return fmt.Sprintf("ube_sb_append_f64(%s, (double)(%s))", target, g.genExpr(e.Args[0]))
+					return fmt.Sprintf("ube_string_builder_append_char(&(%s), %s)", g.genExpr(mem.Target), g.genExpr(e.Args[0]))
 				case "append_bool":
-					return fmt.Sprintf("ube_sb_append_bool(%s, (bool)(%s))", target, g.genExpr(e.Args[0]))
+					return fmt.Sprintf("ube_string_builder_append_bool(&(%s), %s)", g.genExpr(mem.Target), g.genExpr(e.Args[0]))
 				case "to_string":
-					return fmt.Sprintf("ube_sb_to_string(%s)", target)
-				case "len":
-					return fmt.Sprintf("((int32_t)(%s)->len)", target)
+					return fmt.Sprintf("ube_string_builder_to_str(&(%s))", g.genExpr(mem.Target))
 				}
 			}
+
+			if _, isTrait := mem.TargetType.(TraitType); isTrait {
+				var callArgs []string
+				targetExpr := g.genExpr(mem.Target)
+				callArgs = append(callArgs, fmt.Sprintf("(%s).self", targetExpr))
+				for _, arg := range e.Args {
+					callArgs = append(callArgs, g.genExpr(arg))
+				}
+				return fmt.Sprintf("(%s).vtable->%s(%s)", targetExpr, mem.Member, strings.Join(callArgs, ", "))
+			}
+
 			if enum, ok := mem.Target.(*IdentExpr); ok {
 				if types, found := g.enumVariantTypes(enum.Name, mem.Member); found {
 					values := make([]string, 0, len(e.Args))
@@ -251,15 +254,15 @@ func (g *Generator) genExpr(expr Expr) string {
 			if mem.Member == "close" {
 				return fmt.Sprintf("ube_raw_chan_close(%s)", g.genExpr(mem.Target))
 			}
-			if mem.Member == "spawn" {
+			if e.PoolElem != nil && mem.Member == "spawn" {
 				pName := mangleTypeName(e.PoolElem.String())
 				return fmt.Sprintf("Pool_%s_spawn(%s, %s)", pName, g.genExpr(mem.Target), g.genExpr(e.Args[0]))
 			}
-			if mem.Member == "get" {
+			if e.PoolElem != nil && mem.Member == "get" {
 				pName := mangleTypeName(e.PoolElem.String())
 				return fmt.Sprintf("Pool_%s_get(%s, %s)", pName, g.genExpr(mem.Target), g.genExpr(e.Args[0]))
 			}
-			if mem.Member == "despawn" {
+			if e.PoolElem != nil && mem.Member == "despawn" {
 				pName := mangleTypeName(e.PoolElem.String())
 				return fmt.Sprintf("Pool_%s_despawn(%s, %s)", pName, g.genExpr(mem.Target), g.genExpr(e.Args[0]))
 			}
@@ -346,13 +349,15 @@ func (g *Generator) genExpr(expr Expr) string {
 
 	case *SliceInitExpr:
 		m := g.sliceElemMangle(e.Elem)
-		tmp := g.newTmp()
-		calls := []string{fmt.Sprintf("UbeSlice_%s %s = ube_slice_%s_new()", m, tmp, m)}
-		for _, el := range e.Elements {
-			calls = append(calls, fmt.Sprintf("ube_slice_%s_push(&%s, %s)", m, tmp, g.genExpr(el)))
+		ct := g.toCType(e.Elem)
+		if len(e.Elements) == 0 {
+			return fmt.Sprintf("ube_slice_%s_new()", m)
 		}
-		calls = append(calls, tmp)
-		return fmt.Sprintf("({ %s; })", strings.Join(calls, "; "))
+		var inits []string
+		for i, el := range e.Elements {
+			inits = append(inits, fmt.Sprintf("_s.data[%d] = %s", i, g.genExpr(el)))
+		}
+		return fmt.Sprintf("({ UbeSlice_%s _s = { .len=%d, .cap=%d, .data=(%s*)ube_bump_alloc(%d*sizeof(%s)) }; %s; _s; })", m, len(e.Elements), len(e.Elements), ct, len(e.Elements), ct, strings.Join(inits, "; "))
 
 	case *ArrayInitExpr:
 		var vals []string

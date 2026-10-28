@@ -5,14 +5,13 @@ import "fmt"
 type TokenType string
 
 const (
-	TokenEOF          TokenType = "EOF"
-	TokenIdent        TokenType = "IDENT"
-	TokenInt          TokenType = "INT"
-	TokenFloat        TokenType = "FLOAT"
-	TokenString       TokenType = "STRING"
-	TokenFormatString TokenType = "FSTRING"
-	TokenBool         TokenType = "BOOL"
-	TokenNull         TokenType = "NULL"
+	TokenEOF    TokenType = "EOF"
+	TokenIdent  TokenType = "IDENT"
+	TokenInt    TokenType = "INT"
+	TokenFloat  TokenType = "FLOAT"
+	TokenString TokenType = "STRING"
+	TokenBool   TokenType = "BOOL"
+	TokenNull   TokenType = "NULL"
 
 	// Keywords
 	TokenFn       TokenType = "fn"
@@ -20,7 +19,6 @@ const (
 	TokenMut      TokenType = "mut"
 	TokenStruct   TokenType = "struct"
 	TokenEnum     TokenType = "enum"
-	TokenTrait    TokenType = "trait"
 	TokenMatch    TokenType = "match"
 	TokenIf       TokenType = "if"
 	TokenElse     TokenType = "else"
@@ -38,6 +36,10 @@ const (
 	TokenImport   TokenType = "import"
 	TokenDefer    TokenType = "defer"
 	TokenUnsafe   TokenType = "unsafe"
+	TokenTrait    TokenType = "trait"
+
+	// Format Strings
+	TokenFormatString TokenType = "FORMAT_STRING"
 
 	// Symbols & Operators
 	TokenArrow     TokenType = "->"

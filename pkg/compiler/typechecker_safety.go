@@ -30,7 +30,7 @@ func (tc *Typechecker) hasLifetime(t UbeType) bool {
 
 func (tc *Typechecker) hasLifetimeSeen(t UbeType, seen map[string]bool) bool {
 	switch v := t.(type) {
-	case PointerType, SliceType, StringType:
+	case PointerType, SliceType, StringType, StringBuilderType, TraitType:
 		return true
 	case ArrayType:
 		return tc.hasLifetimeSeen(v.Elem, seen)
@@ -69,6 +69,10 @@ func (tc *Typechecker) exprDepth(expr Expr, env *TypeEnvironment) int {
 	case *LiteralExpr:
 		return 0
 	case *SliceInitExpr:
+		return env.ScopeDepth
+	case *InterpolatedStringExpr:
+		return env.ScopeDepth
+	case *TraitCoerceExpr:
 		return env.ScopeDepth
 	case *ArrayInitExpr:
 		depth := 0
@@ -215,6 +219,14 @@ func (tc *Typechecker) exprEscapesParam(expr Expr, name string) bool {
 		return tc.exprEscapesParam(e.Arg, name)
 	case *UnsafeExpr:
 		return tc.exprEscapesParam(e.Value, name)
+	case *TraitCoerceExpr:
+		return tc.exprEscapesParam(e.Value, name)
+	case *InterpolatedStringExpr:
+		for _, part := range e.Parts {
+			if tc.exprEscapesParam(part, name) {
+				return true
+			}
+		}
 	}
 	return false
 }

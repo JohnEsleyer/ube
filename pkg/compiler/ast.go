@@ -19,14 +19,6 @@ type LiteralExpr struct {
 func (e *LiteralExpr) Loc() SourceLocation { return e.At }
 func (e *LiteralExpr) exprNode()           {}
 
-type InterpolatedStringExpr struct {
-	At    SourceLocation
-	Parts []Expr
-}
-
-func (e *InterpolatedStringExpr) Loc() SourceLocation { return e.At }
-func (e *InterpolatedStringExpr) exprNode()           {}
-
 type IdentExpr struct {
 	At   SourceLocation
 	Name string
@@ -61,9 +53,9 @@ type CallExpr struct {
 	Args         []Expr
 	PoolElem     UbeType
 	ReceiverType UbeType
-	TraitName    string
 	ArgTypes     []UbeType
 	TypeArgs     []UbeType
+	TraitName    string
 }
 
 func (e *CallExpr) Loc() SourceLocation { return e.At }
@@ -78,18 +70,6 @@ type MemberExpr struct {
 
 func (e *MemberExpr) Loc() SourceLocation { return e.At }
 func (e *MemberExpr) exprNode()           {}
-
-// TraitCoerceExpr converts a concrete value into a trait object fat pointer
-// (arena-backed data pointer + static vtable pointer).
-type TraitCoerceExpr struct {
-	At       SourceLocation
-	Value    Expr
-	Trait    string
-	Concrete UbeType
-}
-
-func (e *TraitCoerceExpr) Loc() SourceLocation { return e.At }
-func (e *TraitCoerceExpr) exprNode()           {}
 
 type IndexExpr struct {
 	At         SourceLocation
@@ -113,8 +93,8 @@ func (e *SliceSubExpr) exprNode()           {}
 type StructInitExpr struct {
 	At       SourceLocation
 	Name     string
-	TypeArgs []UbeType
 	Fields   []FieldInit
+	TypeArgs []UbeType
 }
 
 type FieldInit struct {
@@ -186,6 +166,24 @@ type UnsafeExpr struct {
 
 func (e *UnsafeExpr) Loc() SourceLocation { return e.At }
 func (e *UnsafeExpr) exprNode()           {}
+
+type InterpolatedStringExpr struct {
+	At    SourceLocation
+	Parts []Expr
+}
+
+func (e *InterpolatedStringExpr) Loc() SourceLocation { return e.At }
+func (e *InterpolatedStringExpr) exprNode()           {}
+
+type TraitCoerceExpr struct {
+	At       SourceLocation
+	Value    Expr
+	Trait    string
+	Concrete UbeType
+}
+
+func (e *TraitCoerceExpr) Loc() SourceLocation { return e.At }
+func (e *TraitCoerceExpr) exprNode()           {}
 
 // Statements
 type Stmt interface {
@@ -380,10 +378,15 @@ type ImportDecl struct {
 func (d *ImportDecl) Loc() SourceLocation { return d.At }
 func (d *ImportDecl) declNode()           {}
 
+type TypeParam struct {
+	Name       string
+	Constraint string
+}
+
 type StructDecl struct {
 	At         SourceLocation
 	Name       string
-	TypeParams []string
+	TypeParams []TypeParam
 	Fields     []FieldDecl
 }
 
@@ -425,15 +428,10 @@ type TraitMethodDecl struct {
 func (d *TraitDecl) Loc() SourceLocation { return d.At }
 func (d *TraitDecl) declNode()           {}
 
-type GenericParam struct {
-	Name       string
-	Constraint string // Optional trait constraint name
-}
-
 type FnDecl struct {
 	At         SourceLocation
 	Name       string
-	TypeParams []GenericParam
+	TypeParams []TypeParam
 	Receiver   *FieldDecl
 	Params     []FieldDecl
 	RetType    UbeType

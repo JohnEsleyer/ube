@@ -57,8 +57,13 @@ func runTests(args []string) error {
 		}
 	}
 
-	fmt.Printf("\nTest run finished in %s. %d passed, %d failed.\n",
-		time.Since(start).Round(time.Millisecond), totalPassed, totalFailed)
+	passedStr := paint(fmt.Sprintf("%d passed", totalPassed), colorGreen)
+	failedStr := fmt.Sprintf("%d failed", totalFailed)
+	if totalFailed > 0 {
+		failedStr = paint(failedStr, "\x1b[38;5;196m")
+	}
+	fmt.Printf("\nTest run finished in %s. %s, %s.\n",
+		time.Since(start).Round(time.Millisecond), passedStr, failedStr)
 	if totalFailed > 0 {
 		return fmt.Errorf("%d tests failed", totalFailed)
 	}

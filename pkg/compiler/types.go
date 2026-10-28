@@ -20,6 +20,11 @@ type StringType struct{}
 func (t StringType) String() string                   { return "string" }
 func (t StringType) IsFlat(env *TypeEnvironment) bool { return false }
 
+type StringBuilderType struct{}
+
+func (t StringBuilderType) String() string                   { return "StringBuilder" }
+func (t StringBuilderType) IsFlat(env *TypeEnvironment) bool { return false }
+
 type PointerType struct{ Base UbeType }
 
 func (t PointerType) String() string                   { return "*" + t.Base.String() }
@@ -79,64 +84,50 @@ func (t CustomType) isFlatSeen(env *TypeEnvironment, seen map[string]bool) bool 
 		return false
 	}
 	seen[t.Name] = true
-	if fields, ok := env.Structs[t.Name]; ok {
-		for _, f := range fields {
-			if !isFlatType(f.Type, env, seen) {
-				return false
-			}
-		}
-		return true
-	}
-	if variants, ok := env.Enums[t.Name]; ok {
-		for _, v := range variants {
-			for _, vt := range v.Types {
-				if !isFlatType(vt, env, seen) {
+	if env != nil {
+		if fields, ok := env.Structs[t.Name]; ok {
+			for _, f := range fields {
+				if !isFlatType(f.Type, env, seen) {
 					return false
 				}
 			}
+			return true
 		}
-		return true
+		if variants, ok := env.Enums[t.Name]; ok {
+			for _, v := range variants {
+				for _, vt := range v.Types {
+					if !isFlatType(vt, env, seen) {
+						return false
+					}
+				}
+			}
+			return true
+		}
 	}
 	return false
 }
 
-// GenericInstanceType is a user-defined generic type before monomorphization,
-// e.g. Pair[i32, string] or Stack[Particle].
-type GenericInstanceType struct {
-	Base string
-	Args []UbeType
-}
-
-func (t GenericInstanceType) String() string {
-	parts := make([]string, len(t.Args))
-	for i, arg := range t.Args {
-		parts[i] = arg.String()
-	}
-	return fmt.Sprintf("%s[%s]", t.Base, strings.Join(parts, ", "))
-}
-
-func (t GenericInstanceType) IsFlat(env *TypeEnvironment) bool {
-	for _, arg := range t.Args {
-		if !isFlatType(arg, env, map[string]bool{}) {
-			return false
-		}
-	}
-	return true
-}
-
-// TraitType is a dynamic trait object (fat pointer: data + vtable).
-type TraitType struct {
-	Name string
-}
+type TraitType struct{ Name string }
 
 func (t TraitType) String() string                   { return t.Name }
 func (t TraitType) IsFlat(env *TypeEnvironment) bool { return false }
 
-// StringBuilderType is the arena-backed runtime string builder.
-type StringBuilderType struct{}
+type GenericInstanceType struct {
+	Base     string
+	TypeArgs []UbeType
+}
 
-func (t StringBuilderType) String() string                   { return "StringBuilder" }
-func (t StringBuilderType) IsFlat(env *TypeEnvironment) bool { return false }
+func (t GenericInstanceType) String() string {
+	var args []string
+	for _, a := range t.TypeArgs {
+		args = append(args, a.String())
+	}
+	return fmt.Sprintf("%s[%s]", t.Base, strings.Join(args, ", "))
+}
+
+func (t GenericInstanceType) IsFlat(env *TypeEnvironment) bool {
+	return false
+}
 
 func isFlatType(t UbeType, env *TypeEnvironment, seen map[string]bool) bool {
 	if t == nil {
@@ -151,12 +142,8 @@ func isFlatType(t UbeType, env *TypeEnvironment, seen map[string]bool) bool {
 		return isFlatType(v.Inner, env, seen)
 	case ResultType:
 		return isFlatType(v.Ok, env, seen) && isFlatType(v.Err, env, seen)
-	case ChanType:
-		return isFlatType(v.Elem, env, seen)
 	case CustomType:
 		return v.isFlatSeen(env, seen)
-	case GenericInstanceType:
-		return v.IsFlat(env)
 	default:
 		return false
 	}

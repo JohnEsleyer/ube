@@ -16,8 +16,7 @@ func (g *Generator) genBlock(body *BlockStmt) {
 
 func (g *Generator) genDecl(decl Decl) {
 	switch d := decl.(type) {
-	case *ExternFnDecl:
-		// Prototypes are already emitted in the forward declarations section.
+	case *ExternFnDecl, *TraitDecl:
 		return
 
 	case *FnDecl:
@@ -108,6 +107,22 @@ func (g *Generator) genStmt(st Stmt) {
 				g.sliceVars[s.Name] = g.sliceElemMangle(sl.Elem)
 			}
 			cType := g.toCType(s.Type)
+
+			// Trait assignment: box concrete type into fat pointer
+			if tr, isTrait := s.Type.(TraitType); isTrait {
+				if _, isCoerce := s.Value.(*TraitCoerceExpr); isCoerce {
+					g.emit(fmt.Sprintf("%s %s = %s;", cType, s.Name, g.genExpr(s.Value)))
+					return
+				}
+				vtable := g.registerTraitVtable(tr.Name, s.ValueType)
+				valTmp := g.newTmp()
+				concCT := g.toCType(s.ValueType)
+				g.emit(fmt.Sprintf("%s* %s = (%s*)ube_bump_alloc(sizeof(%s));", concCT, valTmp, concCT, concCT))
+				g.emit(fmt.Sprintf("*%s = %s;", valTmp, g.genExpr(s.Value)))
+				g.emit(fmt.Sprintf("%s %s = (%s){ .self = (void*)%s, .vtable = &%s };", cType, s.Name, cType, valTmp, vtable))
+				return
+			}
+
 			if _, isOptional := s.Type.(OptionalType); isOptional {
 				if lit, isNull := s.Value.(*LiteralExpr); isNull && lit.Val == "null" {
 					g.emit(fmt.Sprintf("%s %s = (%s){ .has_val = false };", cType, s.Name, cType))
@@ -140,6 +155,22 @@ func (g *Generator) genStmt(st Stmt) {
 	case *AssignStmt:
 		lhsExpr := g.genExpr(s.LHS)
 		rhsExpr := g.genExpr(s.RHS)
+
+		// Trait assignment: box concrete type into fat pointer
+		if tr, isTrait := s.LHSType.(TraitType); isTrait {
+			if _, isCoerce := s.RHS.(*TraitCoerceExpr); isCoerce {
+				g.emit(fmt.Sprintf("%s = %s;", lhsExpr, g.genExpr(s.RHS)))
+				return
+			}
+			vtable := g.registerTraitVtable(tr.Name, s.RHSType)
+			valTmp := g.newTmp()
+			concCT := g.toCType(s.RHSType)
+			g.emit(fmt.Sprintf("%s* %s = (%s*)ube_bump_alloc(sizeof(%s));", concCT, valTmp, concCT, concCT))
+			g.emit(fmt.Sprintf("*%s = %s;", valTmp, rhsExpr))
+			g.emit(fmt.Sprintf("%s = (%s){ .self = (void*)%s, .vtable = &%s };", lhsExpr, g.toCType(tr), valTmp, vtable))
+			return
+		}
+
 		if optT, isOpt := s.LHSType.(OptionalType); isOpt {
 			cType := g.toCType(optT)
 			if lit, isNull := s.RHS.(*LiteralExpr); isNull && lit.Val == "null" {
@@ -473,8 +504,6 @@ func (g *Generator) genStmt(st Stmt) {
 			doneLabel := g.newTmp() + "_default_done"
 			g.emit("do {")
 			g.indent++
-			// Round-robin the starting case so repeatedly-ready channels do
-			// not starve the rest of the select.
 			g.emit(fmt.Sprintf("static _Thread_local size_t %s = 0;", offset))
 			if len(s.Cases) > 1 {
 				g.emit(fmt.Sprintf("%s = (%s + 1) %% %d;", offset, offset, len(s.Cases)))
@@ -522,12 +551,9 @@ func (g *Generator) genStmt(st Stmt) {
 			offset := g.newTmp()
 			iter := g.newTmp()
 			caseIdx := g.newTmp()
-			// Static keeps the round-robin position across repeated executions
-			// of this select statement, matching Go's fair select behavior.
 			g.emit(fmt.Sprintf("static _Thread_local size_t %s = 0;", offset))
 			g.emit("while (1) {")
 			g.indent++
-			// Fair select: start each polling pass at a rotating offset.
 			if len(s.Cases) > 1 {
 				g.emit(fmt.Sprintf("%s = (%s + 1) %% %d;", offset, offset, len(s.Cases)))
 			}
