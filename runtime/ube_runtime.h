@@ -302,6 +302,14 @@ static inline void ube_panic_capacity(int64_t capacity) {
     &_ube_array->data[_ube_index]; \
 })
 
+#define UBE_STR_INDEX(str_expr, idx_expr, file_name, source_line) ({ \
+    string _ube_str = (str_expr); \
+    int64_t _ube_index = (int64_t)(idx_expr); \
+    if (_ube_index < 0 || (uint64_t)_ube_index >= _ube_str.len) \
+        ube_panic_bounds(_ube_index, _ube_str.len, (file_name), (source_line)); \
+    (uint8_t)_ube_str.data[_ube_index]; \
+})
+
 // --- 3. Generational Slot Pool (Pool[T]) ---
 typedef struct {
     uint32_t index;

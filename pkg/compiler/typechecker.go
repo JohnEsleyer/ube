@@ -1,9 +1,6 @@
 package compiler
 
-import (
-	"fmt"
-	"strings"
-)
+import "fmt"
 
 type VarInfo struct {
 	Type       UbeType
@@ -15,7 +12,7 @@ type VarInfo struct {
 type FuncSignature struct {
 	Params   []FieldDecl
 	RetType  UbeType
-	Escaping []bool // true when the matching parameter may be stored beyond the call
+	Escaping []bool
 }
 
 type TypeEnvironment struct {
@@ -80,104 +77,6 @@ type Typechecker struct {
 	HasUnsafe bool
 }
 
-func (tc *Typechecker) hasLifetime(t UbeType) bool {
-	return tc.hasLifetimeSeen(t, map[string]bool{})
-}
-
-func (tc *Typechecker) hasLifetimeSeen(t UbeType, seen map[string]bool) bool {
-	switch v := t.(type) {
-	case PointerType, SliceType, StringType:
-		return true
-	case ArrayType:
-		return tc.hasLifetimeSeen(v.Elem, seen)
-	case OptionalType:
-		return tc.hasLifetimeSeen(v.Inner, seen)
-	case ResultType:
-		return tc.hasLifetimeSeen(v.Ok, seen) || tc.hasLifetimeSeen(v.Err, seen)
-	case CustomType:
-		if seen[v.Name] {
-			return false
-		}
-		seen[v.Name] = true
-		for _, field := range tc.Global.Structs[v.Name] {
-			if tc.hasLifetimeSeen(field.Type, seen) {
-				return true
-			}
-		}
-		for _, variant := range tc.Global.Enums[v.Name] {
-			for _, fieldType := range variant.Types {
-				if tc.hasLifetimeSeen(fieldType, seen) {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-func (tc *Typechecker) exprDepth(expr Expr, env *TypeEnvironment) int {
-	switch e := expr.(type) {
-	case *IdentExpr:
-		if info, ok := env.LookupVar(e.Name); ok {
-			return info.ValueDepth
-		}
-		return 0
-	case *LiteralExpr:
-		return 0
-	case *SliceInitExpr:
-		return env.ScopeDepth
-	case *ArrayInitExpr:
-		depth := 0
-		for _, item := range e.Elements {
-			if d := tc.exprDepth(item, env); d > depth {
-				depth = d
-			}
-		}
-		return depth
-	case *UnaryExpr:
-		if e.Op == "&" {
-			return env.ScopeDepth
-		}
-		return tc.exprDepth(e.Operand, env)
-	case *MemberExpr:
-		return tc.exprDepth(e.Target, env)
-	case *IndexExpr:
-		return tc.exprDepth(e.Target, env)
-	case *SliceSubExpr:
-		return tc.exprDepth(e.Target, env)
-	case *StructInitExpr:
-		depth := 0
-		for _, field := range e.Fields {
-			if d := tc.exprDepth(field.Val, env); d > depth {
-				depth = d
-			}
-		}
-		return depth
-	case *BinaryExpr:
-		if e.Op == "+" {
-			if left, err := tc.inferExpr(e.Left, env); err == nil && left.String() == "string" {
-				return env.ScopeDepth
-			}
-		}
-		if tc.exprDepth(e.Left, env) > tc.exprDepth(e.Right, env) {
-			return tc.exprDepth(e.Left, env)
-		}
-		return tc.exprDepth(e.Right, env)
-	case *OrElseExpr:
-		if tc.exprDepth(e.Primary, env) > tc.exprDepth(e.Fallback, env) {
-			return tc.exprDepth(e.Primary, env)
-		}
-		return tc.exprDepth(e.Fallback, env)
-	case *TryExpr:
-		return tc.exprDepth(e.Operand, env)
-	case *ErrorExpr:
-		return tc.exprDepth(e.Arg, env)
-	case *CallExpr:
-		return env.ScopeDepth
-	}
-	return env.ScopeDepth
-}
-
 func NewTypechecker() *Typechecker {
 	tc := &Typechecker{Global: NewTypeEnvironment(nil), Externs: make(map[string]bool)}
 	void := PrimitiveType{Name: "void"}
@@ -203,42 +102,10 @@ func NewTypechecker() *Typechecker {
 	return tc
 }
 
-func printableType(t UbeType) bool {
-	switch v := t.(type) {
-	case PrimitiveType:
-		switch v.Name {
-		case "i32", "u32", "u8", "i64", "u64", "f32", "f64", "bool":
-			return true
-		}
-	case StringType, PointerType:
-		return true
-	}
-	return false
-}
-
-func integerType(t UbeType) bool {
-	if p, ok := t.(PrimitiveType); ok {
-		switch p.Name {
-		case "i32", "u32", "u8", "i64", "u64":
-			return true
-		}
-	}
-	return false
-}
-
-func requireUnsafePointerUse(t UbeType, env *TypeEnvironment, loc SourceLocation) error {
-	if _, isPointer := t.(PointerType); isPointer && env.UnsafeDepth == 0 {
-		return fmt.Errorf("[%s] Safety Error: using a raw pointer requires an unsafe block", loc)
-	}
-	return nil
-}
-
 func (tc *Typechecker) checkBlock(b *BlockStmt, env *TypeEnvironment) error {
 	bEnv := childTypeEnvironment(env)
 	bEnv.CurRet = env.CurRet
 	bEnv.LoopDepth = env.LoopDepth
-	// Ordinary control-flow blocks do not restore the arena. Only `scope {}`
-	// changes the lifetime depth.
 	bEnv.ScopeDepth = env.ScopeDepth
 	for _, stmt := range b.Stmts {
 		if err := tc.checkStmt(stmt, bEnv); err != nil {
@@ -273,6 +140,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			}
 		}
 		env.Vars[s.Name] = VarInfo{Type: valT, IsMut: s.Mut, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Value, env)}
+
 	case *DeferStmt:
 		if _, ok := s.Call.(*CallExpr); !ok {
 			return fmt.Errorf("[%s] defer requires a function call", s.At)
@@ -295,6 +163,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			return err
 		}
 		s.LHSType = lhsT
+		s.RHSType = rhsT
 		if id := assignmentRoot(s.LHS); id != "" {
 			if vInfo, found := env.LookupVar(id); found {
 				if !vInfo.IsMut {
@@ -318,6 +187,9 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			if _, isErr := s.RHS.(*ErrorExpr); isErr {
 				return tc.assertCompat(res.Err, rhsT, s.At)
 			}
+			if _, alreadyResult := rhsT.(ResultType); alreadyResult {
+				return tc.assertCompat(res, rhsT, s.At)
+			}
 			return tc.assertCompat(res.Ok, rhsT, s.At)
 		}
 		return tc.assertCompat(lhsT, rhsT, s.At)
@@ -329,12 +201,16 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			if err != nil {
 				return err
 			}
+			s.ValueType = valT
 			if tc.hasLifetime(valT) && tc.exprDepth(s.Value, env) > 0 {
 				return fmt.Errorf("[%s] Safety Error: cannot return a reference rooted in this function's local scope", s.At)
 			}
 			if resT, ok := expected.(ResultType); ok {
 				if _, isErr := s.Value.(*ErrorExpr); isErr {
 					return tc.assertCompat(resT.Err, valT, s.At)
+				}
+				if _, alreadyResult := valT.(ResultType); alreadyResult {
+					return tc.assertCompat(expected, valT, s.At)
 				}
 				return tc.assertCompat(resT.Ok, valT, s.At)
 			} else if optT, ok := expected.(OptionalType); ok {
@@ -408,8 +284,18 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			return err
 		}
 		var unwrappedType UbeType = cType
+		isChanRecv := false
+		if call, ok := s.Call.(*CallExpr); ok {
+			if mem, isMem := call.Callee.(*MemberExpr); isMem && mem.Member == "recv" {
+				if _, isChan := mem.TargetType.(ChanType); isChan {
+					isChanRecv = true
+				}
+			}
+		}
 		if opt, ok := cType.(OptionalType); ok {
 			unwrappedType = opt.Inner
+		} else if !isChanRecv {
+			return fmt.Errorf("[%s] while-let requires an optional type or channel recv(), got '%s'", s.At, cType)
 		}
 		loopEnv := childTypeEnvironment(env)
 		loopEnv.LoopDepth = env.LoopDepth + 1
@@ -440,11 +326,13 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		scopeEnv := childTypeEnvironment(env)
 		scopeEnv.ScopeDepth = env.ScopeDepth + 1
 		return tc.checkBlock(s.Body, scopeEnv)
+
 	case *UnsafeStmt:
 		tc.HasUnsafe = true
 		unsafeEnv := childTypeEnvironment(env)
 		unsafeEnv.UnsafeDepth = env.UnsafeDepth + 1
 		return tc.checkBlock(s.Body, unsafeEnv)
+
 	case *LoopControlStmt:
 		if env.LoopDepth == 0 {
 			return fmt.Errorf("[%s] %s is only valid inside a loop", s.At, map[bool]string{true: "continue", false: "break"}[s.Continue])
@@ -516,7 +404,13 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		for _, v := range vars {
 			vMap[v.Name] = v.Types
 		}
+		seenVariants := make(map[string]bool)
 		for _, arm := range s.Arms {
+			if seenVariants[arm.Variant] {
+				return fmt.Errorf("[%s] duplicate match pattern '%s'", arm.At, arm.Variant)
+			}
+			seenVariants[arm.Variant] = true
+
 			expected, exists := vMap[arm.Variant]
 			if !exists {
 				return fmt.Errorf("[%s] enum '%s' has no variant '%s'", arm.At, custom.Name, arm.Variant)
@@ -544,900 +438,6 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		return err
 	}
 	return nil
-}
-
-func assignmentRoot(expr Expr) string {
-	switch e := expr.(type) {
-	case *IdentExpr:
-		return e.Name
-	case *MemberExpr:
-		return assignmentRoot(e.Target)
-	case *IndexExpr:
-		return assignmentRoot(e.Target)
-	}
-	return ""
-}
-
-func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, error) {
-	switch e := expr.(type) {
-	case *UnsafeExpr:
-		tc.HasUnsafe = true
-		unsafeEnv := childTypeEnvironment(env)
-		unsafeEnv.UnsafeDepth = env.UnsafeDepth + 1
-		return tc.inferExpr(e.Value, unsafeEnv)
-	case *LiteralExpr:
-		return e.Type, nil
-
-	case *IdentExpr:
-		if v, ok := env.LookupVar(e.Name); ok {
-			if err := requireUnsafePointerUse(v.Type, env, e.At); err != nil {
-				return nil, err
-			}
-			return v.Type, nil
-		}
-		if _, ok := tc.Global.Enums[e.Name]; ok {
-			return CustomType{Name: e.Name}, nil
-		}
-		if strings.HasPrefix(e.Name, "Chan[") && strings.HasSuffix(e.Name, "]") {
-			elemName := e.Name[5 : len(e.Name)-1]
-			elemT := tc.typeFromName(elemName)
-			chT := ChanType{Elem: elemT}
-			if err := tc.validateType(chT, e.At); err != nil {
-				return nil, err
-			}
-			return chT, nil
-		}
-		if strings.HasPrefix(e.Name, "Pool[") && strings.HasSuffix(e.Name, "]") {
-			elemName := e.Name[5 : len(e.Name)-1]
-			elemT := tc.typeFromName(elemName)
-			pT := PoolType{Elem: elemT}
-			return pT, nil
-		}
-		return nil, fmt.Errorf("[%s] Undefined identifier '%s'", e.At, e.Name)
-
-	case *ErrorExpr:
-		return tc.inferExpr(e.Arg, env)
-
-	case *BinaryExpr:
-		lT, err := tc.inferExpr(e.Left, env)
-		if err != nil {
-			return nil, err
-		}
-		rT, err := tc.inferExpr(e.Right, env)
-		if err != nil {
-			return nil, err
-		}
-		e.OperandType = lT
-		switch e.Op {
-		case "&&", "||":
-			if err := tc.assertCompat(PrimitiveType{Name: "bool"}, lT, e.At); err != nil {
-				return nil, err
-			}
-			if err := tc.assertCompat(PrimitiveType{Name: "bool"}, rT, e.At); err != nil {
-				return nil, err
-			}
-			e.Type = PrimitiveType{Name: "bool"}
-			return e.Type, nil
-		case "==", "!=":
-			if _, isCustom := lT.(CustomType); isCustom {
-				return nil, fmt.Errorf("[%s] type '%s' does not support operator '%s'", e.At, lT, e.Op)
-			}
-			if _, isArr := lT.(ArrayType); isArr {
-				return nil, fmt.Errorf("[%s] type '%s' does not support operator '%s'", e.At, lT, e.Op)
-			}
-			if _, isSlice := lT.(SliceType); isSlice {
-				return nil, fmt.Errorf("[%s] type '%s' does not support operator '%s'", e.At, lT, e.Op)
-			}
-			e.OperandType = lT
-			e.Type = PrimitiveType{Name: "bool"}
-			return e.Type, tc.assertCompat(lT, rT, e.At)
-		case "<", "<=", ">", ">=":
-			if !integerType(lT) && lT.String() != "f32" && lT.String() != "f64" {
-				return nil, fmt.Errorf("[%s] operator '%s' is only supported on numeric types, got '%s'", e.At, e.Op, lT)
-			}
-			e.OperandType = lT
-			e.Type = PrimitiveType{Name: "bool"}
-			return e.Type, tc.assertCompat(lT, rT, e.At)
-		case "+":
-			if lT.String() == "string" || rT.String() == "string" {
-				e.Type = StringType{}
-				return e.Type, tc.assertCompat(lT, rT, e.At)
-			}
-			if !integerType(lT) && lT.String() != "f32" && lT.String() != "f64" {
-				return nil, fmt.Errorf("[%s] operator '+' is only supported on numeric types or string, got '%s'", e.At, lT)
-			}
-			e.Type = lT
-			return lT, tc.assertCompat(lT, rT, e.At)
-		default: // -, *, /, %
-			if !integerType(lT) && lT.String() != "f32" && lT.String() != "f64" {
-				return nil, fmt.Errorf("[%s] operator '%s' is only supported on numeric types, got '%s'", e.At, e.Op, lT)
-			}
-			e.Type = lT
-			return lT, tc.assertCompat(lT, rT, e.At)
-		}
-
-	case *UnaryExpr:
-		opndT, err := tc.inferExpr(e.Operand, env)
-		if err != nil {
-			return nil, err
-		}
-		if e.Op == "!" {
-			if err := tc.assertCompat(PrimitiveType{Name: "bool"}, opndT, e.At); err != nil {
-				return nil, fmt.Errorf("[%s] operator '!' expects bool, got '%s'", e.At, opndT)
-			}
-			return PrimitiveType{Name: "bool"}, nil
-		}
-		if e.Op == "-" {
-			if !integerType(opndT) && opndT.String() != "f32" && opndT.String() != "f64" {
-				return nil, fmt.Errorf("[%s] operator '-' expects numeric type, got '%s'", e.At, opndT)
-			}
-			return opndT, nil
-		}
-		if e.Op == "&" {
-			if env.UnsafeDepth == 0 {
-				return nil, fmt.Errorf("[%s] Safety Error: taking a raw pointer requires an unsafe block", e.At)
-			}
-			return PointerType{Base: opndT}, nil
-		}
-		if e.Op == "*" {
-			if env.UnsafeDepth == 0 {
-				return nil, fmt.Errorf("[%s] Safety Error: dereferencing a raw pointer requires an unsafe block", e.At)
-			}
-			ptr, ok := opndT.(PointerType)
-			if !ok {
-				return nil, fmt.Errorf("[%s] cannot dereference non-pointer type '%s'", e.At, opndT)
-			}
-			return ptr.Base, nil
-		}
-		return opndT, nil
-
-	case *CallExpr:
-		if id, ok := e.Callee.(*IdentExpr); ok && tc.Externs[id.Name] && env.UnsafeDepth == 0 {
-			return nil, fmt.Errorf("[%s] Safety Error: foreign function '%s' can only be called inside unsafe { ... }", e.At, id.Name)
-		}
-		if id, ok := e.Callee.(*IdentExpr); ok && (id.Name == "println" || id.Name == "print") {
-			if len(e.Args) != 1 {
-				return nil, fmt.Errorf("[%s] %s expects one argument", e.At, id.Name)
-			}
-			argT, err := tc.inferExpr(e.Args[0], env)
-			if err != nil {
-				return nil, err
-			}
-			if !printableType(argT) {
-				return nil, fmt.Errorf("[%s] %s does not support type '%s'", e.At, id.Name, argT)
-			}
-			return PrimitiveType{Name: "void"}, err
-		}
-		if id, ok := e.Callee.(*IdentExpr); ok && id.Name == "int_to_str" && len(e.Args) == 1 {
-			argType, err := tc.inferExpr(e.Args[0], env)
-			if err != nil {
-				return nil, err
-			}
-			if !integerType(argType) {
-				return nil, fmt.Errorf("[%s] int_to_str expects an integer, got '%s'", e.At, argType)
-			}
-			return StringType{}, nil
-		}
-		if mem, ok := e.Callee.(*MemberExpr); ok {
-			if id, ok := mem.Target.(*IdentExpr); ok {
-				if variants, ok := tc.Global.Enums[id.Name]; ok {
-					for _, variant := range variants {
-						if variant.Name == mem.Member {
-							if len(e.Args) != len(variant.Types) {
-								return nil, fmt.Errorf("[%s] enum variant '%s' expects %d arguments, got %d", e.At, mem.Member, len(variant.Types), len(e.Args))
-							}
-							for i, arg := range e.Args {
-								actual, err := tc.inferExpr(arg, env)
-								if err != nil {
-									return nil, err
-								}
-								if err := tc.assertCompat(variant.Types[i], actual, arg.Loc()); err != nil {
-									return nil, err
-								}
-							}
-							return CustomType{Name: id.Name}, nil
-						}
-					}
-					return nil, fmt.Errorf("[%s] enum '%s' has no variant '%s'", e.At, id.Name, mem.Member)
-				}
-			}
-			tgtT, err := tc.inferExpr(mem.Target, env)
-			if err != nil {
-				return nil, err
-			}
-			mem.TargetType = tgtT
-			if sl, ok := tgtT.(SliceType); ok && mem.Member == "push" {
-				if len(e.Args) != 1 {
-					return nil, fmt.Errorf("[%s] push expects 1 argument", e.At)
-				}
-				if root := assignmentRoot(mem.Target); root != "" {
-					if info, found := env.LookupVar(root); found && env.ScopeDepth > info.Depth {
-						return nil, fmt.Errorf("[%s] Safety Error: cannot push to '%s' (declared at scope depth %d) from inside an inner scope (depth %d)", e.At, root, info.Depth, env.ScopeDepth)
-					}
-				}
-				argT, err := tc.inferExpr(e.Args[0], env)
-				if err != nil {
-					return nil, err
-				}
-				return PrimitiveType{Name: "void"}, tc.assertCompat(sl.Elem, argT, e.At)
-			}
-			if sl, ok := tgtT.(SliceType); ok && mem.Member == "pop" {
-				if len(e.Args) != 0 {
-					return nil, fmt.Errorf("[%s] pop expects 0 arguments", e.At)
-				}
-				return OptionalType{Inner: sl.Elem}, nil
-			}
-			if ch, ok := tgtT.(ChanType); ok {
-				if mem.Member == "new" {
-					if len(e.Args) != 1 {
-						return nil, fmt.Errorf("[%s] Chan.new expects a capacity", e.At)
-					}
-					capacityType, err := tc.inferExpr(e.Args[0], env)
-					if err != nil {
-						return nil, err
-					}
-					if !integerType(capacityType) {
-						return nil, fmt.Errorf("[%s] channel capacity must be an integer, got '%s'", e.At, capacityType)
-					}
-					return ch, nil
-				}
-				if mem.Member == "recv" {
-					if len(e.Args) != 0 {
-						return nil, fmt.Errorf("[%s] Chan.recv expects no arguments", e.At)
-					}
-					e.PoolElem = ch.Elem
-					return ch.Elem, nil
-				}
-				if mem.Member == "close" {
-					if len(e.Args) != 0 {
-						return nil, fmt.Errorf("[%s] Chan.close expects no arguments", e.At)
-					}
-					return PrimitiveType{Name: "void"}, nil
-				}
-				if mem.Member == "send" {
-					if len(e.Args) != 1 {
-						return nil, fmt.Errorf("[%s] send expects 1 argument", e.At)
-					}
-					argT, err := tc.inferExpr(e.Args[0], env)
-					if err != nil {
-						return nil, err
-					}
-					if !argT.IsFlat(tc.Global) {
-						return nil, fmt.Errorf("[%s] cannot send non-flat type '%s' across a channel", e.At, argT)
-					}
-					if err := tc.assertCompat(ch.Elem, argT, e.At); err != nil {
-						return nil, err
-					}
-					return PrimitiveType{Name: "void"}, nil
-				}
-			}
-			if p, ok := tgtT.(PoolType); ok {
-				e.PoolElem = p.Elem
-				if mem.Member == "new" {
-					if len(e.Args) != 1 {
-						return nil, fmt.Errorf("[%s] Pool.new expects a capacity", e.At)
-					}
-					capacityType, err := tc.inferExpr(e.Args[0], env)
-					if err != nil {
-						return nil, err
-					}
-					if !integerType(capacityType) {
-						return nil, fmt.Errorf("[%s] pool capacity must be an integer, got '%s'", e.At, capacityType)
-					}
-					return p, nil
-				}
-				if mem.Member == "spawn" {
-					if len(e.Args) != 1 {
-						return nil, fmt.Errorf("[%s] Pool.spawn expects one value", e.At)
-					}
-					valueType, err := tc.inferExpr(e.Args[0], env)
-					if err != nil {
-						return nil, err
-					}
-					if err := tc.assertCompat(p.Elem, valueType, e.At); err != nil {
-						return nil, err
-					}
-					return CustomType{Name: "UbeHandle"}, nil
-				}
-				if mem.Member == "get" {
-					if len(e.Args) != 1 {
-						return nil, fmt.Errorf("[%s] Pool.get expects a handle", e.At)
-					}
-					handleType, err := tc.inferExpr(e.Args[0], env)
-					if err != nil {
-						return nil, err
-					}
-					if err := tc.assertCompat(CustomType{Name: "UbeHandle"}, handleType, e.At); err != nil {
-						return nil, err
-					}
-					return OptionalType{Inner: p.Elem}, nil
-				}
-				if mem.Member == "despawn" {
-					if len(e.Args) != 1 {
-						return nil, fmt.Errorf("[%s] Pool.despawn expects a handle", e.At)
-					}
-					handleType, err := tc.inferExpr(e.Args[0], env)
-					if err != nil {
-						return nil, err
-					}
-					if err := tc.assertCompat(CustomType{Name: "UbeHandle"}, handleType, e.At); err != nil {
-						return nil, err
-					}
-					return PrimitiveType{Name: "bool"}, nil
-				}
-			}
-			methodKey := fmt.Sprintf("%s.%s", tgtT, mem.Member)
-			if sig, ok := tc.Global.Funcs[methodKey]; ok {
-				e.ReceiverType = tgtT
-				if err := tc.checkCallArgs(e.Args, sig.Params, sig.Escaping, env, e.At); err != nil {
-					return nil, err
-				}
-				if err := requireUnsafePointerUse(sig.RetType, env, e.At); err != nil {
-					return nil, err
-				}
-				return sig.RetType, nil
-			}
-		}
-		if id, ok := e.Callee.(*IdentExpr); ok {
-			if sig, ok := tc.Global.Funcs[id.Name]; ok {
-				if err := tc.checkCallArgs(e.Args, sig.Params, sig.Escaping, env, e.At); err != nil {
-					return nil, err
-				}
-				if err := requireUnsafePointerUse(sig.RetType, env, e.At); err != nil {
-					return nil, err
-				}
-				return sig.RetType, nil
-			}
-			return nil, fmt.Errorf("[%s] Undefined function '%s'", e.At, id.Name)
-		}
-		return nil, fmt.Errorf("[%s] Unsupported call target", e.At)
-
-	case *MemberExpr:
-		if id, ok := e.Target.(*IdentExpr); ok {
-			if variants, isEnum := tc.Global.Enums[id.Name]; isEnum {
-				for _, variant := range variants {
-					if variant.Name == e.Member && len(variant.Types) == 0 {
-						return CustomType{Name: id.Name}, nil
-					}
-				}
-			}
-		}
-		if e.Member == "ptr" {
-			if env.UnsafeDepth == 0 {
-				return nil, fmt.Errorf("[%s] Safety Error: raw pointer access requires an unsafe block", e.At)
-			}
-			return PointerType{Base: PrimitiveType{Name: "u8"}}, nil
-		}
-		tgtT, err := tc.inferExpr(e.Target, env)
-		if err != nil {
-			return nil, err
-		}
-		e.TargetType = tgtT
-		if e.Member == "len" {
-			switch tgtT.(type) {
-			case StringType, SliceType, ArrayType:
-				return PrimitiveType{Name: "i32"}, nil
-			}
-		}
-		if e.Member == "cap" {
-			switch tgtT.(type) {
-			case SliceType, ArrayType:
-				return PrimitiveType{Name: "i32"}, nil
-			}
-		}
-		if e.Member == "len" || e.Member == "cap" {
-			return nil, fmt.Errorf("[%s] '%s' is not available on '%s'", e.At, e.Member, tgtT)
-		}
-		if custom, ok := tgtT.(CustomType); ok {
-			if fields, ok := tc.Global.Structs[custom.Name]; ok {
-				for _, f := range fields {
-					if f.Name == e.Member {
-						if err := requireUnsafePointerUse(f.Type, env, e.At); err != nil {
-							return nil, err
-						}
-						return f.Type, nil
-					}
-				}
-			}
-		}
-		return nil, fmt.Errorf("[%s] Cannot access '%s' on '%s'", e.At, e.Member, tgtT)
-
-	case *IndexExpr:
-		tgtT, err := tc.inferExpr(e.Target, env)
-		if err != nil {
-			return nil, err
-		}
-		idxT, err := tc.inferExpr(e.Index, env)
-		if err != nil {
-			return nil, err
-		}
-		if !integerType(idxT) {
-			return nil, fmt.Errorf("[%s] index must be an integer, got '%s'", e.At, idxT)
-		}
-		if sl, ok := tgtT.(SliceType); ok {
-			e.TargetType = tgtT
-			if err := requireUnsafePointerUse(sl.Elem, env, e.At); err != nil {
-				return nil, err
-			}
-			return sl.Elem, nil
-		}
-		if arr, ok := tgtT.(ArrayType); ok {
-			e.TargetType = tgtT
-			if err := requireUnsafePointerUse(arr.Elem, env, e.At); err != nil {
-				return nil, err
-			}
-			return arr.Elem, nil
-		}
-		if _, ok := tgtT.(StringType); ok {
-			e.TargetType = tgtT
-			return PrimitiveType{Name: "u8"}, nil
-		}
-		return nil, fmt.Errorf("[%s] Type '%s' does not support indexing", e.At, tgtT)
-	case *SliceSubExpr:
-		t, err := tc.inferExpr(e.Target, env)
-		if err != nil {
-			return nil, err
-		}
-		startT, err := tc.inferExpr(e.Start, env)
-		if err != nil {
-			return nil, err
-		}
-		if !integerType(startT) {
-			return nil, fmt.Errorf("[%s] slice start index must be an integer, got '%s'", e.At, startT)
-		}
-		endT, err := tc.inferExpr(e.End, env)
-		if err != nil {
-			return nil, err
-		}
-		if !integerType(endT) {
-			return nil, fmt.Errorf("[%s] slice end index must be an integer, got '%s'", e.At, endT)
-		}
-		e.TargetType = t
-		if _, ok := t.(StringType); ok {
-			return StringType{}, nil
-		}
-		if sl, ok := t.(SliceType); ok {
-			return sl, nil
-		}
-		if a, ok := t.(ArrayType); ok {
-			return SliceType{Elem: a.Elem}, nil
-		}
-		return nil, fmt.Errorf("[%s] Type '%s' does not support slicing", e.At, t)
-
-	case *SliceInitExpr:
-		for _, el := range e.Elements {
-			t, err := tc.inferExpr(el, env)
-			if err != nil {
-				return nil, err
-			}
-			if err := tc.assertCompat(e.Elem, t, el.Loc()); err != nil {
-				return nil, err
-			}
-		}
-		return SliceType{Elem: e.Elem}, nil
-	case *ArrayInitExpr:
-		if len(e.Elements) > e.Size {
-			return nil, fmt.Errorf("[%s] too many array initializer elements", e.At)
-		}
-		for _, el := range e.Elements {
-			t, err := tc.inferExpr(el, env)
-			if err != nil {
-				return nil, err
-			}
-			if err := tc.assertCompat(e.Elem, t, el.Loc()); err != nil {
-				return nil, err
-			}
-		}
-		return ArrayType{Elem: e.Elem, Size: e.Size}, nil
-	case *GenericTypeExpr:
-		if e.BaseType == "Chan" {
-			ch := ChanType{Elem: e.ElemType}
-			return ch, tc.validateType(ch, e.At)
-		}
-		pool := PoolType{Elem: e.ElemType}
-		return pool, tc.validateType(pool, e.At)
-
-	case *StructInitExpr:
-		fields, ok := tc.Global.Structs[e.Name]
-		if !ok {
-			return nil, fmt.Errorf("[%s] unknown struct '%s'", e.At, e.Name)
-		}
-		fieldMap := make(map[string]UbeType)
-		for _, f := range fields {
-			fieldMap[f.Name] = f.Type
-		}
-		provided := make(map[string]bool)
-		for _, init := range e.Fields {
-			expectedType, exists := fieldMap[init.Name]
-			if !exists {
-				return nil, fmt.Errorf("[%s] struct '%s' has no field '%s'", init.Val.Loc(), e.Name, init.Name)
-			}
-			if provided[init.Name] {
-				return nil, fmt.Errorf("[%s] duplicate field '%s' in struct '%s' initialization", init.Val.Loc(), init.Name, e.Name)
-			}
-			provided[init.Name] = true
-			valT, err := tc.inferExpr(init.Val, env)
-			if err != nil {
-				return nil, err
-			}
-			if err := tc.assertCompat(expectedType, valT, init.Val.Loc()); err != nil {
-				return nil, fmt.Errorf("[%s] field '%s' type mismatch: expected '%s', got '%s'", init.Val.Loc(), init.Name, expectedType, valT)
-			}
-		}
-		return CustomType{Name: e.Name}, nil
-
-	case *TryExpr:
-		opndT, err := tc.inferExpr(e.Operand, env)
-		if err != nil {
-			return nil, err
-		}
-		if res, ok := opndT.(ResultType); ok {
-			// When the enclosing function returns a Result, the propagated
-			// error must be compatible with that function's error type.
-			if curRes, isResult := env.CurRet.(ResultType); isResult {
-				if err := tc.assertCompat(curRes.Err, res.Err, e.At); err != nil {
-					return nil, fmt.Errorf("[%s] cannot propagate error of type '%s' in function returning error of type '%s'", e.At, res.Err, curRes.Err)
-				}
-			}
-			return res.Ok, nil
-		}
-		return nil, fmt.Errorf("[%s] '?' expects Result type, got '%s'", e.At, opndT)
-
-	case *OrElseExpr:
-		pT, err := tc.inferExpr(e.Primary, env)
-		if err != nil {
-			return nil, err
-		}
-		e.PrimaryType = pT
-		fT, err := tc.inferExpr(e.Fallback, env)
-		if err != nil {
-			return nil, err
-		}
-		if res, ok := pT.(ResultType); ok {
-			return res.Ok, tc.assertCompat(res.Ok, fT, e.At)
-		}
-		if opt, ok := pT.(OptionalType); ok {
-			return opt.Inner, tc.assertCompat(opt.Inner, fT, e.At)
-		}
-		return nil, fmt.Errorf("[%s] or_else expects Result or Option", e.At)
-	}
-	return nil, fmt.Errorf("Cannot infer expression type")
-}
-
-func (tc *Typechecker) checkCallArgs(args []Expr, params []FieldDecl, escaping []bool, env *TypeEnvironment, loc SourceLocation) error {
-	if len(args) != len(params) {
-		return fmt.Errorf("[%s] function expects %d arguments, got %d", loc, len(params), len(args))
-	}
-	for i, arg := range args {
-		actual, err := tc.inferExpr(arg, env)
-		if err != nil {
-			return err
-		}
-		if _, rawPointer := actual.(PointerType); rawPointer && env.UnsafeDepth == 0 {
-			return fmt.Errorf("[%s] Safety Error: passing a raw pointer requires an unsafe block", arg.Loc())
-		}
-		if i < len(escaping) && escaping[i] && tc.hasLifetime(actual) {
-			if depth := tc.exprDepth(arg, env); depth > 0 {
-				return fmt.Errorf("[%s] Safety Error: argument rooted at scope depth %d may escape through a function parameter", arg.Loc(), depth)
-			}
-		}
-		if params[i].Type == nil {
-			continue
-		}
-		if err := tc.assertCompat(params[i].Type, actual, arg.Loc()); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// exprRefRootAt reports whether expr evaluates directly to the named variable,
-// or a view derived from it (a slice expression or an address-of). Property and
-// index projections are deliberately excluded because they may yield a value
-// without a lifetime (for example s[0] where s is []i32).
-func exprRefRootAt(expr Expr, name string) bool {
-	switch e := expr.(type) {
-	case *IdentExpr:
-		return e.Name == name
-	case *SliceSubExpr:
-		return exprRefRootAt(e.Target, name)
-	case *UnaryExpr:
-		if e.Op == "&" {
-			return exprRefRootAt(e.Operand, name)
-		}
-	}
-	return false
-}
-
-func (tc *Typechecker) callParamEscapes(call *CallExpr, argIndex int) bool {
-	switch callee := call.Callee.(type) {
-	case *IdentExpr:
-		if sig, ok := tc.Global.Funcs[callee.Name]; ok && argIndex < len(sig.Escaping) {
-			return sig.Escaping[argIndex]
-		}
-	case *MemberExpr:
-		if call.ReceiverType != nil {
-			key := fmt.Sprintf("%s.%s", call.ReceiverType, callee.Member)
-			if sig, ok := tc.Global.Funcs[key]; ok && argIndex < len(sig.Escaping) {
-				return sig.Escaping[argIndex]
-			}
-		}
-		// Receiver types are not inferred until the function bodies are
-		// checked, so during this analysis fall back to every method with the
-		// same name. This is conservative and keeps the analysis sound.
-		suffix := "." + callee.Member
-		for key, sig := range tc.Global.Funcs {
-			if strings.HasSuffix(key, suffix) && argIndex < len(sig.Escaping) && sig.Escaping[argIndex] {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func (tc *Typechecker) exprEscapesParam(expr Expr, name string) bool {
-	if expr == nil {
-		return false
-	}
-	switch e := expr.(type) {
-	case *CallExpr:
-		if m, ok := e.Callee.(*MemberExpr); ok && m.Member == "push" && len(e.Args) == 1 {
-			if assignmentRoot(m.Target) != name && exprRefRootAt(e.Args[0], name) {
-				return true
-			}
-		}
-		for i, arg := range e.Args {
-			if tc.callParamEscapes(e, i) && exprRefRootAt(arg, name) {
-				return true
-			}
-			if tc.exprEscapesParam(arg, name) {
-				return true
-			}
-		}
-		return tc.exprEscapesParam(e.Callee, name)
-	case *StructInitExpr:
-		for _, f := range e.Fields {
-			if exprRefRootAt(f.Val, name) || tc.exprEscapesParam(f.Val, name) {
-				return true
-			}
-		}
-	case *SliceInitExpr:
-		for _, el := range e.Elements {
-			if exprRefRootAt(el, name) || tc.exprEscapesParam(el, name) {
-				return true
-			}
-		}
-	case *ArrayInitExpr:
-		for _, el := range e.Elements {
-			if exprRefRootAt(el, name) || tc.exprEscapesParam(el, name) {
-				return true
-			}
-		}
-	case *BinaryExpr:
-		return tc.exprEscapesParam(e.Left, name) || tc.exprEscapesParam(e.Right, name)
-	case *UnaryExpr:
-		return tc.exprEscapesParam(e.Operand, name)
-	case *MemberExpr:
-		return tc.exprEscapesParam(e.Target, name)
-	case *IndexExpr:
-		return tc.exprEscapesParam(e.Target, name) || tc.exprEscapesParam(e.Index, name)
-	case *SliceSubExpr:
-		return tc.exprEscapesParam(e.Target, name) || tc.exprEscapesParam(e.Start, name) || tc.exprEscapesParam(e.End, name)
-	case *TryExpr:
-		return tc.exprEscapesParam(e.Operand, name)
-	case *OrElseExpr:
-		return tc.exprEscapesParam(e.Primary, name) || tc.exprEscapesParam(e.Fallback, name)
-	case *ErrorExpr:
-		return tc.exprEscapesParam(e.Arg, name)
-	case *UnsafeExpr:
-		return tc.exprEscapesParam(e.Value, name)
-	}
-	return false
-}
-
-func (tc *Typechecker) stmtEscapesParam(stmt Stmt, name string) bool {
-	if stmt == nil {
-		return false
-	}
-	switch s := stmt.(type) {
-	case *BlockStmt:
-		for _, st := range s.Stmts {
-			if tc.stmtEscapesParam(st, name) {
-				return true
-			}
-		}
-	case *LetStmt:
-		return exprRefRootAt(s.Value, name) || tc.exprEscapesParam(s.Value, name)
-	case *AssignStmt:
-		if exprRefRootAt(s.RHS, name) && assignmentRoot(s.LHS) != name {
-			return true
-		}
-		return tc.exprEscapesParam(s.LHS, name) || tc.exprEscapesParam(s.RHS, name)
-	case *ReturnStmt:
-		return exprRefRootAt(s.Value, name) || tc.exprEscapesParam(s.Value, name)
-	case *ExprStmt:
-		return tc.exprEscapesParam(s.Expr, name)
-	case *DeferStmt:
-		return tc.exprEscapesParam(s.Call, name)
-	case *IfStmt:
-		return tc.exprEscapesParam(s.Cond, name) || tc.stmtEscapesParam(s.Then, name) || tc.stmtEscapesParam(s.Else, name)
-	case *IfLetStmt:
-		return tc.exprEscapesParam(s.Expr, name) || tc.stmtEscapesParam(s.Then, name) || tc.stmtEscapesParam(s.Else, name)
-	case *WhileStmt:
-		return tc.exprEscapesParam(s.Cond, name) || tc.stmtEscapesParam(s.Body, name)
-	case *WhileLetStmt:
-		return tc.exprEscapesParam(s.Call, name) || tc.stmtEscapesParam(s.Body, name)
-	case *ForStmt:
-		return tc.exprEscapesParam(s.Iter, name) || tc.stmtEscapesParam(s.Body, name)
-	case *ScopeStmt:
-		return tc.stmtEscapesParam(s.Body, name)
-	case *UnsafeStmt:
-		return tc.stmtEscapesParam(s.Body, name)
-	case *SpawnStmt:
-		return tc.exprEscapesParam(s.Call, name)
-	case *SelectStmt:
-		for _, c := range s.Cases {
-			if tc.exprEscapesParam(c.Chan, name) || tc.stmtEscapesParam(c.Body, name) {
-				return true
-			}
-		}
-		return tc.stmtEscapesParam(s.Default, name)
-	case *MatchStmt:
-		if tc.exprEscapesParam(s.Expr, name) {
-			return true
-		}
-		for _, a := range s.Arms {
-			if tc.stmtEscapesParam(a.Body, name) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// computeEscapingParams finds parameters that may be stored somewhere that
-// outlives the call. A caller passing an arena-allocated value from an inner
-// `scope` into such a parameter would otherwise create a dangling reference.
-func (tc *Typechecker) computeEscapingParams(prog *Program) {
-	keys := make([]string, 0, len(tc.Global.Funcs))
-	for key := range tc.Global.Funcs {
-		keys = append(keys, key)
-	}
-	for _, key := range keys {
-		sig := tc.Global.Funcs[key]
-		sig.Escaping = make([]bool, len(sig.Params))
-		tc.Global.Funcs[key] = sig
-	}
-
-	for changed := true; changed; {
-		changed = false
-		for _, decl := range prog.Decls {
-			fn, ok := decl.(*FnDecl)
-			if !ok {
-				continue
-			}
-			key := fn.Name
-			if fn.Receiver != nil {
-				key = fmt.Sprintf("%s.%s", fn.Receiver.Type, fn.Name)
-			}
-			sig, ok := tc.Global.Funcs[key]
-			if !ok {
-				continue
-			}
-			for i := range fn.Params {
-				if sig.Escaping[i] {
-					continue
-				}
-				if tc.stmtEscapesParam(fn.Body, fn.Params[i].Name) {
-					sig.Escaping[i] = true
-					changed = true
-				}
-			}
-			tc.Global.Funcs[key] = sig
-		}
-	}
-}
-
-func (tc *Typechecker) typeFromName(name string) UbeType {
-	switch name {
-	case "i32", "u32", "i64", "u64", "u8", "f32", "f64", "bool", "void":
-		return PrimitiveType{Name: name}
-	case "string":
-		return StringType{}
-	default:
-		return CustomType{Name: name}
-	}
-}
-
-func (tc *Typechecker) assertCompat(expected, actual UbeType, loc SourceLocation) error {
-	if expected == nil || actual == nil {
-		return nil
-	}
-	if expected.String() == actual.String() {
-		return nil
-	}
-	if integerType(expected) && integerType(actual) {
-		return nil
-	}
-	if opt, ok := expected.(OptionalType); ok {
-		if actOpt, ok := actual.(OptionalType); ok && actOpt.Inner.String() == "void" {
-			return nil
-		}
-		if actOpt, ok := actual.(OptionalType); ok && opt.Inner.String() == actOpt.Inner.String() {
-			return nil
-		}
-		if opt.Inner.String() == actual.String() {
-			return nil
-		}
-		if integerType(opt.Inner) && integerType(actual) {
-			return nil
-		}
-	}
-	if res, ok := expected.(ResultType); ok {
-		if actRes, ok := actual.(ResultType); ok {
-			if err := tc.assertCompat(res.Ok, actRes.Ok, loc); err == nil {
-				if err := tc.assertCompat(res.Err, actRes.Err, loc); err == nil {
-					return nil
-				}
-			}
-		}
-		if err := tc.assertCompat(res.Ok, actual, loc); err == nil {
-			return nil
-		}
-		if err := tc.assertCompat(res.Err, actual, loc); err == nil {
-			return nil
-		}
-	}
-	if expected.String() == "*void" {
-		if _, ok := actual.(PointerType); ok {
-			return nil
-		}
-	}
-	return fmt.Errorf("[%s] Type mismatch: expected '%s', got '%s'", loc, expected, actual)
-}
-
-func (tc *Typechecker) validateType(t UbeType, loc SourceLocation) error {
-	switch v := t.(type) {
-	case PrimitiveType, StringType:
-		return nil
-	case PointerType:
-		return tc.validateType(v.Base, loc)
-	case SliceType:
-		return tc.validateType(v.Elem, loc)
-	case OptionalType:
-		return tc.validateType(v.Inner, loc)
-	case ResultType:
-		if err := tc.validateType(v.Ok, loc); err != nil {
-			return err
-		}
-		return tc.validateType(v.Err, loc)
-	case ChanType:
-		if err := tc.validateType(v.Elem, loc); err != nil {
-			return err
-		}
-		if p, ok := v.Elem.(PrimitiveType); ok && p.Name == "void" {
-			return fmt.Errorf("[%s] Chan element type cannot be void", loc)
-		}
-		if !v.Elem.IsFlat(tc.Global) {
-			return fmt.Errorf("[%s] Chan element type '%s' must be flat", loc, v.Elem)
-		}
-		return nil
-	case PoolType:
-		if err := tc.validateType(v.Elem, loc); err != nil {
-			return err
-		}
-		if p, ok := v.Elem.(PrimitiveType); ok && p.Name == "void" {
-			return fmt.Errorf("[%s] Pool element type cannot be void", loc)
-		}
-		if !v.Elem.IsFlat(tc.Global) {
-			return fmt.Errorf("[%s] Pool element type '%s' must be flat", loc, v.Elem)
-		}
-		return nil
-	case CustomType:
-		return nil
-	default:
-		return nil
-	}
 }
 
 func (tc *Typechecker) Check(prog *Program) error {

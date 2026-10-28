@@ -32,23 +32,32 @@ type ArrayType struct {
 	Size int
 }
 
-func (t ArrayType) String() string                   { return fmt.Sprintf("[%d]%s", t.Size, t.Elem.String()) }
-func (t ArrayType) IsFlat(env *TypeEnvironment) bool { return t.Elem.IsFlat(env) }
+func (t ArrayType) String() string { return fmt.Sprintf("[%d]%s", t.Size, t.Elem.String()) }
+func (t ArrayType) IsFlat(env *TypeEnvironment) bool {
+	return isFlatType(t.Elem, env, map[string]bool{})
+}
 
 type OptionalType struct{ Inner UbeType }
 
-func (t OptionalType) String() string                   { return t.Inner.String() + "?" }
-func (t OptionalType) IsFlat(env *TypeEnvironment) bool { return t.Inner.IsFlat(env) }
+func (t OptionalType) String() string { return t.Inner.String() + "?" }
+func (t OptionalType) IsFlat(env *TypeEnvironment) bool {
+	return isFlatType(t.Inner, env, map[string]bool{})
+}
 
 type ResultType struct{ Ok, Err UbeType }
 
-func (t ResultType) String() string                   { return fmt.Sprintf("%s ! %s", t.Ok, t.Err) }
-func (t ResultType) IsFlat(env *TypeEnvironment) bool { return t.Ok.IsFlat(env) && t.Err.IsFlat(env) }
+func (t ResultType) String() string { return fmt.Sprintf("%s ! %s", t.Ok, t.Err) }
+func (t ResultType) IsFlat(env *TypeEnvironment) bool {
+	seen := map[string]bool{}
+	return isFlatType(t.Ok, env, seen) && isFlatType(t.Err, env, seen)
+}
 
 type ChanType struct{ Elem UbeType }
 
-func (t ChanType) String() string                   { return fmt.Sprintf("Chan[%s]", t.Elem) }
-func (t ChanType) IsFlat(env *TypeEnvironment) bool { return t.Elem.IsFlat(env) }
+func (t ChanType) String() string { return fmt.Sprintf("Chan[%s]", t.Elem) }
+func (t ChanType) IsFlat(env *TypeEnvironment) bool {
+	return isFlatType(t.Elem, env, map[string]bool{})
+}
 
 type PoolType struct{ Elem UbeType }
 
@@ -59,9 +68,17 @@ type CustomType struct{ Name string }
 
 func (t CustomType) String() string { return t.Name }
 func (t CustomType) IsFlat(env *TypeEnvironment) bool {
+	return t.isFlatSeen(env, map[string]bool{})
+}
+
+func (t CustomType) isFlatSeen(env *TypeEnvironment, seen map[string]bool) bool {
+	if seen[t.Name] {
+		return false
+	}
+	seen[t.Name] = true
 	if fields, ok := env.Structs[t.Name]; ok {
 		for _, f := range fields {
-			if !f.Type.IsFlat(env) {
+			if !isFlatType(f.Type, env, seen) {
 				return false
 			}
 		}
@@ -70,7 +87,7 @@ func (t CustomType) IsFlat(env *TypeEnvironment) bool {
 	if variants, ok := env.Enums[t.Name]; ok {
 		for _, v := range variants {
 			for _, vt := range v.Types {
-				if !vt.IsFlat(env) {
+				if !isFlatType(vt, env, seen) {
 					return false
 				}
 			}
@@ -78,4 +95,24 @@ func (t CustomType) IsFlat(env *TypeEnvironment) bool {
 		return true
 	}
 	return false
+}
+
+func isFlatType(t UbeType, env *TypeEnvironment, seen map[string]bool) bool {
+	if t == nil {
+		return false
+	}
+	switch v := t.(type) {
+	case PrimitiveType:
+		return true
+	case ArrayType:
+		return isFlatType(v.Elem, env, seen)
+	case OptionalType:
+		return isFlatType(v.Inner, env, seen)
+	case ResultType:
+		return isFlatType(v.Ok, env, seen) && isFlatType(v.Err, env, seen)
+	case CustomType:
+		return v.isFlatSeen(env, seen)
+	default:
+		return false
+	}
 }

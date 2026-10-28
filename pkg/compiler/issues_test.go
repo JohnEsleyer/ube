@@ -406,3 +406,109 @@ func TestIssue_SelectClosedChannelDoesNotLivelock(t *testing.T) {
 		t.Fatalf("select busy-spun on a closed channel: used %v of CPU", cpu)
 	}
 }
+
+// ----------------------------------------------------------------------------
+// TEST 11: Option & Result assignment, return, and initialization from identical types
+// ----------------------------------------------------------------------------
+func TestIssue_OptionAndResultPassthrough(t *testing.T) {
+	src := `fn get_opt() -> i32? {
+		let x: i32? = 100
+		return x
+	}
+
+	fn get_res(fail: bool) -> i32 ! string {
+		if fail {
+			return error("failed")
+		}
+		return 200
+	}
+
+	fn forward_res(fail: bool) -> i32 ! string {
+		return get_res(fail)
+	}
+
+	fn main() {
+		let mut a: i32? = null
+		let b = get_opt()
+		a = b
+		println(a or_else 0)
+
+		let r1: i32 ! string = forward_res(false)
+		println(r1 or_else 0)
+
+		let mut r2: i32 ! string = 0
+		r2 = forward_res(true)
+		let val = r2 or_else -1
+		println(val)
+	}`
+
+	bin, _, err := compileToNativeBinary(t, src)
+	if err != nil {
+		t.Fatalf("failed to compile option/result passthrough: %v", err)
+	}
+	if got, want := runBinary(t, bin), "100\n200\n-1"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// TEST 12: Bounds-checked string indexing
+// ----------------------------------------------------------------------------
+func TestIssue_StringIndexingBoundsCheck(t *testing.T) {
+	src := `fn main() {
+		let s = "hello"
+		let ch = s[0]
+		println(ch == 104)
+	}`
+
+	bin, _, err := compileToNativeBinary(t, src)
+	if err != nil {
+		t.Fatalf("failed to compile string indexing: %v", err)
+	}
+	if got, want := runBinary(t, bin), "true"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// TEST 13: Duplicate match arms are rejected at typecheck time
+// ----------------------------------------------------------------------------
+func TestIssue_DuplicateMatchArmRejected(t *testing.T) {
+	src := `enum Status { Active, Inactive }
+	fn test(s: Status) {
+		match s {
+			Active => println(1),
+			Active => println(2),
+			Inactive => println(0)
+		}
+	}
+	fn main() {}`
+
+	err := typecheckSource(t, src)
+	if err == nil {
+		t.Fatal("expected typechecker to reject duplicate match arm")
+	}
+	if !strings.Contains(err.Error(), "duplicate match pattern") {
+		t.Fatalf("expected duplicate match pattern diagnostic, got: %v", err)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// TEST 14: Non-optional while let is rejected
+// ----------------------------------------------------------------------------
+func TestIssue_InvalidWhileLetTarget(t *testing.T) {
+	src := `fn main() {
+		let x = 42
+		while let item = x {
+			println(item)
+		}
+	}`
+
+	err := typecheckSource(t, src)
+	if err == nil {
+		t.Fatal("expected typechecker to reject while-let on integer")
+	}
+	if !strings.Contains(err.Error(), "while-let requires an optional type") {
+		t.Fatalf("expected while-let error, got: %v", err)
+	}
+}

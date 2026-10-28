@@ -93,6 +93,7 @@ type StructInitExpr struct {
 	Name   string
 	Fields []FieldInit
 }
+
 type FieldInit struct {
 	Name string
 	Val  Expr
@@ -194,14 +195,16 @@ type AssignStmt struct {
 	LHS     Expr
 	RHS     Expr
 	LHSType UbeType
+	RHSType UbeType
 }
 
 func (s *AssignStmt) Loc() SourceLocation { return s.At }
 func (s *AssignStmt) stmtNode()           {}
 
 type ReturnStmt struct {
-	At    SourceLocation
-	Value Expr
+	At        SourceLocation
+	Value     Expr
+	ValueType UbeType
 }
 
 func (s *ReturnStmt) Loc() SourceLocation { return s.At }
@@ -296,6 +299,7 @@ type MatchStmt struct {
 	Arms     []MatchArm
 	EnumName string
 }
+
 type MatchArm struct {
 	At       SourceLocation
 	Variant  string
@@ -358,6 +362,7 @@ type StructDecl struct {
 	Name   string
 	Fields []FieldDecl
 }
+
 type FieldDecl struct {
 	Name string
 	Type UbeType
@@ -371,6 +376,7 @@ type EnumDecl struct {
 	Name     string
 	Variants []VariantDecl
 }
+
 type VariantDecl struct {
 	Name  string
 	Types []UbeType
