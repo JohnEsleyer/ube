@@ -51,10 +51,12 @@ func (p *Parser) parseStmt() Stmt {
 	}
 
 	expr := p.parseExpr()
-	if p.check(TokenAssign) {
-		p.advance()
+	switch p.peek(0).Type {
+	case TokenAssign, TokenPlusAssign, TokenMinusAssign, TokenStarAssign, TokenSlashAssign, TokenPercentAssign,
+		TokenAmpAssign, TokenPipeAssign, TokenCaretAssign, TokenShlAssign, TokenShrAssign:
+		opTok := p.advance()
 		rhs := p.parseExpr()
-		return &AssignStmt{At: expr.Loc(), LHS: expr, RHS: rhs}
+		return &AssignStmt{At: expr.Loc(), LHS: expr, Op: opTok.Val, RHS: rhs}
 	}
 	return &ExprStmt{At: expr.Loc(), Expr: expr}
 }
@@ -205,7 +207,7 @@ func (p *Parser) parseMatchStmt() *MatchStmt {
 		aLoc := p.peek(0).Loc
 		vName := p.expect(TokenIdent, "Expected variant name in match arm").Val
 		var bindings []string
-		if p.check(TokenLParen) {
+		if vName != "_" && p.check(TokenLParen) {
 			p.advance()
 			for !p.check(TokenRParen) && !p.check(TokenEOF) {
 				bindings = append(bindings, p.expect(TokenIdent, "Expected binding variable").Val)

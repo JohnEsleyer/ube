@@ -26,7 +26,12 @@ func (g *Generator) genDecl(decl Decl) {
 		fnName := d.Name
 		if d.Receiver != nil {
 			fnName = fmt.Sprintf("%s_%s", d.Receiver.Type, d.Name)
-			params = append(params, fmt.Sprintf("%s %s", g.toCType(d.Receiver.Type), d.Receiver.Name))
+			recCT := g.toCType(d.Receiver.Type)
+			if d.Receiver.IsMut {
+				recCT += "*"
+				g.sliceParamVars[d.Receiver.Name] = true
+			}
+			params = append(params, fmt.Sprintf("%s %s", recCT, d.Receiver.Name))
 		}
 		g.sliceVars = make(map[string]string)
 		g.sliceParamVars = make(map[string]bool)
@@ -197,6 +202,14 @@ func (g *Generator) genStmt(st Stmt) {
 			g.emit(fmt.Sprintf("%s = (%s){ .ok = true, .val = %s };", lhsExpr, cType, rhsExpr))
 			return
 		}
+		if s.Op != "" && s.Op != "=" {
+			if s.Op == "+=" && s.LHSType != nil && s.LHSType.String() == "string" {
+				g.emit(fmt.Sprintf("%s = ube_str_concat(%s, %s);", lhsExpr, lhsExpr, rhsExpr))
+				return
+			}
+			g.emit(fmt.Sprintf("%s %s %s;", lhsExpr, s.Op, rhsExpr))
+			return
+		}
 		g.emit(fmt.Sprintf("%s = %s;", lhsExpr, rhsExpr))
 
 	case *DeferStmt:
@@ -358,6 +371,32 @@ func (g *Generator) genStmt(st Stmt) {
 
 	case *ForStmt:
 		labels := loopLabel{breakTo: g.newTmp() + "_break", continueTo: g.newTmp() + "_continue"}
+		if rng, ok := s.Iter.(*RangeExpr); ok {
+			startTmp := g.newTmp()
+			endTmp := g.newTmp()
+			elemCT := "int32_t"
+			if rType, ok := s.IterType.(RangeType); ok {
+				elemCT = g.toCType(rType.Elem)
+			}
+			g.emit(fmt.Sprintf("%s %s = %s;", elemCT, startTmp, g.genExpr(rng.Start)))
+			g.emit(fmt.Sprintf("%s %s = %s;", elemCT, endTmp, g.genExpr(rng.End)))
+			g.emit(fmt.Sprintf("for (%s %s = %s; %s < %s; %s++) {", elemCT, s.ItemName, startTmp, s.ItemName, endTmp, s.ItemName))
+			g.indent++
+			g.loopLabels = append(g.loopLabels, labels)
+			g.loopSelectDepth = append(g.loopSelectDepth, len(g.selectGroups))
+			g.loopDeferDepth = append(g.loopDeferDepth, len(g.deferScopes))
+			g.loopScopeDepth = append(g.loopScopeDepth, len(g.scopeMarks))
+			g.genBlock(s.Body)
+			g.loopDeferDepth = g.loopDeferDepth[:len(g.loopDeferDepth)-1]
+			g.loopScopeDepth = g.loopScopeDepth[:len(g.loopScopeDepth)-1]
+			g.emit(labels.continueTo + ":;")
+			g.loopLabels = g.loopLabels[:len(g.loopLabels)-1]
+			g.loopSelectDepth = g.loopSelectDepth[:len(g.loopSelectDepth)-1]
+			g.indent--
+			g.emit("}")
+			g.emit(labels.breakTo + ":;")
+			return
+		}
 		iterTmp := g.newTmp()
 		g.emit(fmt.Sprintf("__auto_type %s = %s;", iterTmp, g.genExpr(s.Iter)))
 		lenExpr := fmt.Sprintf("(%s).len", iterTmp)
@@ -631,6 +670,21 @@ func (g *Generator) genStmt(st Stmt) {
 		g.emit(fmt.Sprintf("__auto_type %s = %s;", tmp, g.genExpr(s.Expr)))
 		g.emit(fmt.Sprintf("switch (%s.tag) {", tmp))
 		for _, arm := range s.Arms {
+			if arm.Variant == "_" {
+				g.emit("default: {")
+				g.indent++
+				if blk, ok := arm.Body.(*BlockStmt); ok {
+					g.genBlock(blk)
+				} else {
+					g.pushDeferScope()
+					g.genStmt(arm.Body)
+					g.finishDeferScope()
+				}
+				g.emit("break;")
+				g.indent--
+				g.emit("}")
+				continue
+			}
 			g.emit(fmt.Sprintf("case %s_%s: {", s.EnumName, arm.Variant))
 			g.indent++
 			for i, b := range arm.Bindings {

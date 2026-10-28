@@ -155,6 +155,10 @@ func (g *Generator) genExpr(expr Expr) string {
 				"str_trim": "ube_str_trim", "str_index_of": "ube_str_index_of", "str_split": "ube_str_split",
 				"env_get": "ube_env_get", "file_exists": "ube_file_exists", "path_join": "ube_path_join",
 				"str_replace": "ube_str_replace",
+				"dir_list": "ube_dir_list", "dir_create": "ube_dir_create", "file_remove": "ube_file_remove",
+				"env_set": "ube_env_set", "cmd_run": "ube_cmd_run",
+				"abs": "ube_abs", "min": "ube_min", "max": "ube_max",
+				"sqrt": "ube_sqrt", "pow": "ube_pow", "floor": "ube_floor", "ceil": "ube_ceil",
 			}
 			if fn, ok := builtins[id.Name]; ok {
 				args := make([]string, len(e.Args))
@@ -220,7 +224,11 @@ func (g *Generator) genExpr(expr Expr) string {
 			}
 			if e.ReceiverType != nil {
 				fnName := fmt.Sprintf("%s_%s", e.ReceiverType.String(), mem.Member)
-				args := []string{g.genExpr(mem.Target)}
+				targetExpr := g.genExpr(mem.Target)
+				if g.receiverMutParams[fnName] {
+					targetExpr = "&(" + targetExpr + ")"
+				}
+				args := []string{targetExpr}
 				for i, arg := range e.Args {
 					value := g.genExpr(arg)
 					if g.sliceMutParams[fnName][i] {
@@ -255,6 +263,23 @@ func (g *Generator) genExpr(expr Expr) string {
 					sliceType = mangleTypeName(g.genExpr(mem.Target))
 				}
 				return fmt.Sprintf("ube_slice_%s_pop(&%s)", sliceType, g.genExpr(mem.Target))
+			}
+			if mem.Member == "clear" {
+				return fmt.Sprintf("((void)((%s).len = 0))", g.genExpr(mem.Target))
+			}
+			if mem.Member == "contains" {
+				elemIsStr := false
+				if sl, ok := mem.TargetType.(SliceType); ok {
+					if sl.Elem.String() == "string" {
+						elemIsStr = true
+					}
+				}
+				cond := "_cs->data[_i] == _cv"
+				if elemIsStr {
+					cond = "ube_str_eq(_cs->data[_i], _cv)"
+				}
+				return fmt.Sprintf("({ __auto_type* _cs = &(%s); __auto_type _cv = (%s); bool _found = false; for (size_t _i = 0; _i < _cs->len; _i++) { if (%s) { _found = true; break; } } _found; })",
+					g.genExpr(mem.Target), g.genExpr(e.Args[0]), cond)
 			}
 			if mem.Member == "send" {
 				return fmt.Sprintf("({ __auto_type __val = %s; ube_raw_chan_send(%s, &__val); })", g.genExpr(e.Args[0]), g.genExpr(mem.Target))

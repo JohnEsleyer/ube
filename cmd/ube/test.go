@@ -16,8 +16,14 @@ import (
 // compiles each test into a temporary harness, and reports timing and status.
 func runTests(args []string) error {
 	target := "."
-	if len(args) > 0 {
-		target = args[0]
+	runPattern := ""
+	for i := 0; i < len(args); i++ {
+		if (args[i] == "-run" || args[i] == "--run") && i+1 < len(args) {
+			runPattern = args[i+1]
+			i++
+		} else if !strings.HasPrefix(args[i], "-") {
+			target = args[i]
+		}
 	}
 
 	files, err := discoverTestFiles(target)
@@ -52,6 +58,9 @@ func runTests(args []string) error {
 		}
 
 		for _, name := range tests {
+			if runPattern != "" && !strings.Contains(name, runPattern) {
+				continue
+			}
 			ok, duration, output := runCompiledTest(file, name)
 			reportTest(fmt.Sprintf("%s::%s", filepath.Base(file), name), ok, duration, output, &totalPassed, &totalFailed)
 		}

@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const version = "0.5.3"
+const version = "0.5.4"
 
 const (
 	colorReset  = "\x1b[0m"
@@ -52,6 +52,8 @@ func execute(args []string) error {
 		return nil
 	case "new":
 		return newProject(args[1:])
+	case "init":
+		return initProject()
 	case "check":
 		return check(args[1:])
 	case "build":

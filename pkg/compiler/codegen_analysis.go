@@ -20,7 +20,7 @@ func (g *Generator) exprMutatesName(expr Expr, name string) bool {
 	}
 	switch e := expr.(type) {
 	case *CallExpr:
-		if m, ok := e.Callee.(*MemberExpr); ok && (m.Member == "push" || m.Member == "pop") && assignmentRoot(m.Target) == name {
+		if m, ok := e.Callee.(*MemberExpr); ok && (m.Member == "push" || m.Member == "pop" || m.Member == "clear") && assignmentRoot(m.Target) == name {
 			return true
 		}
 		if callee := callName(e); callee != "" {
@@ -74,6 +74,8 @@ func (g *Generator) exprMutatesName(expr Expr, name string) bool {
 		return g.exprMutatesName(e.Arg, name)
 	case *UnsafeExpr:
 		return g.exprMutatesName(e.Value, name)
+	case *RangeExpr:
+		return g.exprMutatesName(e.Start, name) || g.exprMutatesName(e.End, name)
 	case *TraitCoerceExpr:
 		return g.exprMutatesName(e.Value, name)
 	case *ArrayToSliceExpr:

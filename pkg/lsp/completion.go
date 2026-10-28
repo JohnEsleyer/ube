@@ -25,6 +25,8 @@ func CompletionItems(source string, p lspPosition) []map[string]any {
 			map[string]any{"label": "cap", "kind": 10, "detail": "capacity (i32)"},
 			map[string]any{"label": "push", "kind": 2, "detail": "push(val) onto slice"},
 			map[string]any{"label": "pop", "kind": 2, "detail": "pop() from slice -> T?"},
+			map[string]any{"label": "clear", "kind": 2, "detail": "clear() slice length to 0"},
+			map[string]any{"label": "contains", "kind": 2, "detail": "contains(val) -> bool"},
 			map[string]any{"label": "ptr", "kind": 10, "detail": "raw byte pointer *u8 (unsafe)"},
 			map[string]any{"label": "send", "kind": 2, "detail": "send(val) into channel"},
 			map[string]any{"label": "recv", "kind": 2, "detail": "recv() from channel"},
@@ -64,6 +66,18 @@ func CompletionItems(source string, p lspPosition) []map[string]any {
 		{"file_exists", "file_exists(path: string) -> bool"},
 		{"path_join", "path_join(a: string, b: string) -> string"},
 		{"str_replace", "str_replace(s: string, old: string, new: string) -> string"},
+		{"dir_list", "dir_list(path: string) -> []string ! string"},
+		{"dir_create", "dir_create(path: string) -> bool ! string"},
+		{"file_remove", "file_remove(path: string) -> bool ! string"},
+		{"env_set", "env_set(key: string, val: string) -> bool"},
+		{"cmd_run", "cmd_run(cmd: string) -> i32"},
+		{"abs", "abs(n: i64) -> i64"},
+		{"min", "min(a: i64, b: i64) -> i64"},
+		{"max", "max(a: i64, b: i64) -> i64"},
+		{"sqrt", "sqrt(f: f64) -> f64"},
+		{"pow", "pow(b: f64, e: f64) -> f64"},
+		{"floor", "floor(f: f64) -> f64"},
+		{"ceil", "ceil(f: f64) -> f64"},
 	}
 	for _, b := range builtins {
 		items = append(items, map[string]any{"label": b.name, "kind": 3, "detail": b.sig})

@@ -28,6 +28,21 @@ func newProject(args []string) error {
 	return nil
 }
 
+func initProject() error {
+	if _, err := os.Stat("main.ube"); err == nil {
+		return fmt.Errorf("main.ube already exists in current directory")
+	}
+	source := "fn main() {\n    println(\"Hello from Ube!\")\n}\n"
+	if err := os.WriteFile("main.ube", []byte(source), 0644); err != nil {
+		return err
+	}
+	if _, err := os.Stat(".gitignore"); os.IsNotExist(err) {
+		_ = os.WriteFile(".gitignore", []byte("/main\n*.c\n"), 0644)
+	}
+	fmt.Printf("✓ Initialized project in current directory\n  ube run main.ube\n")
+	return nil
+}
+
 func help() {
 	fmt.Printf("🍠 Ube %s\n\nUsage: ube <command> [options]\n       ube <file.ube>\n\nCommands:\n  new <name>                Create a starter project\n  check <file.ube>          Check syntax and types\n  build <file.ube> [-o bin] Build a native executable\n  run <file.ube> [args...]  Compile and run a program\n  test [dir|file]           Discover and run tests\n  fmt [dir|file]            Format Ube source files (--check or -w)\n  lsp                       Start the language server\n  version                   Show the version\n  help                      Show this help\n\nCheck options:\n  --strict                  Reject C FFI and unsafe blocks\n  --format=json             Emit a machine-readable audit report\n\nBuild options:\n  -o <path>                 Set executable output path\n  --emit-c                  Keep generated C beside the output\n  --forbid-unsafe           Reject C FFI and unsafe blocks\n  --freestanding            Build without pthread runtime support\n  --wasm                    Build HTML/WebAssembly with Emscripten\n", version)
 }

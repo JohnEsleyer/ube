@@ -107,6 +107,26 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 		}
 
 		loc := SourceLocation{File: l.file, Line: l.line, Col: l.col}
+		if ch == '.' && l.peek(1) == '.' {
+			l.advance()
+			l.advance()
+			tokens = append(tokens, Token{Type: TokenDotDot, Val: "..", Loc: loc})
+			continue
+		}
+		if ch == '<' && l.peek(1) == '<' && l.peek(2) == '=' {
+			l.advance()
+			l.advance()
+			l.advance()
+			tokens = append(tokens, Token{Type: TokenShlAssign, Val: "<<=", Loc: loc})
+			continue
+		}
+		if ch == '>' && l.peek(1) == '>' && l.peek(2) == '=' {
+			l.advance()
+			l.advance()
+			l.advance()
+			tokens = append(tokens, Token{Type: TokenShrAssign, Val: ">>=", Loc: loc})
+			continue
+		}
 		if ch == '<' && l.peek(1) == '<' {
 			l.advance()
 			l.advance()
@@ -117,6 +137,54 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 			l.advance()
 			l.advance()
 			tokens = append(tokens, Token{Type: TokenShr, Val: ">>", Loc: loc})
+			continue
+		}
+		if ch == '+' && l.peek(1) == '=' {
+			l.advance()
+			l.advance()
+			tokens = append(tokens, Token{Type: TokenPlusAssign, Val: "+=", Loc: loc})
+			continue
+		}
+		if ch == '-' && l.peek(1) == '=' {
+			l.advance()
+			l.advance()
+			tokens = append(tokens, Token{Type: TokenMinusAssign, Val: "-=", Loc: loc})
+			continue
+		}
+		if ch == '*' && l.peek(1) == '=' {
+			l.advance()
+			l.advance()
+			tokens = append(tokens, Token{Type: TokenStarAssign, Val: "*=", Loc: loc})
+			continue
+		}
+		if ch == '/' && l.peek(1) == '=' {
+			l.advance()
+			l.advance()
+			tokens = append(tokens, Token{Type: TokenSlashAssign, Val: "/=", Loc: loc})
+			continue
+		}
+		if ch == '%' && l.peek(1) == '=' {
+			l.advance()
+			l.advance()
+			tokens = append(tokens, Token{Type: TokenPercentAssign, Val: "%=", Loc: loc})
+			continue
+		}
+		if ch == '&' && l.peek(1) == '=' {
+			l.advance()
+			l.advance()
+			tokens = append(tokens, Token{Type: TokenAmpAssign, Val: "&=", Loc: loc})
+			continue
+		}
+		if ch == '|' && l.peek(1) == '=' {
+			l.advance()
+			l.advance()
+			tokens = append(tokens, Token{Type: TokenPipeAssign, Val: "|=", Loc: loc})
+			continue
+		}
+		if ch == '^' && l.peek(1) == '=' {
+			l.advance()
+			l.advance()
+			tokens = append(tokens, Token{Type: TokenCaretAssign, Val: "^=", Loc: loc})
 			continue
 		}
 		if ch == '&' && l.peek(1) == '&' {
@@ -318,6 +386,9 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 			isFloat := false
 			for l.pos < len(l.source) && (unicode.IsDigit(l.peek(0)) || l.peek(0) == '.') {
 				if l.peek(0) == '.' {
+					if l.peek(1) == '.' {
+						break
+					}
 					if unicode.IsDigit(l.peek(1)) {
 						isFloat = true
 						buf.WriteRune(l.advance())

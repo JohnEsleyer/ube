@@ -266,10 +266,15 @@ func (p *Parser) parseFnDecl() *FnDecl {
 	var receiver *FieldDecl
 	if p.check(TokenLParen) {
 		p.advance()
+		isMutRecv := false
+		if p.check(TokenMut) {
+			p.advance()
+			isMutRecv = true
+		}
 		rName := p.expect(TokenIdent, "Expected receiver variable name").Val
 		rType := p.parseType()
 		p.expect(TokenRParen, "Expected ')' closing receiver")
-		receiver = &FieldDecl{Name: rName, Type: rType}
+		receiver = &FieldDecl{Name: rName, Type: rType, IsMut: isMutRecv}
 	}
 
 	name := p.expect(TokenIdent, "Expected function name").Val

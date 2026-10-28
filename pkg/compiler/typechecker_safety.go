@@ -221,6 +221,8 @@ func (tc *Typechecker) exprEscapesParam(expr Expr, name string) bool {
 		return tc.exprEscapesParam(e.Arg, name)
 	case *UnsafeExpr:
 		return tc.exprEscapesParam(e.Value, name)
+	case *RangeExpr:
+		return tc.exprEscapesParam(e.Start, name) || tc.exprEscapesParam(e.End, name)
 	case *TraitCoerceExpr:
 		return tc.exprEscapesParam(e.Value, name)
 	case *ArrayToSliceExpr:

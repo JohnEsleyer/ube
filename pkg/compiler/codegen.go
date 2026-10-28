@@ -29,8 +29,9 @@ type Generator struct {
 	loopDeferDepth  []int
 	loopScopeDepth  []int
 	sliceParamVars  map[string]bool
-	sliceMutParams  map[string]map[int]bool
-	loopLabels      []loopLabel
+	sliceMutParams    map[string]map[int]bool
+	receiverMutParams map[string]bool
+	loopLabels        []loopLabel
 	loopSelectDepth []int
 	selectGroups    []string
 	spawnWrappers   []string
@@ -56,8 +57,9 @@ func NewGenerator(prog *Program) *Generator {
 		arrays:         make(map[string]string),
 		sliceVars:      make(map[string]string),
 		sliceParamVars: make(map[string]bool),
-		sliceMutParams: make(map[string]map[int]bool),
-		traitDecls:     make(map[string]*TraitDecl),
+		sliceMutParams:    make(map[string]map[int]bool),
+		receiverMutParams: make(map[string]bool),
+		traitDecls:        make(map[string]*TraitDecl),
 		traitVtables:   make(map[string]traitVtableInfo),
 	}
 	if prog != nil {
@@ -298,6 +300,7 @@ func (g *Generator) Generate() string {
 	g.toCType(ResultType{Ok: PrimitiveType{Name: "bool"}, Err: StringType{}})
 	g.toCType(ResultType{Ok: PrimitiveType{Name: "i64"}, Err: StringType{}})
 	g.toCType(SliceType{Elem: StringType{}})
+	g.toCType(ResultType{Ok: SliceType{Elem: StringType{}}, Err: StringType{}})
 
 	body := g.buf.String()
 	g.buf = oldBuf
@@ -436,7 +439,12 @@ func (g *Generator) Generate() string {
 			params := make([]string, 0, len(fn.Params)+1)
 			if fn.Receiver != nil {
 				name = fmt.Sprintf("%s_%s", fn.Receiver.Type, fn.Name)
-				params = append(params, g.toCType(fn.Receiver.Type))
+				recCT := g.toCType(fn.Receiver.Type)
+				if fn.Receiver.IsMut {
+					recCT += "*"
+					g.receiverMutParams[name] = true
+				}
+				params = append(params, recCT)
 			}
 			mutName := name
 			for i, p := range fn.Params {

@@ -4,7 +4,7 @@
 **The sweet, grounded systems language.**
 *Easy to program like Go. Fast like C. Zero Garbage Collection.*
 
-**Latest version: `0.5.3`**
+**Latest version: `0.5.4`**
 </search>
 <with>
 # The Ube Programming Language

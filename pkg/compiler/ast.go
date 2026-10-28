@@ -175,6 +175,14 @@ type InterpolatedStringExpr struct {
 func (e *InterpolatedStringExpr) Loc() SourceLocation { return e.At }
 func (e *InterpolatedStringExpr) exprNode()           {}
 
+type RangeExpr struct {
+	At         SourceLocation
+	Start, End Expr
+}
+
+func (e *RangeExpr) Loc() SourceLocation { return e.At }
+func (e *RangeExpr) exprNode()           {}
+
 type TraitCoerceExpr struct {
 	At       SourceLocation
 	Value    Expr
@@ -224,6 +232,7 @@ func (s *LetStmt) stmtNode()           {}
 type AssignStmt struct {
 	At      SourceLocation
 	LHS     Expr
+	Op      string
 	RHS     Expr
 	LHSType UbeType
 	RHSType UbeType
@@ -401,8 +410,9 @@ type StructDecl struct {
 }
 
 type FieldDecl struct {
-	Name string
-	Type UbeType
+	Name  string
+	Type  UbeType
+	IsMut bool
 }
 
 func (d *StructDecl) Loc() SourceLocation { return d.At }

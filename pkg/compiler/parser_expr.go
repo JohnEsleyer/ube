@@ -6,7 +6,17 @@ import (
 )
 
 func (p *Parser) parseExpr() Expr {
-	return p.parseOrElse()
+	return p.parseRange()
+}
+
+func (p *Parser) parseRange() Expr {
+	node := p.parseOrElse()
+	if p.check(TokenDotDot) {
+		loc := p.advance().Loc
+		rhs := p.parseOrElse()
+		return &RangeExpr{At: loc, Start: node, End: rhs}
+	}
+	return node
 }
 
 func (p *Parser) parseOrElse() Expr {

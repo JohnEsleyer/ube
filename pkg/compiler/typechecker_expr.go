@@ -37,6 +37,23 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		}
 		return TraitType{Name: e.Trait}, nil
 
+	case *RangeExpr:
+		startT, err := tc.inferExpr(e.Start, env)
+		if err != nil {
+			return nil, err
+		}
+		endT, err := tc.inferExpr(e.End, env)
+		if err != nil {
+			return nil, err
+		}
+		if !integerType(startT) {
+			return nil, fmt.Errorf("[%s] range start must be an integer, got '%s'", e.At, startT)
+		}
+		if !integerType(endT) {
+			return nil, fmt.Errorf("[%s] range end must be an integer, got '%s'", e.At, endT)
+		}
+		return RangeType{Elem: startT}, nil
+
 	case *ArrayToSliceExpr:
 		_, err := tc.inferExpr(e.ArrayExpr, env)
 		if err != nil {
@@ -401,6 +418,30 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				}
 				return OptionalType{Inner: sl.Elem}, nil
 			}
+			if _, ok := tgtT.(SliceType); ok && mem.Member == "clear" {
+				if len(e.Args) != 0 {
+					return nil, fmt.Errorf("[%s] clear expects 0 arguments", e.At)
+				}
+				if root := assignmentRoot(mem.Target); root != "" {
+					if info, found := env.LookupVar(root); found && !info.IsMut {
+						return nil, fmt.Errorf("[%s] Cannot call 'clear' on immutable slice '%s'", e.At, root)
+					}
+				}
+				return PrimitiveType{Name: "void"}, nil
+			}
+			if sl, ok := tgtT.(SliceType); ok && mem.Member == "contains" {
+				if len(e.Args) != 1 {
+					return nil, fmt.Errorf("[%s] contains expects 1 argument", e.At)
+				}
+				argT, err := tc.inferExpr(e.Args[0], env)
+				if err != nil {
+					return nil, err
+				}
+				if err := tc.assertCompat(sl.Elem, argT, e.At); err != nil {
+					return nil, err
+				}
+				return PrimitiveType{Name: "bool"}, nil
+			}
 			if ch, ok := tgtT.(ChanType); ok {
 				if mem.Member == "new" {
 					if len(e.Args) != 1 {
@@ -503,6 +544,13 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			methodKey := fmt.Sprintf("%s.%s", tgtT, mem.Member)
 			if sig, ok := tc.Global.Funcs[methodKey]; ok {
 				e.ReceiverType = tgtT
+				if sig.ReceiverMut {
+					if root := assignmentRoot(mem.Target); root != "" {
+						if vInfo, found := env.LookupVar(root); found && !vInfo.IsMut {
+							return nil, fmt.Errorf("[%s] cannot call mutating method '%s' on immutable value '%s'", e.At, mem.Member, root)
+						}
+					}
+				}
 				if err := tc.checkCallArgs(e.Args, sig.Params, sig.Escaping, env, e.At); err != nil {
 					return nil, err
 				}

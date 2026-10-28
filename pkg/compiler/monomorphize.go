@@ -627,8 +627,9 @@ func (m *Monomorphizer) specializeMethod(tmpl *FnDecl, specializedStruct string,
 		})
 	}
 	receiver := &FieldDecl{
-		Name: tmpl.Receiver.Name,
-		Type: CustomType{Name: specializedStruct},
+		Name:  tmpl.Receiver.Name,
+		Type:  CustomType{Name: specializedStruct},
+		IsMut: tmpl.Receiver.IsMut,
 	}
 	return &FnDecl{
 		At:       tmpl.At,
@@ -751,6 +752,7 @@ func substituteStmt(stmt Stmt, subMap map[string]UbeType) Stmt {
 		return &AssignStmt{
 			At:      s.At,
 			LHS:     substituteExpr(s.LHS, subMap),
+			Op:      s.Op,
 			RHS:     substituteExpr(s.RHS, subMap),
 			LHSType: substituteType(s.LHSType, subMap),
 			RHSType: substituteType(s.RHSType, subMap),
@@ -854,6 +856,8 @@ func substituteExpr(expr Expr, subMap map[string]UbeType) Expr {
 			parts = append(parts, substituteExpr(p, subMap))
 		}
 		return &InterpolatedStringExpr{At: e.At, Parts: parts}
+	case *RangeExpr:
+		return &RangeExpr{At: e.At, Start: substituteExpr(e.Start, subMap), End: substituteExpr(e.End, subMap)}
 	case *TraitCoerceExpr:
 		return &TraitCoerceExpr{At: e.At, Value: substituteExpr(e.Value, subMap), Trait: e.Trait, Concrete: substituteType(e.Concrete, subMap)}
 	case *ArrayToSliceExpr:

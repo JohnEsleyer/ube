@@ -14,6 +14,8 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <sched.h>
+#include <dirent.h>
+#include <sys/stat.h>
 #endif
 
 #define UBE_SCOPE_CHUNK_SIZE (64 * 1024)
@@ -295,6 +297,10 @@ typedef struct { bool ok; union { int64_t val; string err; }; } UbeResult_i64_st
 #define UbeSlice_string_DEFINED
 typedef struct { string* data; size_t len; size_t cap; } UbeSlice_string;
 #endif
+#ifndef UbeResult_slice_string_string_DEFINED
+#define UbeResult_slice_string_string_DEFINED
+typedef struct { bool ok; union { UbeSlice_string val; string err; }; } UbeResult_slice_string_string;
+#endif
 #ifndef UbeOption_string_DEFINED
 #define UbeOption_string_DEFINED
 typedef struct { bool has_val; string val; } UbeOption_string;
@@ -356,6 +362,135 @@ static inline UbeSlice_string ube_str_split(string s, string delim) {
     parts[idx++] = (string){ s.data + last, s.len - last };
     return (UbeSlice_string){ .data = parts, .len = idx, .cap = idx };
 }
+
+static inline UbeResult_slice_string_string ube_dir_list(string path) {
+    UbeResult_slice_string_string res;
+    char dir_buf[1024];
+    if (path.len >= sizeof(dir_buf)) {
+        res.ok = false;
+        res.err = ube_str_lit("path too long");
+        return res;
+    }
+    memcpy(dir_buf, path.data, path.len);
+    dir_buf[path.len] = '\0';
+#ifndef UBE_FREESTANDING
+    DIR* d = opendir(dir_buf);
+    if (!d) {
+        res.ok = false;
+        res.err = ube_str_lit("cannot open directory");
+        return res;
+    }
+    size_t count = 0;
+    struct dirent* ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        count++;
+    }
+    rewinddir(d);
+    string* items = count ? (string*)ube_bump_alloc(count * sizeof(string)) : NULL;
+    size_t idx = 0;
+    while ((ent = readdir(d)) != NULL && idx < count) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        size_t name_len = strlen(ent->d_name);
+        char* mem = (char*)ube_bump_alloc(name_len + 1);
+        memcpy(mem, ent->d_name, name_len);
+        mem[name_len] = '\0';
+        items[idx++] = (string){ mem, name_len };
+    }
+    closedir(d);
+    res.ok = true;
+    res.val = (UbeSlice_string){ .data = items, .len = idx, .cap = idx };
+    return res;
+#else
+    res.ok = false;
+    res.err = ube_str_lit("dir_list not supported in freestanding");
+    return res;
+#endif
+}
+
+static inline UbeResult_bool_string ube_dir_create(string path) {
+    UbeResult_bool_string res;
+    char buf[1024];
+    if (path.len >= sizeof(buf)) {
+        res.ok = false;
+        res.err = ube_str_lit("path too long");
+        return res;
+    }
+    memcpy(buf, path.data, path.len);
+    buf[path.len] = '\0';
+#ifndef UBE_FREESTANDING
+    for (char* p = buf + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            mkdir(buf, 0755);
+            *p = '/';
+        }
+    }
+    if (mkdir(buf, 0755) != 0 && errno != EEXIST) {
+        res.ok = false;
+        res.err = ube_str_lit("cannot create directory");
+        return res;
+    }
+    res.ok = true;
+    res.val = true;
+    return res;
+#else
+    res.ok = false;
+    res.err = ube_str_lit("dir_create not supported in freestanding");
+    return res;
+#endif
+}
+
+static inline UbeResult_bool_string ube_file_remove(string path) {
+    UbeResult_bool_string res;
+    char buf[1024];
+    if (path.len >= sizeof(buf)) {
+        res.ok = false;
+        res.err = ube_str_lit("path too long");
+        return res;
+    }
+    memcpy(buf, path.data, path.len);
+    buf[path.len] = '\0';
+    if (remove(buf) != 0) {
+        res.ok = false;
+        res.err = ube_str_lit("cannot remove file");
+        return res;
+    }
+    res.ok = true;
+    res.val = true;
+    return res;
+}
+
+static inline bool ube_env_set(string key, string val) {
+    char k[256];
+    char v[1024];
+    if (key.len >= sizeof(k) || val.len >= sizeof(v)) return false;
+    memcpy(k, key.data, key.len);
+    k[key.len] = '\0';
+    memcpy(v, val.data, val.len);
+    v[val.len] = '\0';
+#ifndef UBE_FREESTANDING
+    return setenv(k, v, 1) == 0;
+#else
+    return false;
+#endif
+}
+
+static inline int32_t ube_cmd_run(string cmd) {
+    char buf[2048];
+    if (cmd.len >= sizeof(buf)) return -1;
+    memcpy(buf, cmd.data, cmd.len);
+    buf[cmd.len] = '\0';
+    return (int32_t)system(buf);
+}
+
+static inline int64_t ube_abs(int64_t n) { return n < 0 ? -n : n; }
+static inline int64_t ube_min(int64_t a, int64_t b) { return a < b ? a : b; }
+static inline int64_t ube_max(int64_t a, int64_t b) { return a > b ? a : b; }
+static inline double ube_sqrt(double n) { return sqrt(n); }
+static inline double ube_pow(double b, double e) { return pow(b, e); }
+static inline double ube_floor(double n) { return floor(n); }
+static inline double ube_ceil(double n) { return ceil(n); }
 
 static inline UbeOption_string ube_env_get(string key) {
     char buf[512];

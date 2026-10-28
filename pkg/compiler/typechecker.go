@@ -10,9 +10,10 @@ type VarInfo struct {
 }
 
 type FuncSignature struct {
-	Params   []FieldDecl
-	RetType  UbeType
-	Escaping []bool
+	Params      []FieldDecl
+	RetType     UbeType
+	Escaping    []bool
+	ReceiverMut bool
 }
 
 type TypeEnvironment struct {
@@ -115,6 +116,18 @@ func NewTypechecker() *Typechecker {
 	tc.Global.Funcs["str_trim"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}}, RetType: str}
 	tc.Global.Funcs["str_index_of"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}, {Name: "substr", Type: str}}, RetType: i32}
 	tc.Global.Funcs["str_split"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}, {Name: "delim", Type: str}}, RetType: SliceType{Elem: str}}
+	tc.Global.Funcs["dir_list"] = FuncSignature{Params: []FieldDecl{{Name: "path", Type: str}}, RetType: ResultType{Ok: SliceType{Elem: str}, Err: str}}
+	tc.Global.Funcs["dir_create"] = FuncSignature{Params: []FieldDecl{{Name: "path", Type: str}}, RetType: ResultType{Ok: boolType, Err: str}}
+	tc.Global.Funcs["file_remove"] = FuncSignature{Params: []FieldDecl{{Name: "path", Type: str}}, RetType: ResultType{Ok: boolType, Err: str}}
+	tc.Global.Funcs["env_set"] = FuncSignature{Params: []FieldDecl{{Name: "key", Type: str}, {Name: "val", Type: str}}, RetType: boolType}
+	tc.Global.Funcs["cmd_run"] = FuncSignature{Params: []FieldDecl{{Name: "cmd", Type: str}}, RetType: i32}
+	tc.Global.Funcs["abs"] = FuncSignature{Params: []FieldDecl{{Name: "n", Type: i64}}, RetType: i64}
+	tc.Global.Funcs["min"] = FuncSignature{Params: []FieldDecl{{Name: "a", Type: i64}, {Name: "b", Type: i64}}, RetType: i64}
+	tc.Global.Funcs["max"] = FuncSignature{Params: []FieldDecl{{Name: "a", Type: i64}, {Name: "b", Type: i64}}, RetType: i64}
+	tc.Global.Funcs["sqrt"] = FuncSignature{Params: []FieldDecl{{Name: "f", Type: PrimitiveType{Name: "f64"}}}, RetType: PrimitiveType{Name: "f64"}}
+	tc.Global.Funcs["pow"] = FuncSignature{Params: []FieldDecl{{Name: "base", Type: PrimitiveType{Name: "f64"}}, {Name: "exp", Type: PrimitiveType{Name: "f64"}}}, RetType: PrimitiveType{Name: "f64"}}
+	tc.Global.Funcs["floor"] = FuncSignature{Params: []FieldDecl{{Name: "f", Type: PrimitiveType{Name: "f64"}}}, RetType: PrimitiveType{Name: "f64"}}
+	tc.Global.Funcs["ceil"] = FuncSignature{Params: []FieldDecl{{Name: "f", Type: PrimitiveType{Name: "f64"}}}, RetType: PrimitiveType{Name: "f64"}}
 
 	// StringBuilder receiver methods
 	tc.Global.Funcs["format"] = FuncSignature{RetType: str}
@@ -235,6 +248,20 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		rhsT = tc.resolveType(rhsT)
 		s.LHSType = lhsT
 		s.RHSType = rhsT
+		if s.Op == "" {
+			s.Op = "="
+		}
+		if s.Op != "=" {
+			if s.Op == "+=" && lhsT.String() == "string" && rhsT.String() == "string" {
+				// string concatenation via +=
+			} else if !integerType(lhsT) && lhsT.String() != "f32" && lhsT.String() != "f64" {
+				return fmt.Errorf("[%s] compound assignment operator '%s' requires numeric type, got '%s'", s.At, s.Op, lhsT)
+			} else {
+				if err := tc.assertCompat(lhsT, rhsT, s.At); err != nil {
+					return fmt.Errorf("[%s] type mismatch in compound assignment '%s': %w", s.At, s.Op, err)
+				}
+			}
+		}
 		if tr, isTrait := lhsT.(TraitType); isTrait {
 			if c, isCustom := rhsT.(CustomType); isCustom && tc.structImplementsTrait(c.Name, tr.Name) {
 				s.RHS = &TraitCoerceExpr{At: s.RHS.Loc(), Value: s.RHS, Trait: tr.Name, Concrete: c}
@@ -402,8 +429,10 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			elemT = it.Elem
 		case ArrayType:
 			elemT = it.Elem
+		case RangeType:
+			elemT = it.Elem
 		default:
-			return fmt.Errorf("[%s] for-in requires slice or array type, got '%s'", s.At, iterT)
+			return fmt.Errorf("[%s] for-in requires slice, array, or range (start..end), got '%s'", s.At, iterT)
 		}
 		s.IterType = iterT
 		loopEnv := childTypeEnvironment(env)
@@ -499,6 +528,20 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 				return fmt.Errorf("[%s] duplicate match pattern '%s'", arm.At, arm.Variant)
 			}
 			seenVariants[arm.Variant] = true
+
+			if arm.Variant == "_" {
+				armEnv := childTypeEnvironment(env)
+				if blk, ok := arm.Body.(*BlockStmt); ok {
+					if err := tc.checkBlock(blk, armEnv); err != nil {
+						return err
+					}
+				} else {
+					if err := tc.checkStmt(arm.Body, armEnv); err != nil {
+						return err
+					}
+				}
+				continue
+			}
 
 			expected, exists := vMap[arm.Variant]
 			if !exists {
@@ -602,7 +645,11 @@ func (tc *Typechecker) Check(prog *Program) error {
 			if d.Receiver != nil {
 				fnKey = fmt.Sprintf("%s.%s", d.Receiver.Type, d.Name)
 			}
-			tc.Global.Funcs[fnKey] = FuncSignature{Params: d.Params, RetType: d.RetType}
+			tc.Global.Funcs[fnKey] = FuncSignature{
+				Params:      d.Params,
+				RetType:     d.RetType,
+				ReceiverMut: d.Receiver != nil && d.Receiver.IsMut,
+			}
 		case *ExternFnDecl:
 			for _, p := range d.Params {
 				if err := tc.validateType(p.Type, d.At); err != nil {
@@ -625,7 +672,7 @@ func (tc *Typechecker) Check(prog *Program) error {
 			env.CurRet = fn.RetType
 			env.ScopeDepth = 0
 			if fn.Receiver != nil {
-				env.Vars[fn.Receiver.Name] = VarInfo{Type: fn.Receiver.Type, IsMut: false, Depth: 0, ValueDepth: 0}
+				env.Vars[fn.Receiver.Name] = VarInfo{Type: fn.Receiver.Type, IsMut: fn.Receiver.IsMut, Depth: 0, ValueDepth: 0}
 			}
 			for _, p := range fn.Params {
 				env.Vars[p.Name] = VarInfo{Type: p.Type, IsMut: false, Depth: 0, ValueDepth: 0}
