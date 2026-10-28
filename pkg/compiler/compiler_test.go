@@ -20,6 +20,9 @@ func compilePipeline(t *testing.T, source string) (*compiler.Program, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := compiler.Monomorphize(prog); err != nil {
+		return nil, err
+	}
 	if err := compiler.NewTypechecker().Check(prog); err != nil {
 		return nil, err
 	}

@@ -32,6 +32,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := compiler.Monomorphize(ast); err != nil {
+		fmt.Fprintf(os.Stderr, "[ubec] Generic Monomorphization Error: %v\n", err)
+		os.Exit(1)
+	}
+
 	// 3. Static Type Checking
 	typechecker := compiler.NewTypechecker()
 	if err := typechecker.Check(ast); err != nil {

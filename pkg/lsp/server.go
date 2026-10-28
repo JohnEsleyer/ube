@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/JohnEsleyer/ube/pkg/compiler"
+	"github.com/JohnEsleyer/ube/pkg/formatter"
 )
 
 type rpcMessage struct {
@@ -81,9 +82,10 @@ func Run() {
 					"completionProvider": map[string]any{
 						"triggerCharacters": []string{".", ":"},
 					},
-					"hoverProvider":          true,
-					"definitionProvider":     true,
-					"documentSymbolProvider": true,
+					"hoverProvider":              true,
+					"definitionProvider":         true,
+					"documentSymbolProvider":     true,
+					"documentFormattingProvider": true,
 				},
 			}
 		case "initialized":
@@ -141,6 +143,28 @@ func Run() {
 			}
 			_ = json.Unmarshal(m.Params, &p)
 			result = DocumentSymbols(p.TextDocument.URI, openDocs[p.TextDocument.URI])
+		case "textDocument/formatting":
+			var p struct {
+				TextDocument textDoc `json:"textDocument"`
+			}
+			_ = json.Unmarshal(m.Params, &p)
+			text := openDocs[p.TextDocument.URI]
+			if formatted, err := formatter.Format(p.TextDocument.URI, text); err == nil {
+				lines := strings.Split(text, "\n")
+				lastLine := len(lines) - 1
+				lastCol := len(lines[lastLine])
+				result = []map[string]any{
+					{
+						"range": map[string]any{
+							"start": map[string]int{"line": 0, "character": 0},
+							"end":   map[string]int{"line": lastLine, "character": lastCol},
+						},
+						"newText": formatted,
+					},
+				}
+			} else {
+				result = []any{}
+			}
 		case "shutdown":
 			result = nil
 		case "exit":
@@ -167,6 +191,9 @@ func publish(uri, source string) {
 	if err == nil {
 		var prog *compiler.Program
 		prog, err = compiler.NewParser(tokens).ParseProgram()
+		if err == nil {
+			err = compiler.Monomorphize(prog)
+		}
 		if err == nil {
 			err = compiler.NewTypechecker().Check(prog)
 		}

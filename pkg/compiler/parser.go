@@ -86,7 +86,7 @@ func (p *Parser) ParseProgram() (*Program, error) {
 func (p *Parser) synchronizeDecl() {
 	for !p.check(TokenEOF) {
 		switch p.peek(0).Type {
-		case TokenFn, TokenStruct, TokenEnum, TokenExtern, TokenImport:
+		case TokenFn, TokenStruct, TokenEnum, TokenTrait, TokenExtern, TokenImport:
 			return
 		}
 		p.advance()
@@ -118,6 +118,8 @@ func (p *Parser) parseDecl() Decl {
 		return p.parseStructDecl()
 	case TokenEnum:
 		return p.parseEnumDecl()
+	case TokenTrait:
+		return p.parseTraitDecl()
 	case TokenExtern:
 		return p.parseExternDecl()
 	case TokenFn:
@@ -128,9 +130,54 @@ func (p *Parser) parseDecl() Decl {
 	}
 }
 
+func (p *Parser) parseTraitDecl() *TraitDecl {
+	loc := p.expect(TokenTrait, "Expected 'trait'").Loc
+	name := p.expect(TokenIdent, "Expected trait name").Val
+	p.expect(TokenLBrace, "Expected '{' after trait name")
+	var methods []TraitMethodDecl
+	for !p.check(TokenRBrace) && !p.check(TokenEOF) {
+		mLoc := p.expect(TokenFn, "Expected 'fn' in trait definition").Loc
+		mName := p.expect(TokenIdent, "Expected method name").Val
+		p.expect(TokenLParen, "Expected '(' for parameters")
+		var params []FieldDecl
+		for !p.check(TokenRParen) && !p.check(TokenEOF) {
+			pName := p.expect(TokenIdent, "Expected parameter name").Val
+			p.expect(TokenColon, "Expected ':'")
+			pType := p.parseType()
+			params = append(params, FieldDecl{Name: pName, Type: pType})
+			if p.check(TokenComma) {
+				p.advance()
+			}
+		}
+		p.expect(TokenRParen, "Expected ')'")
+		var retType UbeType = PrimitiveType{Name: "void"}
+		if p.check(TokenArrow) {
+			p.advance()
+			retType = p.parseType()
+		}
+		if p.check(TokenSemicolon) {
+			p.advance()
+		}
+		methods = append(methods, TraitMethodDecl{At: mLoc, Name: mName, Params: params, RetType: retType})
+	}
+	p.expect(TokenRBrace, "Expected '}' closing trait")
+	return &TraitDecl{At: loc, Name: name, Methods: methods}
+}
+
 func (p *Parser) parseStructDecl() *StructDecl {
 	loc := p.expect(TokenStruct, "Expected 'struct'").Loc
 	name := p.expect(TokenIdent, "Expected struct name").Val
+	var typeParams []string
+	if p.check(TokenLBracket) {
+		p.advance()
+		for !p.check(TokenRBracket) && !p.check(TokenEOF) {
+			typeParams = append(typeParams, p.expect(TokenIdent, "Expected type parameter name").Val)
+			if p.check(TokenComma) {
+				p.advance()
+			}
+		}
+		p.expect(TokenRBracket, "Expected ']' after type parameters")
+	}
 	p.expect(TokenLBrace, "Expected '{' after struct name")
 
 	var fields []FieldDecl
@@ -144,7 +191,7 @@ func (p *Parser) parseStructDecl() *StructDecl {
 		}
 	}
 	p.expect(TokenRBrace, "Expected '}' closing struct")
-	return &StructDecl{At: loc, Name: name, Fields: fields}
+	return &StructDecl{At: loc, Name: name, TypeParams: typeParams, Fields: fields}
 }
 
 func (p *Parser) parseEnumDecl() *EnumDecl {
@@ -213,6 +260,23 @@ func (p *Parser) parseFnDecl() *FnDecl {
 	}
 
 	name := p.expect(TokenIdent, "Expected function name").Val
+	var typeParams []GenericParam
+	if p.check(TokenLBracket) {
+		p.advance()
+		for !p.check(TokenRBracket) && !p.check(TokenEOF) {
+			paramName := p.expect(TokenIdent, "Expected type parameter name").Val
+			constraint := ""
+			if p.check(TokenColon) {
+				p.advance()
+				constraint = p.expect(TokenIdent, "Expected trait constraint name").Val
+			}
+			typeParams = append(typeParams, GenericParam{Name: paramName, Constraint: constraint})
+			if p.check(TokenComma) {
+				p.advance()
+			}
+		}
+		p.expect(TokenRBracket, "Expected ']' after type parameters")
+	}
 	p.expect(TokenLParen, "Expected '(' for arguments")
 
 	var params []FieldDecl
@@ -235,12 +299,13 @@ func (p *Parser) parseFnDecl() *FnDecl {
 
 	body := p.parseBlock()
 	return &FnDecl{
-		At:       loc,
-		Name:     name,
-		Receiver: receiver,
-		Params:   params,
-		RetType:  retType,
-		Body:     body,
+		At:         loc,
+		Name:       name,
+		TypeParams: typeParams,
+		Receiver:   receiver,
+		Params:     params,
+		RetType:    retType,
+		Body:       body,
 	}
 }
 
@@ -279,13 +344,28 @@ func (p *Parser) parseType() UbeType {
 		t = PoolType{Elem: elem}
 	} else if tok.Type == TokenIdent {
 		idName := p.advance().Val
-		switch idName {
-		case "i32", "u32", "i64", "u64", "u8", "f32", "f64", "bool", "void":
-			t = PrimitiveType{Name: idName}
-		case "string":
-			t = StringType{}
-		default:
-			t = CustomType{Name: idName}
+		if p.check(TokenLBracket) {
+			p.advance()
+			var args []UbeType
+			for !p.check(TokenRBracket) && !p.check(TokenEOF) {
+				args = append(args, p.parseType())
+				if p.check(TokenComma) {
+					p.advance()
+				}
+			}
+			p.expect(TokenRBracket, "Expected ']' after generic type arguments")
+			t = GenericInstanceType{Base: idName, Args: args}
+		} else {
+			switch idName {
+			case "i32", "u32", "i64", "u64", "u8", "f32", "f64", "bool", "void":
+				t = PrimitiveType{Name: idName}
+			case "string":
+				t = StringType{}
+			case "StringBuilder":
+				t = StringBuilderType{}
+			default:
+				t = CustomType{Name: idName}
+			}
 		}
 	} else {
 		p.errorAt(tok.Loc, fmt.Sprintf("Invalid type annotation: '%s'", tok.Val))

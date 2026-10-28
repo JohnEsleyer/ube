@@ -34,12 +34,20 @@ type Generator struct {
 	loopSelectDepth []int
 	selectGroups    []string
 	spawnWrappers   []string
+	traitDecls      map[string]*TraitDecl
+	traitVtables    map[string]traitVtableInfo
+	traitVtableKeys []string
+}
+
+type traitVtableInfo struct {
+	Trait    string
+	Concrete UbeType
 }
 
 type loopLabel struct{ breakTo, continueTo string }
 
 func NewGenerator(prog *Program) *Generator {
-	return &Generator{
+	g := &Generator{
 		Program:        prog,
 		slices:         make(map[string]string),
 		options:        make(map[string]string),
@@ -49,7 +57,17 @@ func NewGenerator(prog *Program) *Generator {
 		sliceVars:      make(map[string]string),
 		sliceParamVars: make(map[string]bool),
 		sliceMutParams: make(map[string]map[int]bool),
+		traitDecls:     make(map[string]*TraitDecl),
+		traitVtables:   make(map[string]traitVtableInfo),
 	}
+	if prog != nil {
+		for _, decl := range prog.Decls {
+			if tr, ok := decl.(*TraitDecl); ok {
+				g.traitDecls[tr.Name] = tr
+			}
+		}
+	}
+	return g
 }
 
 func (g *Generator) newTmp() string {
@@ -90,6 +108,15 @@ func (g *Generator) registerArray(m, spec string) {
 		g.arrayKeys = append(g.arrayKeys, m)
 	}
 	g.arrays[m] = spec
+}
+
+func (g *Generator) registerTraitVtable(trait string, concrete UbeType) string {
+	key := fmt.Sprintf("%s_%s", trait, mangleTypeName(concrete.String()))
+	if _, exists := g.traitVtables[key]; !exists {
+		g.traitVtables[key] = traitVtableInfo{Trait: trait, Concrete: concrete}
+		g.traitVtableKeys = append(g.traitVtableKeys, key)
+	}
+	return key + "_vtable"
 }
 
 func mangleTypeName(s string) string {
@@ -175,6 +202,14 @@ func (g *Generator) toCType(t UbeType) string {
 		return fmt.Sprintf("Pool_%s*", m)
 	case CustomType:
 		return v.Name
+	case GenericInstanceType:
+		// Should already be monomorphized; fall back to the base name so
+		// diagnostics stay readable if a generic leaks through.
+		return v.Base
+	case TraitType:
+		return v.Name
+	case StringBuilderType:
+		return "UbeStringBuilder"
 	default:
 		return "void*"
 	}
@@ -281,14 +316,27 @@ func (g *Generator) Generate() string {
 	}
 	g.emit("")
 
+	// Pre-register aggregate types referenced by declarations so that their
+	// typedefs are emitted before the declarations that use them.
 	for _, decl := range g.Program.Decls {
-		if st, ok := decl.(*StructDecl); ok {
-			g.emit(fmt.Sprintf("struct %s {", st.Name))
-			for _, f := range st.Fields {
-				g.emit(fmt.Sprintf("    %s %s;", g.toCType(f.Type), f.Name))
+		switch d := decl.(type) {
+		case *StructDecl:
+			for _, f := range d.Fields {
+				g.toCType(f.Type)
 			}
-			g.emit("};")
-			g.emit("")
+		case *EnumDecl:
+			for _, v := range d.Variants {
+				for _, t := range v.Types {
+					g.toCType(t)
+				}
+			}
+		case *TraitDecl:
+			for _, method := range d.Methods {
+				for _, p := range method.Params {
+					g.toCType(p.Type)
+				}
+				g.toCType(method.RetType)
+			}
 		}
 	}
 
@@ -317,18 +365,37 @@ func (g *Generator) Generate() string {
 			g.emit("")
 		}
 	}
-	for _, m := range g.arrayKeys {
-		spec := g.arrays[m]
-		parts := strings.SplitN(spec, "|", 2)
-		g.emit(fmt.Sprintf("#ifndef UbeArray_%s_DEFINED\n#define UbeArray_%s_DEFINED", m, m))
-		g.emit(fmt.Sprintf("typedef struct { %s data[%s]; } UbeArray_%s;", parts[0], parts[1], m))
-		g.emit("#endif")
+	for _, decl := range g.Program.Decls {
+		if tr, ok := decl.(*TraitDecl); ok {
+			g.emit(fmt.Sprintf("typedef struct %s %s;", tr.Name, tr.Name))
+			g.emit(fmt.Sprintf("typedef struct %s_VTable %s_VTable;", tr.Name, tr.Name))
+			g.emit(fmt.Sprintf("struct %s { void* self; const %s_VTable* vtable; };", tr.Name, tr.Name))
+			g.emit("")
+		}
 	}
 	for _, m := range g.sliceKeys {
 		ct := g.slices[m]
 		g.registerOption(m, ct)
 		g.emit(fmt.Sprintf("#ifndef UbeSlice_%s_DEFINED\n#define UbeSlice_%s_DEFINED", m, m))
 		g.emit(fmt.Sprintf("typedef struct { %s* data; size_t len; size_t cap; } UbeSlice_%s;", ct, m))
+		g.emit("#endif")
+	}
+	for _, decl := range g.Program.Decls {
+		if st, ok := decl.(*StructDecl); ok {
+			g.emit(fmt.Sprintf("struct %s {", st.Name))
+			for _, f := range st.Fields {
+				g.emit(fmt.Sprintf("    %s %s;", g.toCType(f.Type), f.Name))
+			}
+			g.emit("};")
+			g.emit("")
+		}
+	}
+
+	for _, m := range g.arrayKeys {
+		spec := g.arrays[m]
+		parts := strings.SplitN(spec, "|", 2)
+		g.emit(fmt.Sprintf("#ifndef UbeArray_%s_DEFINED\n#define UbeArray_%s_DEFINED", m, m))
+		g.emit(fmt.Sprintf("typedef struct { %s data[%s]; } UbeArray_%s;", parts[0], parts[1], m))
 		g.emit("#endif")
 	}
 	for _, m := range g.optionKeys {
@@ -347,6 +414,20 @@ func (g *Generator) Generate() string {
 	for _, m := range g.poolKeys {
 		ct := g.pools[m]
 		g.emit(fmt.Sprintf("DEFINE_UBE_POOL(%s, %s)", ct, m))
+	}
+	for _, decl := range g.Program.Decls {
+		if tr, ok := decl.(*TraitDecl); ok {
+			g.emit(fmt.Sprintf("struct %s_VTable {", tr.Name))
+			for _, method := range tr.Methods {
+				params := []string{"void* self"}
+				for _, p := range method.Params {
+					params = append(params, fmt.Sprintf("%s %s", g.toCType(p.Type), p.Name))
+				}
+				g.emit(fmt.Sprintf("    %s (*%s)(%s);", g.toCType(method.RetType), method.Name, strings.Join(params, ", ")))
+			}
+			g.emit("};")
+			g.emit("")
+		}
 	}
 	for _, decl := range g.Program.Decls {
 		if fn, ok := decl.(*FnDecl); ok {
@@ -383,6 +464,36 @@ func (g *Generator) Generate() string {
 			}
 			g.emit(fmt.Sprintf("extern %s %s(%s);", g.toCType(fn.RetType), fn.Name, strings.Join(params, ", ")))
 		}
+	}
+	for _, key := range g.traitVtableKeys {
+		info := g.traitVtables[key]
+		trait := g.traitDecls[info.Trait]
+		if trait == nil {
+			continue
+		}
+		concreteCT := g.toCType(info.Concrete)
+		concreteName := info.Concrete.String()
+		var entries []string
+		for _, method := range trait.Methods {
+			wrapper := fmt.Sprintf("%s_%s", key, method.Name)
+			params := []string{"void* self"}
+			callArgs := []string{fmt.Sprintf("*(%s*)self", concreteCT)}
+			for _, p := range method.Params {
+				params = append(params, fmt.Sprintf("%s %s", g.toCType(p.Type), p.Name))
+				callArgs = append(callArgs, p.Name)
+			}
+			call := fmt.Sprintf("%s_%s(%s)", concreteName, method.Name, strings.Join(callArgs, ", "))
+			if g.toCType(method.RetType) == "void" {
+				g.emit(fmt.Sprintf("static void %s(%s) { %s; }", wrapper, strings.Join(params, ", "), call))
+			} else {
+				g.emit(fmt.Sprintf("static %s %s(%s) { return %s; }", g.toCType(method.RetType), wrapper, strings.Join(params, ", "), call))
+			}
+			entries = append(entries, fmt.Sprintf(".%s = %s", method.Name, wrapper))
+		}
+		if len(entries) == 0 {
+			entries = append(entries, "0")
+		}
+		g.emit(fmt.Sprintf("static const %s_VTable %s_vtable = { %s };", info.Trait, key, strings.Join(entries, ", ")))
 	}
 	for _, wrapper := range g.spawnWrappers {
 		g.buf.WriteString(wrapper)

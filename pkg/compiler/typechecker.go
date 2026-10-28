@@ -21,6 +21,7 @@ type TypeEnvironment struct {
 	Structs     map[string][]FieldDecl
 	Enums       map[string][]VariantDecl
 	Funcs       map[string]FuncSignature
+	Traits      map[string]*TraitDecl
 	CurRet      UbeType
 	LoopDepth   int
 	ScopeDepth  int
@@ -34,6 +35,7 @@ func NewTypeEnvironment(parent *TypeEnvironment) *TypeEnvironment {
 		Structs: make(map[string][]FieldDecl),
 		Enums:   make(map[string][]VariantDecl),
 		Funcs:   make(map[string]FuncSignature),
+		Traits:  make(map[string]*TraitDecl),
 	}
 }
 
@@ -134,7 +136,13 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			if err := tc.validateType(s.Type, s.At); err != nil {
 				return err
 			}
-			if err := tc.assertCompat(s.Type, valT, s.At); err != nil {
+			coerced, err := tc.coerceTraitValue(s.Value, s.Type, valT, s.At)
+			if err != nil {
+				return err
+			}
+			if _, isCoerce := coerced.(*TraitCoerceExpr); isCoerce {
+				s.Value = coerced
+			} else if err := tc.assertCompat(s.Type, valT, s.At); err != nil {
 				return err
 			}
 			valT = s.Type
@@ -168,6 +176,15 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		}
 		s.LHSType = lhsT
 		s.RHSType = rhsT
+		coerced, err := tc.coerceTraitValue(s.RHS, lhsT, rhsT, s.At)
+		if err != nil {
+			return err
+		}
+		if _, isCoerce := coerced.(*TraitCoerceExpr); isCoerce {
+			s.RHS = coerced
+			s.RHSType = lhsT
+			return nil
+		}
 		if id := assignmentRoot(s.LHS); id != "" {
 			if vInfo, found := env.LookupVar(id); found {
 				if !vInfo.IsMut {
@@ -208,6 +225,17 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			s.ValueType = valT
 			if tc.hasLifetime(valT) && tc.exprDepth(s.Value, env) > 0 {
 				return fmt.Errorf("[%s] Safety Error: cannot return a reference rooted in this function's local scope", s.At)
+			}
+			if expected != nil {
+				coerced, err := tc.coerceTraitValue(s.Value, expected, valT, s.At)
+				if err != nil {
+					return err
+				}
+				if _, isCoerce := coerced.(*TraitCoerceExpr); isCoerce {
+					s.Value = coerced
+					s.ValueType = expected
+					return nil
+				}
 			}
 			if resT, ok := expected.(ResultType); ok {
 				if _, isErr := s.Value.(*ErrorExpr); isErr {
@@ -456,6 +484,8 @@ func (tc *Typechecker) Check(prog *Program) error {
 			tc.Global.Structs[d.Name] = d.Fields
 		case *EnumDecl:
 			tc.Global.Enums[d.Name] = d.Variants
+		case *TraitDecl:
+			tc.Global.Traits[d.Name] = d
 		}
 	}
 

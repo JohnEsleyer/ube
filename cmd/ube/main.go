@@ -60,6 +60,8 @@ func execute(args []string) error {
 		return run(args[1:])
 	case "test":
 		return runTests(args[1:])
+	case "fmt":
+		return runFmt(args[1:])
 	default:
 		if strings.HasSuffix(args[0], ".ube") {
 			return run(args)

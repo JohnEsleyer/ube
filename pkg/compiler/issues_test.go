@@ -31,6 +31,9 @@ func compileToNativeBinary(t *testing.T, source string) (binaryPath string, cSou
 	if err != nil {
 		t.Fatalf("Parser error: %v", err)
 	}
+	if err := compiler.Monomorphize(prog); err != nil {
+		return "", "", err
+	}
 	if err := compiler.NewTypechecker().Check(prog); err != nil {
 		t.Fatalf("Typechecker error: %v", err)
 	}
@@ -75,6 +78,9 @@ func typecheckSource(t *testing.T, source string) error {
 	prog, err := compiler.NewParser(tokens).ParseProgram()
 	if err != nil {
 		t.Fatalf("Parser error: %v", err)
+	}
+	if err := compiler.Monomorphize(prog); err != nil {
+		return err
 	}
 	return compiler.NewTypechecker().Check(prog)
 }

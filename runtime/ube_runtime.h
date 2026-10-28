@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include <stdarg.h>
 #include <math.h>
 #include <errno.h>
 #include <time.h>
@@ -703,5 +704,143 @@ static inline void ube_print_raw_bool(bool v) { fputs(v ? "true" : "false", stdo
     int32_t: ube_print_raw_int, uint32_t: ube_print_raw_u32, uint8_t: ube_print_raw_u8, \
     int64_t: ube_print_raw_i64, uint64_t: ube_print_raw_u64, float: ube_print_raw_f32, \
     double: ube_print_raw_f64, default: ube_print_ptr)(X)
+
+// --- 2b. Arena-backed StringBuilder & Formatting ---
+typedef struct {
+    char* data;
+    size_t len;
+    size_t cap;
+} UbeStringBuilder;
+
+static inline UbeStringBuilder ube_sb_new_cap(size_t cap) {
+    if (cap < 16) cap = 16;
+    UbeStringBuilder sb;
+    sb.cap = cap;
+    sb.len = 0;
+    sb.data = (char*)ube_bump_alloc(sb.cap);
+    sb.data[0] = '\0';
+    return sb;
+}
+
+static inline UbeStringBuilder ube_sb_new(void) {
+    return ube_sb_new_cap(64);
+}
+
+static inline void ube_sb_grow(UbeStringBuilder* sb, size_t needed) {
+    if (needed > SIZE_MAX - sb->len - 1) ube_panic_capacity((int64_t)(sb->len + needed));
+    if (sb->len + needed + 1 > sb->cap) {
+        size_t new_cap = sb->cap * 2;
+        if (new_cap < sb->len + needed + 1) new_cap = sb->len + needed + 64;
+        char* new_data = (char*)ube_bump_alloc(new_cap);
+        if (sb->len) memcpy(new_data, sb->data, sb->len);
+        sb->data = new_data;
+        sb->cap = new_cap;
+    }
+}
+
+static inline void ube_sb_append_str(UbeStringBuilder* sb, string s) {
+    if (s.len == 0) return;
+    ube_sb_grow(sb, s.len);
+    memcpy(sb->data + sb->len, s.data, s.len);
+    sb->len += s.len;
+    sb->data[sb->len] = '\0';
+}
+
+static inline void ube_sb_append_cstr(UbeStringBuilder* sb, const char* s) {
+    if (!s) return;
+    size_t slen = strlen(s);
+    ube_sb_grow(sb, slen);
+    memcpy(sb->data + sb->len, s, slen);
+    sb->len += slen;
+    sb->data[sb->len] = '\0';
+}
+
+static inline void ube_sb_append_char(UbeStringBuilder* sb, char c) {
+    ube_sb_grow(sb, 1);
+    sb->data[sb->len++] = c;
+    sb->data[sb->len] = '\0';
+}
+
+static inline void ube_sb_append_i64(UbeStringBuilder* sb, int64_t v) {
+    char buf[32];
+    int n = snprintf(buf, sizeof(buf), "%lld", (long long)v);
+    if (n > 0) {
+        ube_sb_grow(sb, (size_t)n);
+        memcpy(sb->data + sb->len, buf, (size_t)n);
+        sb->len += (size_t)n;
+        sb->data[sb->len] = '\0';
+    }
+}
+
+static inline void ube_sb_append_u64(UbeStringBuilder* sb, uint64_t v) {
+    char buf[32];
+    int n = snprintf(buf, sizeof(buf), "%llu", (unsigned long long)v);
+    if (n > 0) {
+        ube_sb_grow(sb, (size_t)n);
+        memcpy(sb->data + sb->len, buf, (size_t)n);
+        sb->len += (size_t)n;
+        sb->data[sb->len] = '\0';
+    }
+}
+
+static inline void ube_sb_append_u8(UbeStringBuilder* sb, uint8_t v) {
+    ube_sb_append_u64(sb, (uint64_t)v);
+}
+
+static inline void ube_sb_append_f64(UbeStringBuilder* sb, double v) {
+    char buf[64];
+    int n = snprintf(buf, sizeof(buf), "%g", v);
+    if (n > 0) {
+        ube_sb_grow(sb, (size_t)n);
+        memcpy(sb->data + sb->len, buf, (size_t)n);
+        sb->len += (size_t)n;
+        sb->data[sb->len] = '\0';
+    }
+}
+
+static inline void ube_sb_append_bool(UbeStringBuilder* sb, bool v) {
+    ube_sb_append_cstr(sb, v ? "true" : "false");
+}
+
+static inline string ube_sb_to_string(UbeStringBuilder* sb) {
+    return (string){ sb->data, sb->len };
+}
+
+// Arena-backed printf-style formatting. Interpolated strings and the
+// format(...) builtin use UbeStringBuilder directly, but this helper is kept
+// for C-level integrations and extern declarations.
+static inline string ube_format(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    va_list copy;
+    va_copy(copy, args);
+    int needed = vsnprintf(NULL, 0, fmt, copy);
+    va_end(copy);
+    if (needed < 0) {
+        va_end(args);
+        string empty = { "", 0 };
+        return empty;
+    }
+    char* buffer = (char*)ube_bump_alloc((size_t)needed + 1);
+    vsnprintf(buffer, (size_t)needed + 1, fmt, args);
+    va_end(args);
+    string s = { buffer, (size_t)needed };
+    return s;
+}
+
+#define ube_sb_append_any(sb, X) _Generic((X), \
+    string: ube_sb_append_str, \
+    const char*: ube_sb_append_cstr, \
+    char*: ube_sb_append_cstr, \
+    bool: ube_sb_append_bool, \
+    char: ube_sb_append_char, \
+    int32_t: ube_sb_append_i64, \
+    uint32_t: ube_sb_append_u64, \
+    uint8_t: ube_sb_append_u8, \
+    int64_t: ube_sb_append_i64, \
+    uint64_t: ube_sb_append_u64, \
+    float: ube_sb_append_f64, \
+    double: ube_sb_append_f64 \
+)((sb), (X))
 
 #endif // UBE_RUNTIME_H

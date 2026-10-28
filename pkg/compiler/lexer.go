@@ -13,6 +13,7 @@ var keywords = map[string]TokenType{
 	"mut":      TokenMut,
 	"struct":   TokenStruct,
 	"enum":     TokenEnum,
+	"trait":    TokenTrait,
 	"match":    TokenMatch,
 	"if":       TokenIf,
 	"else":     TokenElse,
@@ -106,6 +107,53 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 		}
 
 		loc := SourceLocation{File: l.file, Line: l.line, Col: l.col}
+
+		if (ch == 'f' || ch == 'F') && l.peek(1) == '"' {
+			l.advance() // 'f'
+			l.advance() // '"'
+			var buf strings.Builder
+			for l.pos < len(l.source) && l.peek(0) != '"' {
+				if l.peek(0) == '\\' {
+					l.advance()
+					if l.pos >= len(l.source) {
+						return nil, fmt.Errorf("[%s] Error: Unterminated escape in formatted string", loc)
+					}
+					esc := l.advance()
+					switch esc {
+					case 'n':
+						buf.WriteRune('\n')
+					case 'r':
+						buf.WriteRune('\r')
+					case 't':
+						buf.WriteRune('\t')
+					case '"':
+						buf.WriteRune('"')
+					case '\\':
+						buf.WriteRune('\\')
+					case '0':
+						buf.WriteRune(0)
+					case '{':
+						// Keep the escape marker so the parser does not treat
+						// this brace as the start of an interpolation.
+						buf.WriteString("\\{")
+					case '}':
+						buf.WriteString("\\}")
+					default:
+						buf.WriteRune('\\')
+						buf.WriteRune(esc)
+					}
+				} else {
+					buf.WriteRune(l.advance())
+				}
+			}
+			if l.peek(0) != '"' {
+				return nil, fmt.Errorf("[%s] Error: Unterminated formatted string literal", loc)
+			}
+			l.advance()
+			tokens = append(tokens, Token{Type: TokenFormatString, Val: buf.String(), Loc: loc})
+			continue
+		}
+
 		if ch == '<' && l.peek(1) == '<' {
 			l.advance()
 			l.advance()
