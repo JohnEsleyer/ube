@@ -7,6 +7,7 @@ type VarInfo struct {
 	IsMut      bool
 	Depth      int
 	ValueDepth int
+	Moved      bool
 }
 
 type FuncSignature struct {
@@ -184,6 +185,28 @@ func (tc *Typechecker) checkBlock(b *BlockStmt, env *TypeEnvironment) error {
 	return nil
 }
 
+func (tc *Typechecker) isCopyType(t UbeType) bool {
+	if t == nil {
+		return true
+	}
+	switch t.(type) {
+	case PrimitiveType, RangeType, ChanType, SliceType:
+		return true
+	default:
+		return false
+	}
+}
+
+func (tc *Typechecker) markMovedIfAffine(expr Expr, env *TypeEnvironment) {
+	if id, ok := expr.(*IdentExpr); ok {
+		if info, found := env.LookupVar(id.Name); found && !tc.isCopyType(info.Type) {
+			env.updateVar(id.Name, func(v *VarInfo) {
+				v.Moved = true
+			})
+		}
+	}
+}
+
 func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 	switch s := stmt.(type) {
 	case *LetStmt:
@@ -221,7 +244,9 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 				return fmt.Errorf("[%s] variable '%s' requires a type annotation when initialized with null", s.At, s.Name)
 			}
 		}
-		env.Vars[s.Name] = VarInfo{Type: valT, IsMut: s.Mut, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Value, env)}
+		valT = valT.WithRegion(env.ScopeDepth)
+		tc.markMovedIfAffine(s.Value, env)
+		env.Vars[s.Name] = VarInfo{Type: valT, IsMut: s.Mut, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Value, env), Moved: false}
 
 	case *DeferStmt:
 		if _, ok := s.Call.(*CallExpr); !ok {
@@ -231,6 +256,14 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		return err
 
 	case *AssignStmt:
+		// If LHS is a plain identifier being reassigned, allow it even if previously moved
+		if id, ok := s.LHS.(*IdentExpr); ok {
+			if vInfo, found := env.LookupVar(id.Name); found && vInfo.Moved {
+				env.updateVar(id.Name, func(v *VarInfo) {
+					v.Moved = false
+				})
+			}
+		}
 		lhsT, err := tc.inferExpr(s.LHS, env)
 		if err != nil {
 			return err
@@ -282,9 +315,13 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 				if tc.hasLifetime(lhsT) && tc.exprDepth(s.RHS, env) > vInfo.Depth {
 					return fmt.Errorf("[%s] Safety Error: value rooted at scope depth %d cannot escape into '%s' at depth %d", s.At, tc.exprDepth(s.RHS, env), id, vInfo.Depth)
 				}
-				env.updateVar(id, func(v *VarInfo) { v.ValueDepth = tc.exprDepth(s.RHS, env) })
+				env.updateVar(id, func(v *VarInfo) {
+					v.ValueDepth = tc.exprDepth(s.RHS, env)
+					v.Moved = false
+				})
 			}
 		}
+		tc.markMovedIfAffine(s.RHS, env)
 		if opt, ok := lhsT.(OptionalType); ok {
 			if lit, isNull := s.RHS.(*LiteralExpr); isNull && lit.Val == "null" {
 				return nil

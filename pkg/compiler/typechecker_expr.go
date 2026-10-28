@@ -87,6 +87,9 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			return StringBuilderType{}, nil
 		}
 		if v, ok := env.LookupVar(e.Name); ok {
+			if v.Moved {
+				return nil, fmt.Errorf("[%s] use of moved value '%s'", e.At, e.Name)
+			}
 			if err := requireUnsafePointerUse(v.Type, env, e.At); err != nil {
 				return nil, err
 			}
@@ -832,6 +835,7 @@ func (tc *Typechecker) checkCallArgs(args []Expr, params []FieldDecl, escaping [
 		if err := tc.assertCompat(paramType, actual, arg.Loc()); err != nil {
 			return err
 		}
+		tc.markMovedIfAffine(arg, env)
 	}
 	return nil
 }
