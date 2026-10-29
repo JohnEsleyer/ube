@@ -86,6 +86,8 @@ func (g *Generator) exprMutatesName(expr Expr, name string) bool {
 				return true
 			}
 		}
+	case *ArenaExpr:
+		return g.stmtMutatesName(e.Body, name)
 	}
 	return false
 }

@@ -63,3 +63,8 @@ dirs:
         enabled: true
         extensions:
             - html
+    dev:
+        enabled: true
+        extensions:
+          - md
+          - txt

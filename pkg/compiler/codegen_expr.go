@@ -8,7 +8,7 @@ import (
 
 func isRValue(expr Expr) bool {
 	switch expr.(type) {
-	case *CallExpr, *ArrayInitExpr, *SliceInitExpr, *StructInitExpr, *BinaryExpr, *UnaryExpr, *TryExpr, *OrElseExpr, *InterpolatedStringExpr, *TraitCoerceExpr, *ArrayToSliceExpr:
+	case *CallExpr, *ArrayInitExpr, *SliceInitExpr, *StructInitExpr, *BinaryExpr, *UnaryExpr, *TryExpr, *OrElseExpr, *InterpolatedStringExpr, *TraitCoerceExpr, *ArrayToSliceExpr, *ArenaExpr:
 		return true
 	}
 	return false
@@ -18,21 +18,10 @@ func (g *Generator) genExpr(expr Expr) string {
 	switch e := expr.(type) {
 	case *PromoteExpr:
 		valCode := g.genExpr(e.Value)
-		if sl, ok := e.Type.(SliceType); ok {
-			m := g.sliceElemMangle(sl.Elem)
-			ct := g.toCType(sl.Elem)
-			return fmt.Sprintf("({ UbeSlice_%s _sl = %s; if (_sl.data && _sl.len > 0) { %s* _nd = (%s*)ube_bump_alloc_parent(_sl.len * sizeof(%s)); memcpy(_nd, _sl.data, _sl.len * sizeof(%s)); _sl.data = _nd; _sl.cap = _sl.len; } _sl; })",
-				m, valCode, ct, ct, ct, ct)
-		}
-		if _, ok := e.Type.(StringType); ok {
-			return fmt.Sprintf("ube_str_promote(%s)", valCode)
-		}
-		if pt, ok := e.Type.(PointerType); ok {
-			ct := g.toCType(pt.Base)
-			return fmt.Sprintf("({ %s* _src = %s; %s* _dst = (%s*)ube_bump_alloc_parent(sizeof(%s)); if (_src) { *_dst = *_src; } _dst; })",
-				ct, valCode, ct, ct, ct)
-		}
-		return valCode
+		return g.genPromoteValue(e.Type, valCode)
+
+	case *ArenaExpr:
+		return g.genArenaExpr(e)
 
 	case *TraitCoerceExpr:
 		vtable := g.registerTraitVtable(e.Trait, e.Concrete)
@@ -173,7 +162,7 @@ func (g *Generator) genExpr(expr Expr) string {
 				"str_trim": "ube_str_trim", "str_index_of": "ube_str_index_of", "str_split": "ube_str_split",
 				"env_get": "ube_env_get", "file_exists": "ube_file_exists", "path_join": "ube_path_join",
 				"str_replace": "ube_str_replace",
-				"dir_list": "ube_dir_list", "dir_create": "ube_dir_create", "file_remove": "ube_file_remove",
+				"dir_list":    "ube_dir_list", "dir_create": "ube_dir_create", "file_remove": "ube_file_remove",
 				"env_set": "ube_env_set", "cmd_run": "ube_cmd_run",
 				"abs": "ube_abs", "min": "ube_min", "max": "ube_max",
 				"sqrt": "ube_sqrt", "pow": "ube_pow", "floor": "ube_floor", "ceil": "ube_ceil",
@@ -444,6 +433,170 @@ func (g *Generator) genExpr(expr Expr) string {
 		return fmt.Sprintf("({ __auto_type _r = %s; if (!_r.ok) { %sfprintf(stderr, \"[Ube Panic]: Unhandled error at %s:%d\\n\"); exit(101); } _r.val; })", g.genExpr(e.Operand), cleanup, e.At.File, e.At.Line)
 	}
 	return ""
+}
+
+func (g *Generator) findStruct(name string) *StructDecl {
+	if g.Program == nil {
+		return nil
+	}
+	for _, decl := range g.Program.Decls {
+		if s, ok := decl.(*StructDecl); ok && s.Name == name {
+			return s
+		}
+	}
+	return nil
+}
+
+func (g *Generator) typeNeedsDeepPromoteSeen(t UbeType, seen map[string]bool) bool {
+	if t == nil {
+		return false
+	}
+	switch v := t.(type) {
+	case SliceType, StringType, PointerType:
+		return true
+	case OptionalType:
+		return g.typeNeedsDeepPromoteSeen(v.Inner, seen)
+	case ArrayType:
+		return g.typeNeedsDeepPromoteSeen(v.Elem, seen)
+	case CustomType:
+		if seen[v.Name] {
+			return false
+		}
+		seen[v.Name] = true
+		sDecl := g.findStruct(v.Name)
+		if sDecl != nil {
+			for _, f := range sDecl.Fields {
+				if g.typeNeedsDeepPromoteSeen(f.Type, seen) {
+					return true
+				}
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+func (g *Generator) typeNeedsDeepPromote(t UbeType) bool {
+	return g.typeNeedsDeepPromoteSeen(t, make(map[string]bool))
+}
+
+func (g *Generator) genPromoteValue(t UbeType, valCode string) string {
+	if t == nil {
+		return valCode
+	}
+	switch v := t.(type) {
+	case SliceType:
+		m := g.sliceElemMangle(v.Elem)
+		ct := g.toCType(v.Elem)
+		sliceCT := fmt.Sprintf("UbeSlice_%s", m)
+		sl := g.newTmp()
+		nd := g.newTmp()
+		if g.typeNeedsDeepPromote(v.Elem) {
+			idx := g.newTmp()
+			elemPromote := g.genPromoteValue(v.Elem, fmt.Sprintf("%s.data[%s]", sl, idx))
+			return fmt.Sprintf("({ %s %s = %s; if (%s.data && %s.len > 0) { %s* %s = (%s*)ube_bump_alloc_parent(%s.len * sizeof(%s)); for (size_t %s = 0; %s < %s.len; %s++) { %s[%s] = %s; } %s.data = %s; %s.cap = %s.len; } %s; })",
+				sliceCT, sl, valCode, sl, sl, ct, nd, ct, sl, ct, idx, idx, sl, idx, nd, idx, elemPromote, sl, nd, sl, sl, sl)
+		}
+		return fmt.Sprintf("({ %s %s = %s; if (%s.data && %s.len > 0) { %s* %s = (%s*)ube_bump_alloc_parent(%s.len * sizeof(%s)); memcpy(%s, %s.data, %s.len * sizeof(%s)); %s.data = %s; %s.cap = %s.len; } %s; })",
+			sliceCT, sl, valCode, sl, sl, ct, nd, ct, sl, ct, nd, sl, sl, ct, sl, nd, sl, sl, sl)
+
+	case StringType:
+		return fmt.Sprintf("ube_str_promote(%s)", valCode)
+
+	case PointerType:
+		ct := g.toCType(v.Base)
+		src := g.newTmp()
+		dst := g.newTmp()
+		return fmt.Sprintf("({ %s* %s = %s; %s* %s = (%s*)ube_bump_alloc_parent(sizeof(%s)); if (%s) { *%s = *%s; } %s; })",
+			ct, src, valCode, ct, dst, ct, ct, src, dst, src, dst)
+
+	case CustomType:
+		sDecl := g.findStruct(v.Name)
+		if sDecl == nil {
+			return valCode
+		}
+		st := g.newTmp()
+		var fieldPromotes []string
+		for _, f := range sDecl.Fields {
+			if g.typeNeedsDeepPromote(f.Type) {
+				fieldVal := fmt.Sprintf("%s.%s", st, f.Name)
+				promoted := g.genPromoteValue(f.Type, fieldVal)
+				fieldPromotes = append(fieldPromotes, fmt.Sprintf("%s.%s = %s;", st, f.Name, promoted))
+			}
+		}
+		if len(fieldPromotes) == 0 {
+			return valCode
+		}
+		return fmt.Sprintf("({ %s %s = %s; %s %s; })",
+			v.Name, st, valCode, strings.Join(fieldPromotes, " "), st)
+
+	case OptionalType:
+		if g.typeNeedsDeepPromote(v.Inner) {
+			optCT := g.toCType(v)
+			opt := g.newTmp()
+			promotedVal := g.genPromoteValue(v.Inner, fmt.Sprintf("%s.val", opt))
+			return fmt.Sprintf("({ %s %s = %s; if (%s.has_val) { %s.val = %s; } %s; })",
+				optCT, opt, valCode, opt, opt, promotedVal, opt)
+		}
+		return valCode
+
+	default:
+		return valCode
+	}
+}
+
+func (g *Generator) genArenaExpr(e *ArenaExpr) string {
+	frameTmp := g.newTmp()
+	g.scopeMarks = append(g.scopeMarks, frameTmp)
+	defer func() {
+		g.scopeMarks = g.scopeMarks[:len(g.scopeMarks)-1]
+	}()
+
+	var sb strings.Builder
+	sb.WriteString("({ ")
+	sb.WriteString(fmt.Sprintf("UbeArenaLevel %s; ube_arena_enter(&%s); ", frameTmp, frameTmp))
+
+	isVoid := false
+	if p, ok := e.Type.(PrimitiveType); ok && p.Name == "void" {
+		isVoid = true
+	}
+	if e.Type == nil {
+		isVoid = true
+	}
+
+	var resTmp string
+	if !isVoid {
+		resTmp = g.newTmp()
+		resCT := g.toCType(e.Type)
+		sb.WriteString(fmt.Sprintf("%s %s; ", resCT, resTmp))
+	}
+
+	savedBuf := g.buf
+	g.buf = strings.Builder{}
+
+	stmts := e.Body.Stmts
+	for i, st := range stmts {
+		if i == len(stmts)-1 && !isVoid {
+			if es, ok := st.(*ExprStmt); ok {
+				valCode := g.genExpr(es.Expr)
+				g.emit(fmt.Sprintf("%s = %s;", resTmp, valCode))
+				continue
+			}
+		}
+		g.genStmt(st)
+	}
+
+	innerCode := g.buf.String()
+	g.buf = savedBuf
+
+	sb.WriteString(innerCode)
+	sb.WriteString(fmt.Sprintf("ube_arena_exit(&%s); ", frameTmp))
+	if !isVoid {
+		sb.WriteString(resTmp + "; ")
+	}
+	sb.WriteString("})")
+	return sb.String()
 }
 
 func (g *Generator) isUnitEnumVariant(enumName, variantName string) bool {

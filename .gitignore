@@ -42,3 +42,6 @@ patcher/
 
 # Textify Folder
 textify/
+
+# Dev tools
+dev/

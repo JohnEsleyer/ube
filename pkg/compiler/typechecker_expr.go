@@ -38,6 +38,30 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		e.Type = t
 		return t, nil
 
+	case *ArenaExpr:
+		scopeEnv := childTypeEnvironment(env)
+		scopeEnv.ScopeDepth = env.ScopeDepth + 1
+		for _, stmt := range e.Body.Stmts {
+			if err := tc.checkStmt(stmt, scopeEnv); err != nil {
+				return nil, err
+			}
+		}
+		if len(e.Body.Stmts) == 0 {
+			e.Type = PrimitiveType{Name: "void"}
+			return e.Type, nil
+		}
+		lastStmt := e.Body.Stmts[len(e.Body.Stmts)-1]
+		if es, ok := lastStmt.(*ExprStmt); ok {
+			t, err := tc.inferExpr(es.Expr, scopeEnv)
+			if err != nil {
+				return nil, err
+			}
+			e.Type = t
+			return t, nil
+		}
+		e.Type = PrimitiveType{Name: "void"}
+		return e.Type, nil
+
 	case *TraitCoerceExpr:
 		_, err := tc.inferExpr(e.Value, env)
 		if err != nil {
@@ -414,7 +438,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				}
 				if root := assignmentRoot(mem.Target); root != "" {
 					if info, found := env.LookupVar(root); found && env.ScopeDepth > info.Depth {
-						return nil, fmt.Errorf("[%s] Safety Error: cannot push to '%s' (declared at scope depth %d) from inside an inner scope (depth %d)", e.At, root, info.Depth, env.ScopeDepth)
+						return nil, fmt.Errorf("[%s] Safety Error: Outer slice mutation attempted within inner arena at line %d; use promote(...) to export data", e.At, e.At.Line)
 					}
 				}
 				argT, err := tc.inferExpr(e.Args[0], env)

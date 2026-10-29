@@ -246,6 +246,9 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		}
 		valT = valT.WithRegion(env.ScopeDepth)
 		tc.markMovedIfAffine(s.Value, env)
+		if tc.hasLifetime(valT) && tc.exprDepth(s.Value, env) > env.ScopeDepth {
+			return fmt.Errorf("[%s] Safety Error: value rooted at scope depth %d cannot escape into '%s' at depth %d", s.At, tc.exprDepth(s.Value, env), s.Name, env.ScopeDepth)
+		}
 		env.Vars[s.Name] = VarInfo{Type: valT, IsMut: s.Mut, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Value, env), Moved: false}
 
 	case *DeferStmt:
@@ -314,7 +317,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 				}
 				if env.ScopeDepth > vInfo.Depth && !vInfo.Type.IsFlat(env) {
 					if _, isPromote := s.RHS.(*PromoteExpr); !isPromote {
-						return fmt.Errorf("[%s] Safety Error: cannot mutate outer reference '%s' from inside a nested arena/scope (use 'promote(...)' to promote values to the outer arena)", s.At, id)
+						return fmt.Errorf("[%s] Safety Error: Outer slice mutation attempted within inner arena at line %d; use promote(...) to export data", s.At, s.At.Line)
 					}
 				}
 				if tc.hasLifetime(lhsT) && tc.exprDepth(s.RHS, env) > vInfo.Depth {

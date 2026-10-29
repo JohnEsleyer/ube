@@ -78,6 +78,15 @@ func (tc *Typechecker) exprDepth(expr Expr, env *TypeEnvironment) int {
 			return d - 1
 		}
 		return 0
+	case *ArenaExpr:
+		if len(e.Body.Stmts) > 0 {
+			if lastExpr, ok := e.Body.Stmts[len(e.Body.Stmts)-1].(*ExprStmt); ok {
+				scopeEnv := childTypeEnvironment(env)
+				scopeEnv.ScopeDepth = env.ScopeDepth + 1
+				return tc.exprDepth(lastExpr.Expr, scopeEnv)
+			}
+		}
+		return env.ScopeDepth
 	case *TraitCoerceExpr:
 		return env.ScopeDepth
 	case *ArrayToSliceExpr:
@@ -231,6 +240,8 @@ func (tc *Typechecker) exprEscapesParam(expr Expr, name string) bool {
 		return tc.exprEscapesParam(e.Start, name) || tc.exprEscapesParam(e.End, name)
 	case *PromoteExpr:
 		return tc.exprEscapesParam(e.Value, name)
+	case *ArenaExpr:
+		return tc.stmtEscapesParam(e.Body, name)
 	case *TraitCoerceExpr:
 		return tc.exprEscapesParam(e.Value, name)
 	case *ArrayToSliceExpr:

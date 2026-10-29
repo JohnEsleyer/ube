@@ -226,8 +226,28 @@ func TestFeatures_ArenaAndPromote(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected compile-time rejection for assigning inner slice to outer list")
 	}
+	if !strings.Contains(err.Error(), "Outer slice mutation attempted within inner arena") {
+		t.Fatalf("expected friendly error containing 'Outer slice mutation attempted within inner arena', got: %v", err)
+	}
 
-	// 2. Verify successful promotion across arena boundaries at runtime
+	// 2. Verify compiler rejection when calling .push() on an outer slice from inside an arena
+	badPushSrc := `
+	fn main() {
+		let mut list = []i32{}
+		arena {
+			list.push(42)
+		}
+	}
+	`
+	err = typecheckSource(t, badPushSrc)
+	if err == nil {
+		t.Fatalf("expected compile-time rejection for pushing to outer list inside arena")
+	}
+	if !strings.Contains(err.Error(), "Outer slice mutation attempted within inner arena") {
+		t.Fatalf("expected friendly error containing 'Outer slice mutation attempted within inner arena', got: %v", err)
+	}
+
+	// 3. Verify successful promotion across arena boundaries at runtime
 	goodSrc := `
 	fn main() {
 		let mut output = []i32{}
@@ -242,10 +262,66 @@ func TestFeatures_ArenaAndPromote(t *testing.T) {
 		println(output[1])
 	}
 	`
-	out := runSourceNative(t, goodSrc)
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if len(lines) < 3 || lines[0] != "2" || lines[1] != "10" || lines[2] != "20" {
-		t.Fatalf("unexpected output from arena promote: %s", out)
+	bin, _, err := compileToNativeBinary(t, goodSrc)
+	if err != nil {
+		t.Fatalf("promotion compile failed: %v", err)
+	}
+	if got, want := runBinary(t, bin), "2\n10\n20"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+
+	// 4. Verify deep promotion for nested collections ([][]i32)
+	nestedSrc := `
+	fn main() {
+		let mut matrix = [][]i32{}
+		arena {
+			let r1 = []i32{10, 20}
+			let r2 = []i32{30, 40}
+			let local_mat = [][]i32{r1, r2}
+			matrix = promote(local_mat)
+		}
+		println(matrix.len)
+		println(matrix[0][0])
+		println(matrix[0][1])
+		println(matrix[1][0])
+		println(matrix[1][1])
+	}
+	`
+	bin, _, err = compileToNativeBinary(t, nestedSrc)
+	if err != nil {
+		t.Fatalf("nested collection promotion compile failed: %v", err)
+	}
+	if got, want := runBinary(t, bin), "2\n10\n20\n30\n40"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+
+	// 5. Verify promote with struct return from arena expression block
+	structReturnSrc := `
+	struct Item {
+		name: string,
+		count: i32,
+		tags: []i32
+	}
+
+	fn main() {
+		let item = arena {
+			let temp_name = "active_item"
+			let vals = []i32{7, 8}
+			promote(Item { name: temp_name[0:6], count: 99, tags: vals })
+		}
+		println(item.name)
+		println(item.count)
+		println(item.tags.len)
+		println(item.tags[0])
+		println(item.tags[1])
+	}
+	`
+	bin, _, err = compileToNativeBinary(t, structReturnSrc)
+	if err != nil {
+		t.Fatalf("struct arena expression return failed: %v", err)
+	}
+	if got, want := runBinary(t, bin), "active\n99\n2\n7\n8"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }
 

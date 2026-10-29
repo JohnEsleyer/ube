@@ -176,6 +176,15 @@ type PromoteExpr struct {
 func (e *PromoteExpr) Loc() SourceLocation { return e.At }
 func (e *PromoteExpr) exprNode()           {}
 
+type ArenaExpr struct {
+	At   SourceLocation
+	Body *BlockStmt
+	Type UbeType
+}
+
+func (e *ArenaExpr) Loc() SourceLocation { return e.At }
+func (e *ArenaExpr) exprNode()           {}
+
 type InterpolatedStringExpr struct {
 	At    SourceLocation
 	Parts []Expr

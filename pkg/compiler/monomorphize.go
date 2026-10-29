@@ -958,6 +958,12 @@ func substituteExpr(expr Expr, subMap map[string]UbeType) Expr {
 			Value: substituteExpr(e.Value, subMap),
 			Type:  substituteType(e.Type, subMap),
 		}
+	case *ArenaExpr:
+		return &ArenaExpr{
+			At:   e.At,
+			Body: substituteBlock(e.Body, subMap),
+			Type: substituteType(e.Type, subMap),
+		}
 	default:
 		return expr
 	}
