@@ -293,6 +293,14 @@ func (g *Generator) Generate() string {
 
 	g.analyzeSliceMutations()
 
+	// Register mutable receivers before emitting function bodies so calls to
+	// them know to pass an address.
+	for _, decl := range g.Program.Decls {
+		if fn, ok := decl.(*FnDecl); ok && fn.Receiver != nil && fn.Receiver.IsMut {
+			g.receiverMutParams[fmt.Sprintf("%s_%s", fn.Receiver.Type, fn.Name)] = true
+		}
+	}
+
 	for _, decl := range g.Program.Decls {
 		g.genDecl(decl)
 	}

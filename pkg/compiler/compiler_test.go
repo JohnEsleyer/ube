@@ -459,6 +459,22 @@ func TestGenerationalPoolHandleValidation(t *testing.T) {
 	}
 }
 
+func TestMutReceiverMethodCall(t *testing.T) {
+	src := `struct Counter { n: i32 }
+	fn (mut c Counter) bump(by: i32) { c.n += by }
+	fn (c Counter) value() -> i32 { return c.n }
+	fn helper() -> i32 { return 1 }
+	fn main() {
+		let mut c = Counter{ n: 0 }
+		c.bump(helper())
+		c.bump(2)
+		println(c.value())
+	}`
+	if out := runSourceNative(t, src); out != "3" {
+		t.Fatalf("got %q, want %q", out, "3")
+	}
+}
+
 func TestCompileTimeScopeEscapeRejections(t *testing.T) {
 	cases := []struct{ name, src string }{
 		{"reject assigning inner scope reference to outer variable", `fn main() {

@@ -113,7 +113,7 @@ func printStructDoc(s *compiler.StructDecl) {
 		}
 		fmt.Printf("    %s%s: %s\n", mutPrefix, f.Name, f.Type.String())
 	}
-	fmt.Println("}\n")
+	fmt.Printf("}\n\n")
 }
 
 func printEnumDoc(e *compiler.EnumDecl) {
@@ -129,7 +129,7 @@ func printEnumDoc(e *compiler.EnumDecl) {
 			fmt.Printf("    %s(%s)\n", v.Name, strings.Join(typeStrs, ", "))
 		}
 	}
-	fmt.Println("}\n")
+	fmt.Printf("}\n\n")
 }
 
 func printTraitDoc(t *compiler.TraitDecl) {
@@ -145,7 +145,7 @@ func printTraitDoc(t *compiler.TraitDecl) {
 		}
 		fmt.Printf("    fn %s(%s)%s\n", m.Name, strings.Join(params, ", "), ret)
 	}
-	fmt.Println("}\n")
+	fmt.Printf("}\n\n")
 }
 
 func printFnDoc(fn *compiler.FnDecl) {

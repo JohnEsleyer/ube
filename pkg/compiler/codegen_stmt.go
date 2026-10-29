@@ -22,6 +22,8 @@ func (g *Generator) genDecl(decl Decl) {
 	case *FnDecl:
 		g.curFnRet = d.RetType
 		g.curFnName = d.Name
+		g.sliceVars = make(map[string]string)
+		g.sliceParamVars = make(map[string]bool)
 		var params []string
 		fnName := d.Name
 		if d.Receiver != nil {
@@ -33,8 +35,6 @@ func (g *Generator) genDecl(decl Decl) {
 			}
 			params = append(params, fmt.Sprintf("%s %s", recCT, d.Receiver.Name))
 		}
-		g.sliceVars = make(map[string]string)
-		g.sliceParamVars = make(map[string]bool)
 		mutName := d.Name
 		if d.Receiver != nil {
 			mutName = fmt.Sprintf("%s_%s", d.Receiver.Type, d.Name)
