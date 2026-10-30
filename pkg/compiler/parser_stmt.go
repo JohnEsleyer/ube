@@ -27,9 +27,9 @@ func (p *Parser) parseStmt() Stmt {
 		return p.parseWhileStmt()
 	case TokenFor:
 		return p.parseForStmt()
-	case TokenScope, TokenArena:
+	case TokenArena:
 		p.advance()
-		return &ScopeStmt{At: tok.Loc, Body: p.parseBlock()}
+		return &ArenaStmt{At: tok.Loc, Body: p.parseBlock()}
 	case TokenUnsafe:
 		p.advance()
 		return &UnsafeStmt{At: tok.Loc, Body: p.parseBlock()}

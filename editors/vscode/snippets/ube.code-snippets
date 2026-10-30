@@ -56,14 +56,14 @@
     ],
     "description": "Pattern matching on enums"
   },
-  "Scope Scratchpad": {
-    "prefix": "scope",
+  "Arena Scratchpad": {
+    "prefix": "arena",
     "body": [
-      "scope {",
+      "arena {",
       "\t${0}",
       "} // Wiped in 1 instruction!"
     ],
-    "description": "Scoped regional memory reset block"
+    "description": "Regional memory arena reset block"
   },
   "Spawn Vine": {
     "prefix": "spawn",

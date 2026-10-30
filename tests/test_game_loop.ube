@@ -1,5 +1,5 @@
 // Frame-arena demo: the pattern game engines use for per-frame scratch data.
-// Each frame's temporary allocations live in a `scope` block and are reclaimed
+// Each frame's temporary allocations live in an `arena` block and are reclaimed
 // with a single watermark restore at the end of the frame.
 
 fn simulate_particles(frame: i32) -> i32 {
@@ -22,11 +22,11 @@ fn main() {
 
     let mut frame = 0
     while frame < 3 {
-        scope {
+        arena {
             let total = simulate_particles(frame)
             println_str("Frame scratch total:")
             println(total)
-        } // scope
+        } // arena
         frame = frame + 1
     }
 

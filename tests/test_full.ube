@@ -41,7 +41,7 @@ fn main() {
     println_str("Testing `or_else` on error (expected fallback 999):")
     println(bad)
 
-    scope {
+    arena {
         let scratch_val = 1234
         println_str("Scoped execution running cleanly:")
         println(scratch_val)

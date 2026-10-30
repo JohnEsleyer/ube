@@ -333,7 +333,7 @@ func TestIssue_ScopeEscapeViaFunctionArgument(t *testing.T) {
 
 	fn main() {
 		let mut outer = [][]i32{}
-		scope {
+		arena {
 			let mut inner = []i32{}
 			inner.push(100)
 			attach(outer, inner)
@@ -355,7 +355,7 @@ func TestIssue_ScopeEscapeViaFunctionArgument(t *testing.T) {
 	}
 
 	fn main() {
-		scope {
+		arena {
 			let inner = []i32{1}
 			println(read_len(inner))
 		}

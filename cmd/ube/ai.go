@@ -312,7 +312,7 @@ func (v *flowVisitor) walkStmt(st compiler.Stmt) {
 		v.flow["for-in"] = true
 		v.walkExpr(s.Iter)
 		v.walkStmt(s.Body)
-	case *compiler.ScopeStmt:
+	case *compiler.ArenaStmt:
 		v.flow["arena"] = true
 		v.walkStmt(s.Body)
 	case *compiler.UnsafeStmt:
@@ -821,9 +821,9 @@ current region.
 
 ### Arena blocks
 
-@@arena { ... }@@ and @@scope { ... }@@ are synonyms. Each block enters a new
-arena level; every allocation made inside is reclaimed in one instruction when
-the block exits. The block may be used as a statement or as an expression:
+@@arena { ... }@@ enters a new arena level; every allocation made inside is
+reclaimed in one instruction when the block exits. The block may be used as a
+statement or as an expression:
 
 @@@ube
 fn main() {
@@ -1026,7 +1026,7 @@ declares a C function. Code using @@unsafe@@ or FFI is flagged by @@ube check
 ## 12. Summary of rules an AI must respect
 
 1. Prefer @@let@@; add @@mut@@ only when reassignment or mutation is needed.
-2. Never assume a GC: data escaping an @@arena@@/@@scope@@ must be @@promote@@d.
+2. Never assume a GC: data escaping an @@arena@@ must be @@promote@@d.
 3. Never mutate outer-owned slices or strings from inside an inner arena.
 4. Only flat values may cross @@spawn@@ and @@Chan@@ boundaries; strings and
    slices are not flat.

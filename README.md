@@ -59,7 +59,7 @@ Ube uses a fast, reliable **transpilation and compilation pipeline**:
 Ube achieves **Zero Garbage Collection** without requiring complex manual `malloc`/`free` or strict lifetime annotations like Rust through two core pillars:
 
 ### 1. Regional Scratch Arenas (`arena { ... }`) & Safe Promotion
-Ube introduces regional arena allocation via `arena` (or `scope`) blocks. Any dynamic collection (like `[]i32` slices or strings) allocated inside an arena lives in a lightweight, thread-local bump-allocated memory chunk.
+Ube introduces regional arena allocation via `arena` blocks. Any dynamic collection (like `[]i32` slices or strings) allocated inside an arena lives in a lightweight, thread-local bump-allocated memory chunk.
 
 To guarantee complete memory safety without complex Rust-style lifetime annotations:
 * **The Upward Reference Invariant:** Inner arenas cannot mutate outer reference containers (e.g., calling `.push()` on an outer slice from inside an arena is rejected at compile time).

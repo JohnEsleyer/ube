@@ -319,13 +319,13 @@ type ForStmt struct {
 func (s *ForStmt) Loc() SourceLocation { return s.At }
 func (s *ForStmt) stmtNode()           {}
 
-type ScopeStmt struct {
+type ArenaStmt struct {
 	At   SourceLocation
 	Body *BlockStmt
 }
 
-func (s *ScopeStmt) Loc() SourceLocation { return s.At }
-func (s *ScopeStmt) stmtNode()           {}
+func (s *ArenaStmt) Loc() SourceLocation { return s.At }
+func (s *ArenaStmt) stmtNode()           {}
 
 type UnsafeStmt struct {
 	At   SourceLocation

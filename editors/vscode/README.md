@@ -7,7 +7,7 @@ Official extension for **Ube** — The sweet, grounded systems language.
 * Syntax highlighting for all primitives, receiver methods, and operators (`?`, `!`, `->`).
 * Bracket auto-closing and automatic indentation.
 * Ube file icon theme for `.ube` files (select **Ube** using **Preferences: File Icon Theme** after installation).
-* Support for `scope { ... }` scoped blocks, `spawn`, and tagged enums.
+* Support for `arena { ... }` arena blocks, `spawn`, and tagged enums.
 
 ## Building the `.vsix` Package
 

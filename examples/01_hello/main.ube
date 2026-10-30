@@ -1,3 +1,323 @@
+` completely bypasses search-block matching for that file.
+
+Here is the updated patch replacing `<replace path="examples/01_hello/main.ube">` with `<file path="examples/01_hello/main.ube">`:
+
+```xml
+<replace path="pkg/compiler/token.go">
+<search>
+	TokenReturn   TokenType = "return"
+	TokenArena    TokenType = "arena"
+	TokenPromote  TokenType = "promote"
+</search>
+<with>
+	TokenReturn   TokenType = "return"
+	TokenArena    TokenType = "arena"
+	TokenPromote  TokenType = "promote"
+</with>
+</replace>
+
+<replace path="pkg/compiler/lexer.go">
+<search>
+	"break":    TokenBreak,
+	"continue": TokenContinue,
+	"scope":    TokenScope,
+	"arena":    TokenArena,
+	"promote":  TokenPromote,
+</search>
+<with>
+	"break":    TokenBreak,
+	"continue": TokenContinue,
+	"arena":    TokenArena,
+	"promote":  TokenPromote,
+</with>
+</replace>
+
+<replace path="pkg/compiler/ast.go">
+<search>
+type ScopeStmt struct {
+	At   SourceLocation
+	Body *BlockStmt
+}
+
+func (s *ScopeStmt) Loc() SourceLocation { return s.At }
+func (s *ScopeStmt) stmtNode()           {}
+</search>
+<with>
+type ArenaStmt struct {
+	At   SourceLocation
+	Body *BlockStmt
+}
+
+func (s *ArenaStmt) Loc() SourceLocation { return s.At }
+func (s *ArenaStmt) stmtNode()           {}
+</with>
+</replace>
+
+<replace path="pkg/compiler/parser_stmt.go">
+<search>
+	case TokenFor:
+		return p.parseForStmt()
+	case TokenScope, TokenArena:
+		p.advance()
+		return &ScopeStmt{At: tok.Loc, Body: p.parseBlock()}
+	case TokenUnsafe:
+</search>
+<with>
+	case TokenFor:
+		return p.parseForStmt()
+	case TokenArena:
+		p.advance()
+		return &ArenaStmt{At: tok.Loc, Body: p.parseBlock()}
+	case TokenUnsafe:
+</with>
+</replace>
+
+<replace path="pkg/compiler/parser_expr.go">
+<search>
+func (p *Parser) parsePrimary() Expr {
+	if p.check(TokenArena) || p.check(TokenScope) {
+		tok := p.advance()
+		body := p.parseBlock()
+		return &ArenaExpr{At: tok.Loc, Body: body}
+	}
+</search>
+<with>
+func (p *Parser) parsePrimary() Expr {
+	if p.check(TokenArena) {
+		tok := p.advance()
+		body := p.parseBlock()
+		return &ArenaExpr{At: tok.Loc, Body: body}
+	}
+</with>
+</replace>
+
+<replace path="pkg/compiler/typechecker.go">
+<search>
+	case *ScopeStmt:
+		scopeEnv := childTypeEnvironment(env)
+		scopeEnv.ScopeDepth = env.ScopeDepth + 1
+		return tc.checkBlock(s.Body, scopeEnv)
+</search>
+<with>
+	case *ArenaStmt:
+		scopeEnv := childTypeEnvironment(env)
+		scopeEnv.ScopeDepth = env.ScopeDepth + 1
+		return tc.checkBlock(s.Body, scopeEnv)
+</with>
+</replace>
+
+<replace path="pkg/compiler/typechecker_safety.go">
+<search>
+	case *ForStmt:
+		return tc.exprEscapesParam(s.Iter, name) || tc.stmtEscapesParam(s.Body, name)
+	case *ScopeStmt:
+		return tc.stmtEscapesParam(s.Body, name)
+	case *UnsafeStmt:
+</search>
+<with>
+	case *ForStmt:
+		return tc.exprEscapesParam(s.Iter, name) || tc.stmtEscapesParam(s.Body, name)
+	case *ArenaStmt:
+		return tc.stmtEscapesParam(s.Body, name)
+	case *UnsafeStmt:
+</with>
+</replace>
+
+<replace path="pkg/compiler/codegen_stmt.go">
+<search>
+	case *ScopeStmt:
+		g.emit("{")
+		g.indent++
+		frameTmp := g.newTmp()
+		g.scopeMarks = append(g.scopeMarks, frameTmp)
+		g.emit(fmt.Sprintf("UbeArenaLevel %s;", frameTmp))
+		g.emit(fmt.Sprintf("ube_arena_enter(&%s);", frameTmp))
+		g.genBlock(s.Body)
+		g.emit(fmt.Sprintf("ube_arena_exit(&%s);", frameTmp))
+		g.scopeMarks = g.scopeMarks[:len(g.scopeMarks)-1]
+		g.indent--
+		g.emit("}")
+</search>
+<with>
+	case *ArenaStmt:
+		g.emit("{")
+		g.indent++
+		frameTmp := g.newTmp()
+		g.scopeMarks = append(g.scopeMarks, frameTmp)
+		g.emit(fmt.Sprintf("UbeArenaLevel %s;", frameTmp))
+		g.emit(fmt.Sprintf("ube_arena_enter(&%s);", frameTmp))
+		g.genBlock(s.Body)
+		g.emit(fmt.Sprintf("ube_arena_exit(&%s);", frameTmp))
+		g.scopeMarks = g.scopeMarks[:len(g.scopeMarks)-1]
+		g.indent--
+		g.emit("}")
+</with>
+</replace>
+
+<replace path="pkg/compiler/codegen_analysis.go">
+<search>
+	case *ForStmt:
+		return g.exprMutatesName(s.Iter, name) || g.stmtMutatesName(s.Body, name)
+	case *ScopeStmt:
+		return g.stmtMutatesName(s.Body, name)
+	case *UnsafeStmt:
+</search>
+<with>
+	case *ForStmt:
+		return g.exprMutatesName(s.Iter, name) || g.stmtMutatesName(s.Body, name)
+	case *ArenaStmt:
+		return g.stmtMutatesName(s.Body, name)
+	case *UnsafeStmt:
+</with>
+</replace>
+
+<replace path="pkg/compiler/monomorphize.go">
+<search>
+	case *BlockStmt:
+		return substituteBlock(s, subMap)
+	case *ScopeStmt:
+		return &ScopeStmt{At: s.At, Body: substituteBlock(s.Body, subMap)}
+	case *UnsafeStmt:
+</search>
+<with>
+	case *BlockStmt:
+		return substituteBlock(s, subMap)
+	case *ArenaStmt:
+		return &ArenaStmt{At: s.At, Body: substituteBlock(s.Body, subMap)}
+	case *UnsafeStmt:
+</with>
+</replace>
+
+<replace path="cmd/ube/ai.go">
+<search>
+	case *compiler.ForStmt:
+		v.flow["for-in"] = true
+		v.walkExpr(s.Iter)
+		v.walkStmt(s.Body)
+	case *compiler.ScopeStmt:
+		v.flow["arena"] = true
+		v.walkStmt(s.Body)
+	case *compiler.UnsafeStmt:
+</search>
+<with>
+	case *compiler.ForStmt:
+		v.flow["for-in"] = true
+		v.walkExpr(s.Iter)
+		v.walkStmt(s.Body)
+	case *compiler.ArenaStmt:
+		v.flow["arena"] = true
+		v.walkStmt(s.Body)
+	case *compiler.UnsafeStmt:
+</with>
+</replace>
+
+<replace path="cmd/ube/ai.go">
+<search>
+### Arena blocks
+
+@@arena { ... }@@ and @@scope { ... }@@ are synonyms. Each block enters a new
+arena level; every allocation made inside is reclaimed in one instruction when
+the block exits. The block may be used as a statement or as an expression:
+</search>
+<with>
+### Arena blocks
+
+@@arena { ... }@@ enters a new arena level; every allocation made inside is
+reclaimed in one instruction when the block exits. The block may be used as a
+statement or as an expression:
+</with>
+</replace>
+
+<replace path="cmd/ube/ai.go">
+<search>
+2. Never assume a GC: data escaping an @@arena@@/@@scope@@ must be @@promote@@d.
+</search>
+<with>
+2. Never assume a GC: data escaping an @@arena@@ must be @@promote@@d.
+</with>
+</replace>
+
+<replace path="pkg/lsp/completion.go">
+<search>
+	for _, s := range strings.Fields("fn let mut struct enum trait match if else while for in scope unsafe spawn return break continue defer or_else import select extern") {
+		items = append(items, map[string]any{"label": s, "kind": 14})
+	}
+</search>
+<with>
+	for _, s := range strings.Fields("fn let mut struct enum trait match if else while for in arena unsafe spawn return break continue defer or_else import select extern") {
+		items = append(items, map[string]any{"label": s, "kind": 14})
+	}
+</with>
+</replace>
+
+<replace path="pkg/lsp/hover.go">
+<search>
+		"scope":           "`scope { ... }`\n*Lexical memory arena watermark block. Reclaimed on block exit.*",
+		"spawn":           "`spawn fn(args...)`\n*Schedules a concurrent Vine fiber onto the worker thread pool.*",
+</search>
+<with>
+		"arena":           "`arena { ... }`\n*Lexical memory arena block. Reclaimed on block exit in one instruction.*",
+		"spawn":           "`spawn fn(args...)`\n*Schedules a concurrent Vine fiber onto the worker thread pool.*",
+</with>
+</replace>
+
+<replace path="README.md">
+<search>
+### 1. Regional Scratch Arenas (`arena { ... }`) & Safe Promotion
+Ube introduces regional arena allocation via `arena` (or `scope`) blocks. Any dynamic collection (like `[]i32` slices or strings) allocated inside an arena lives in a lightweight, thread-local bump-allocated memory chunk.
+</search>
+<with>
+### 1. Regional Scratch Arenas (`arena { ... }`) & Safe Promotion
+Ube introduces regional arena allocation via `arena` blocks. Any dynamic collection (like `[]i32` slices or strings) allocated inside an arena lives in a lightweight, thread-local bump-allocated memory chunk.
+</with>
+</replace>
+
+<replace path="editors/vscode/README.md">
+<search>
+* Support for `scope { ... }` scoped blocks, `spawn`, and tagged enums.
+</search>
+<with>
+* Support for `arena { ... }` arena blocks, `spawn`, and tagged enums.
+</with>
+</replace>
+
+<replace path="editors/vscode/syntaxes/ube.tmLanguage.json">
+<search>
+          "name": "keyword.control.ube",
+          "match": "\\b(if|else|while|for|in|return|break|continue|match|select|spawn|scope|unsafe|defer|or_else)\\b"
+</search>
+<with>
+          "name": "keyword.control.ube",
+          "match": "\\b(if|else|while|for|in|return|break|continue|match|select|spawn|arena|unsafe|defer|or_else)\\b"
+</with>
+</replace>
+
+<replace path="editors/vscode/snippets/ube.code-snippets">
+<search>
+  "Scope Scratchpad": {
+    "prefix": "scope",
+    "body": [
+      "scope {",
+      "\t${0}",
+      "} // Wiped in 1 instruction!"
+    ],
+    "description": "Scoped regional memory reset block"
+  },
+</search>
+<with>
+  "Arena Scratchpad": {
+    "prefix": "arena",
+    "body": [
+      "arena {",
+      "\t${0}",
+      "} // Wiped in 1 instruction!"
+    ],
+    "description": "Regional memory arena reset block"
+  },
+</with>
+</replace>
+
+<file path="examples/01_hello/main.ube">
 fn main() {
     println_str("--- Ube Zero-GC Language Demo ---")
 
@@ -11,18 +331,18 @@ fn main() {
         println(num)
     }
 
-    println_str("Entering temporary scope block...")
-    scope {
+    println_str("Entering temporary arena block...")
+    arena {
         let mut temp_list = []i32{}
         temp_list.push(999)
         temp_list.push(1000)
-        
-        println_str("Inside temporary scope:")
+
+        println_str("Inside temporary arena:")
         for temp in temp_list {
             println(temp)
         }
     } // Memory wiped clean in 1 instruction!
-    println_str("Temporary scope memory wiped clean!")
+    println_str("Temporary arena memory wiped clean!")
 
     println_str("Original slice still intact:")
     for num in numbers {

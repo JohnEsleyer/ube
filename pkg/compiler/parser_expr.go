@@ -264,7 +264,7 @@ func parseInterpolatedParts(raw string, loc SourceLocation) ([]Expr, error) {
 }
 
 func (p *Parser) parsePrimary() Expr {
-	if p.check(TokenArena) || p.check(TokenScope) {
+	if p.check(TokenArena) {
 		tok := p.advance()
 		body := p.parseBlock()
 		return &ArenaExpr{At: tok.Loc, Body: body}

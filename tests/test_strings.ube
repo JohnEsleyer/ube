@@ -6,10 +6,10 @@ fn main() {
     let msg = first + " is a " + second
     println_str(msg)
 
-    scope {
+    arena {
         let tmp = "scratch " + "memory"
         println_str(tmp)
-    } // scope
+    } // arena
 
     println_str("concatenation allocations were freed by one store")
 }

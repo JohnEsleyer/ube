@@ -290,7 +290,7 @@ func (tc *Typechecker) stmtEscapesParam(stmt Stmt, name string) bool {
 		return tc.exprEscapesParam(s.Call, name) || tc.stmtEscapesParam(s.Body, name)
 	case *ForStmt:
 		return tc.exprEscapesParam(s.Iter, name) || tc.stmtEscapesParam(s.Body, name)
-	case *ScopeStmt:
+	case *ArenaStmt:
 		return tc.stmtEscapesParam(s.Body, name)
 	case *UnsafeStmt:
 		return tc.stmtEscapesParam(s.Body, name)

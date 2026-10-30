@@ -519,7 +519,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		loopEnv.Vars[s.ItemName] = VarInfo{Type: elemT, IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Iter, env)}
 		return tc.checkBlock(s.Body, loopEnv)
 
-	case *ScopeStmt:
+	case *ArenaStmt:
 		scopeEnv := childTypeEnvironment(env)
 		scopeEnv.ScopeDepth = env.ScopeDepth + 1
 		return tc.checkBlock(s.Body, scopeEnv)

@@ -386,7 +386,7 @@ func (m *Monomorphizer) Process(prog *Program) error {
 					s.IterType = t
 				}
 				return scanStmt(s.Body)
-			case *ScopeStmt:
+			case *ArenaStmt:
 				return scanStmt(s.Body)
 			case *UnsafeStmt:
 				return scanStmt(s.Body)
@@ -809,8 +809,8 @@ func substituteStmt(stmt Stmt, subMap map[string]UbeType) Stmt {
 		}
 	case *BlockStmt:
 		return substituteBlock(s, subMap)
-	case *ScopeStmt:
-		return &ScopeStmt{At: s.At, Body: substituteBlock(s.Body, subMap)}
+	case *ArenaStmt:
+		return &ArenaStmt{At: s.At, Body: substituteBlock(s.Body, subMap)}
 	case *UnsafeStmt:
 		return &UnsafeStmt{At: s.At, Body: substituteBlock(s.Body, subMap)}
 	case *LoopControlStmt:

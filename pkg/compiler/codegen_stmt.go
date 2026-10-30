@@ -420,7 +420,7 @@ func (g *Generator) genStmt(st Stmt) {
 		g.emit("}")
 		g.emit(labels.breakTo + ":;")
 
-	case *ScopeStmt:
+	case *ArenaStmt:
 		g.emit("{")
 		g.indent++
 		frameTmp := g.newTmp()

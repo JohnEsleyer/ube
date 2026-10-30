@@ -101,7 +101,7 @@ func TestLexerOperatorsAndEscapes(t *testing.T) {
 }
 
 func TestLoopControlBoundaries(t *testing.T) {
-	for _, src := range []string{`fn main() { break }`, `fn main() { continue }`, `fn main() { if true { break } }`, `fn main() { scope { continue } }`} {
+	for _, src := range []string{`fn main() { break }`, `fn main() { continue }`, `fn main() { if true { break } }`, `fn main() { arena { continue } }`} {
 		if _, err := compilePipeline(t, src); err == nil {
 			t.Errorf("expected loop-control rejection for %s", src)
 		}
@@ -239,7 +239,7 @@ func TestStandalonePrograms(t *testing.T) {
 }
 
 func TestLexer(t *testing.T) {
-	code := "fn let mut struct enum match if while spawn scope break continue Chan 42 \"hello\" true null"
+	code := "fn let mut struct enum match if while spawn arena break continue Chan 42 \"hello\" true null"
 	lexer := compiler.NewLexer("test.ube", code)
 	toks, err := lexer.Tokenize()
 	if err != nil {
@@ -249,7 +249,7 @@ func TestLexer(t *testing.T) {
 		compiler.TokenFn, compiler.TokenLet, compiler.TokenMut,
 		compiler.TokenStruct, compiler.TokenEnum, compiler.TokenMatch,
 		compiler.TokenIf, compiler.TokenWhile, compiler.TokenSpawn,
-		compiler.TokenScope, compiler.TokenBreak, compiler.TokenContinue,
+		compiler.TokenArena, compiler.TokenBreak, compiler.TokenContinue,
 		compiler.TokenIdent, compiler.TokenInt,
 		compiler.TokenString, compiler.TokenBool, compiler.TokenNull,
 		compiler.TokenEOF,
@@ -371,7 +371,7 @@ func TestArenaChunkRecyclingStress(t *testing.T) {
 		let mut loop_cnt = 0
 		let mut total_verified = 0
 		while loop_cnt < 300 {
-			scope {
+			arena {
 				let mut big = []i32{}
 				let mut i = 0
 				while i < 15000 {
@@ -479,7 +479,7 @@ func TestCompileTimeScopeEscapeRejections(t *testing.T) {
 	cases := []struct{ name, src string }{
 		{"reject assigning inner scope reference to outer variable", `fn main() {
 			let mut outer = []i32{}
-			scope {
+			arena {
 				let mut inner = []i32{}
 				inner.push(1)
 				outer = inner
@@ -487,10 +487,10 @@ func TestCompileTimeScopeEscapeRejections(t *testing.T) {
 		}`},
 		{"reject mutating outer slice via push inside inner scope", `fn main() {
 			let mut outer = []i32{}
-			scope { outer.push(10) }
+			arena { outer.push(10) }
 		}`},
 		{"reject returning reference allocated in inner scope", `fn bad() -> []i32 {
-			scope {
+			arena {
 				let mut s = []i32{}
 				s.push(1)
 				return s

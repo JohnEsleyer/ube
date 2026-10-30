@@ -123,7 +123,7 @@ func (g *Generator) stmtMutatesName(stmt Stmt, name string) bool {
 		return g.exprMutatesName(s.Call, name) || g.stmtMutatesName(s.Body, name)
 	case *ForStmt:
 		return g.exprMutatesName(s.Iter, name) || g.stmtMutatesName(s.Body, name)
-	case *ScopeStmt:
+	case *ArenaStmt:
 		return g.stmtMutatesName(s.Body, name)
 	case *UnsafeStmt:
 		return g.stmtMutatesName(s.Body, name)

@@ -60,7 +60,7 @@ func Hover(uri, source string, p lspPosition) any {
 		"str_contains":    "`fn str_contains(s: string, substr: string) -> bool`\n*Checks if string contains substring.*",
 		"str_starts_with": "`fn str_starts_with(s: string, prefix: string) -> bool`\n*Checks if string starts with prefix.*",
 		"str_ends_with":   "`fn str_ends_with(s: string, suffix: string) -> bool`\n*Checks if string ends with suffix.*",
-		"scope":           "`scope { ... }`\n*Lexical memory arena watermark block. Reclaimed on block exit.*",
+		"arena":           "`arena { ... }`\n*Lexical memory arena block. Reclaimed on block exit in one instruction.*",
 		"spawn":           "`spawn fn(args...)`\n*Schedules a concurrent Vine fiber onto the worker thread pool.*",
 	}
 	if doc, ok := builtins[word]; ok {

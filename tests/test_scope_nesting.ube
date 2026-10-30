@@ -1,12 +1,12 @@
-// Nested scope restores must preserve allocations made by the outer scope.
+// Nested arena restores must preserve allocations made by the outer arena.
 fn main() {
     let mut outer = []i32{}
     outer.push(1)
 
-    scope {
+    arena {
         let mut inner = []i32{}
         inner.push(10)
-        scope {
+        arena {
             let mut nested = []i32{}
             nested.push(100)
             println(nested[0])

@@ -38,12 +38,12 @@ fn main() {
     println(scaled)
 
     // Test scoped arena memory
-    scope {
+    arena {
         let mut list = []i32{}
         list.push(111)
         list.push(222)
-        println_str("Inside scope: memory will be reclaimed on block exit")
-    } // scope
+        println_str("Inside arena: memory will be reclaimed on block exit")
+    } // arena
 
     println_str("All tests passed with zero GC!")
 }
