@@ -105,19 +105,31 @@ func printStructDoc(s *compiler.StructDecl) {
 		typeParams = "[" + strings.Join(parts, ", ") + "]"
 	}
 
-	fmt.Printf("struct %s%s {\n", s.Name, typeParams)
+	pubPrefix := ""
+	if s.IsPub {
+		pubPrefix = "pub "
+	}
+	fmt.Printf("%sstruct %s%s {\n", pubPrefix, s.Name, typeParams)
 	for _, f := range s.Fields {
+		fPub := ""
+		if f.IsPub {
+			fPub = "pub "
+		}
 		mutPrefix := ""
 		if f.IsMut {
 			mutPrefix = "mut "
 		}
-		fmt.Printf("    %s%s: %s\n", mutPrefix, f.Name, f.Type.String())
+		fmt.Printf("    %s%s%s: %s\n", fPub, mutPrefix, f.Name, f.Type.String())
 	}
 	fmt.Printf("}\n\n")
 }
 
 func printEnumDoc(e *compiler.EnumDecl) {
-	fmt.Printf("enum %s {\n", e.Name)
+	pubPrefix := ""
+	if e.IsPub {
+		pubPrefix = "pub "
+	}
+	fmt.Printf("%senum %s {\n", pubPrefix, e.Name)
 	for _, v := range e.Variants {
 		if len(v.Types) == 0 {
 			fmt.Printf("    %s\n", v.Name)
@@ -133,7 +145,11 @@ func printEnumDoc(e *compiler.EnumDecl) {
 }
 
 func printTraitDoc(t *compiler.TraitDecl) {
-	fmt.Printf("trait %s {\n", t.Name)
+	pubPrefix := ""
+	if t.IsPub {
+		pubPrefix = "pub "
+	}
+	fmt.Printf("%strait %s {\n", pubPrefix, t.Name)
 	for _, m := range t.Methods {
 		var params []string
 		for _, p := range m.Params {
@@ -149,6 +165,10 @@ func printTraitDoc(t *compiler.TraitDecl) {
 }
 
 func printFnDoc(fn *compiler.FnDecl) {
+	pubPrefix := ""
+	if fn.IsPub {
+		pubPrefix = "pub "
+	}
 	receiver := ""
 	if fn.Receiver != nil {
 		mutPrefix := ""
@@ -185,7 +205,7 @@ func printFnDoc(fn *compiler.FnDecl) {
 		ret = fmt.Sprintf(" -> %s", fn.RetType.String())
 	}
 
-	fmt.Printf("fn %s%s%s(%s)%s\n\n", receiver, fn.Name, typeParams, strings.Join(params, ", "), ret)
+	fmt.Printf("%sfn %s%s%s(%s)%s\n\n", pubPrefix, receiver, fn.Name, typeParams, strings.Join(params, ", "), ret)
 }
 
 func printExternFnDoc(fn *compiler.ExternFnDecl) {

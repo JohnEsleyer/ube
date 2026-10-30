@@ -15,17 +15,34 @@ type FuncSignature struct {
 	RetType     UbeType
 	Escaping    []bool
 	ReceiverMut bool
+	IsPub       bool
+	File        string
+}
+
+type StructMeta struct {
+	Fields []FieldDecl
+	IsPub  bool
+	File   string
+}
+
+type EnumMeta struct {
+	Variants []VariantDecl
+	IsPub    bool
+	File     string
 }
 
 type TypeEnvironment struct {
 	Parent         *TypeEnvironment
 	Vars           map[string]VarInfo
 	Structs        map[string][]FieldDecl
+	StructMeta     map[string]StructMeta
 	Enums          map[string][]VariantDecl
+	EnumMeta       map[string]EnumMeta
 	Traits         map[string]*TraitDecl
 	Funcs          map[string]FuncSignature
 	GenericStructs map[string]*StructDecl
 	GenericFuncs   map[string]*FnDecl
+	CurFile        string
 	CurRet         UbeType
 	LoopDepth      int
 	ScopeDepth     int
@@ -37,7 +54,9 @@ func NewTypeEnvironment(parent *TypeEnvironment) *TypeEnvironment {
 		Parent:         parent,
 		Vars:           make(map[string]VarInfo),
 		Structs:        make(map[string][]FieldDecl),
+		StructMeta:     make(map[string]StructMeta),
 		Enums:          make(map[string][]VariantDecl),
+		EnumMeta:       make(map[string]EnumMeta),
 		Traits:         make(map[string]*TraitDecl),
 		Funcs:          make(map[string]FuncSignature),
 		GenericStructs: make(map[string]*StructDecl),
@@ -48,6 +67,12 @@ func NewTypeEnvironment(parent *TypeEnvironment) *TypeEnvironment {
 func childTypeEnvironment(parent *TypeEnvironment) *TypeEnvironment {
 	env := NewTypeEnvironment(parent)
 	if parent != nil {
+		env.Structs = parent.Structs
+		env.StructMeta = parent.StructMeta
+		env.Enums = parent.Enums
+		env.EnumMeta = parent.EnumMeta
+		env.Funcs = parent.Funcs
+		env.CurFile = parent.CurFile
 		env.CurRet = parent.CurRet
 		env.LoopDepth = parent.LoopDepth
 		env.ScopeDepth = parent.ScopeDepth
@@ -632,8 +657,10 @@ func (tc *Typechecker) Check(prog *Program) error {
 		switch d := decl.(type) {
 		case *StructDecl:
 			tc.Global.Structs[d.Name] = d.Fields
+			tc.Global.StructMeta[d.Name] = StructMeta{Fields: d.Fields, IsPub: d.IsPub, File: d.At.File}
 		case *EnumDecl:
 			tc.Global.Enums[d.Name] = d.Variants
+			tc.Global.EnumMeta[d.Name] = EnumMeta{Variants: d.Variants, IsPub: d.IsPub, File: d.At.File}
 		case *TraitDecl:
 			tc.Global.Traits[d.Name] = d
 		}
@@ -694,6 +721,8 @@ func (tc *Typechecker) Check(prog *Program) error {
 				Params:      d.Params,
 				RetType:     d.RetType,
 				ReceiverMut: d.Receiver != nil && d.Receiver.IsMut,
+				IsPub:       d.IsPub,
+				File:        d.At.File,
 			}
 		case *ExternFnDecl:
 			for _, p := range d.Params {
@@ -704,7 +733,7 @@ func (tc *Typechecker) Check(prog *Program) error {
 			if err := tc.validateType(d.RetType, d.At); err != nil {
 				return err
 			}
-			tc.Global.Funcs[d.Name] = FuncSignature{Params: d.Params, RetType: d.RetType}
+			tc.Global.Funcs[d.Name] = FuncSignature{Params: d.Params, RetType: d.RetType, IsPub: d.IsPub, File: d.At.File}
 			tc.Externs[d.Name] = true
 		}
 	}
@@ -714,6 +743,7 @@ func (tc *Typechecker) Check(prog *Program) error {
 	for _, decl := range prog.Decls {
 		if fn, ok := decl.(*FnDecl); ok {
 			env := NewTypeEnvironment(tc.Global)
+			env.CurFile = fn.At.File
 			env.CurRet = fn.RetType
 			env.ScopeDepth = 0
 			if fn.Receiver != nil {

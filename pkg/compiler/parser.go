@@ -86,7 +86,7 @@ func (p *Parser) ParseProgram() (*Program, error) {
 func (p *Parser) synchronizeDecl() {
 	for !p.check(TokenEOF) {
 		switch p.peek(0).Type {
-		case TokenFn, TokenStruct, TokenEnum, TokenExtern, TokenImport, TokenTrait:
+		case TokenPub, TokenFn, TokenStruct, TokenEnum, TokenExtern, TokenImport, TokenTrait:
 			return
 		}
 		p.advance()
@@ -108,22 +108,41 @@ func (p *Parser) parseDeclSafe() (d Decl, perr *parseError) {
 }
 
 func (p *Parser) parseDecl() Decl {
+	isPub := false
+	if p.check(TokenPub) {
+		p.advance()
+		isPub = true
+	}
+
 	tok := p.peek(0)
 	switch tok.Type {
 	case TokenImport:
+		if isPub {
+			p.errorAt(tok.Loc, "'pub' cannot be applied to 'import'")
+		}
 		loc := p.advance().Loc
 		path := p.expect(TokenString, "Expected import path").Val
 		return &ImportDecl{At: loc, Path: path}
 	case TokenStruct:
-		return p.parseStructDecl()
+		d := p.parseStructDecl()
+		d.IsPub = isPub
+		return d
 	case TokenEnum:
-		return p.parseEnumDecl()
+		d := p.parseEnumDecl()
+		d.IsPub = isPub
+		return d
 	case TokenTrait:
-		return p.parseTraitDecl()
+		d := p.parseTraitDecl()
+		d.IsPub = isPub
+		return d
 	case TokenExtern:
-		return p.parseExternDecl()
+		d := p.parseExternDecl()
+		d.IsPub = isPub
+		return d
 	case TokenFn:
-		return p.parseFnDecl()
+		d := p.parseFnDecl()
+		d.IsPub = isPub
+		return d
 	default:
 		p.errorAt(tok.Loc, fmt.Sprintf("Unexpected top-level token '%s'", tok.Val))
 		return nil
@@ -195,10 +214,21 @@ func (p *Parser) parseStructDecl() *StructDecl {
 
 	var fields []FieldDecl
 	for !p.check(TokenRBrace) && !p.check(TokenEOF) {
+		fPub := false
+		fMut := false
+		for p.check(TokenPub) || p.check(TokenMut) {
+			if p.check(TokenPub) {
+				p.advance()
+				fPub = true
+			} else if p.check(TokenMut) {
+				p.advance()
+				fMut = true
+			}
+		}
 		fName := p.expect(TokenIdent, "Expected field name").Val
 		p.expect(TokenColon, "Expected ':' after field name")
 		fType := p.parseType()
-		fields = append(fields, FieldDecl{Name: fName, Type: fType})
+		fields = append(fields, FieldDecl{Name: fName, Type: fType, IsMut: fMut, IsPub: fPub})
 		if p.check(TokenComma) {
 			p.advance()
 		}

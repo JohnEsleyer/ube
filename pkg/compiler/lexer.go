@@ -8,6 +8,7 @@ import (
 )
 
 var keywords = map[string]TokenType{
+	"pub":      TokenPub,
 	"fn":       TokenFn,
 	"let":      TokenLet,
 	"mut":      TokenMut,

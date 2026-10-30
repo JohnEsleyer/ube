@@ -107,7 +107,7 @@ func maxInt(a, b int) int {
 }
 
 func isDeclStart(line string) bool {
-	for _, prefix := range []string{"fn ", "struct ", "enum ", "trait ", "extern "} {
+	for _, prefix := range []string{"pub ", "fn ", "struct ", "enum ", "trait ", "extern "} {
 		if strings.HasPrefix(line, prefix) {
 			return true
 		}

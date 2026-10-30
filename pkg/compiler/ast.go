@@ -423,6 +423,7 @@ type TypeParam struct {
 type StructDecl struct {
 	At         SourceLocation
 	Name       string
+	IsPub      bool
 	TypeParams []TypeParam
 	Fields     []FieldDecl
 }
@@ -431,6 +432,7 @@ type FieldDecl struct {
 	Name  string
 	Type  UbeType
 	IsMut bool
+	IsPub bool
 }
 
 func (d *StructDecl) Loc() SourceLocation { return d.At }
@@ -439,6 +441,7 @@ func (d *StructDecl) declNode()           {}
 type EnumDecl struct {
 	At       SourceLocation
 	Name     string
+	IsPub    bool
 	Variants []VariantDecl
 }
 
@@ -453,6 +456,7 @@ func (d *EnumDecl) declNode()           {}
 type TraitDecl struct {
 	At      SourceLocation
 	Name    string
+	IsPub   bool
 	Methods []TraitMethodDecl
 }
 
@@ -469,6 +473,7 @@ func (d *TraitDecl) declNode()           {}
 type FnDecl struct {
 	At         SourceLocation
 	Name       string
+	IsPub      bool
 	TypeParams []TypeParam
 	Receiver   *FieldDecl
 	Params     []FieldDecl
@@ -482,6 +487,7 @@ func (d *FnDecl) declNode()           {}
 type ExternFnDecl struct {
 	At      SourceLocation
 	Name    string
+	IsPub   bool
 	Params  []FieldDecl
 	RetType UbeType
 }

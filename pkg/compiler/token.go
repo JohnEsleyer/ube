@@ -14,6 +14,7 @@ const (
 	TokenNull   TokenType = "NULL"
 
 	// Keywords
+	TokenPub      TokenType = "pub"
 	TokenFn       TokenType = "fn"
 	TokenLet      TokenType = "let"
 	TokenMut      TokenType = "mut"

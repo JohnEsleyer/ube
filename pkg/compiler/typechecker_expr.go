@@ -328,6 +328,11 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 
 			if id, ok := mem.Target.(*IdentExpr); ok {
 				if variants, ok := tc.Global.Enums[id.Name]; ok {
+					if meta, hasMeta := tc.Global.EnumMeta[id.Name]; hasMeta {
+						if env.CurFile != "" && meta.File != "" && env.CurFile != meta.File && !meta.IsPub {
+							return nil, fmt.Errorf("[%s] cannot access private enum '%s'", e.At, id.Name)
+						}
+					}
 					for _, variant := range variants {
 						if variant.Name == mem.Member {
 							if len(e.Args) != len(variant.Types) {
@@ -578,6 +583,9 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			}
 			methodKey := fmt.Sprintf("%s.%s", tgtT, mem.Member)
 			if sig, ok := tc.Global.Funcs[methodKey]; ok {
+				if env.CurFile != "" && sig.File != "" && env.CurFile != sig.File && !sig.IsPub {
+					return nil, fmt.Errorf("[%s] cannot access private method '%s' on '%s'", e.At, mem.Member, tgtT)
+				}
 				e.ReceiverType = tgtT
 				if sig.ReceiverMut {
 					if root := assignmentRoot(mem.Target); root != "" {
@@ -597,6 +605,9 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		}
 		if id, ok := e.Callee.(*IdentExpr); ok {
 			if sig, ok := tc.Global.Funcs[id.Name]; ok {
+				if env.CurFile != "" && sig.File != "" && env.CurFile != sig.File && !sig.IsPub {
+					return nil, fmt.Errorf("[%s] cannot access private function '%s' from another file", e.At, id.Name)
+				}
 				if err := tc.checkCallArgs(e.Args, sig.Params, sig.Escaping, env, e.At); err != nil {
 					return nil, err
 				}
@@ -612,6 +623,11 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 	case *MemberExpr:
 		if id, ok := e.Target.(*IdentExpr); ok {
 			if variants, isEnum := tc.Global.Enums[id.Name]; isEnum {
+				if meta, hasMeta := tc.Global.EnumMeta[id.Name]; hasMeta {
+					if env.CurFile != "" && meta.File != "" && env.CurFile != meta.File && !meta.IsPub {
+						return nil, fmt.Errorf("[%s] cannot access private enum '%s'", e.At, id.Name)
+					}
+				}
 				for _, variant := range variants {
 					if variant.Name == e.Member && len(variant.Types) == 0 {
 						return CustomType{Name: id.Name}, nil
@@ -646,7 +662,19 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			return nil, fmt.Errorf("[%s] '%s' is not available on '%s'", e.At, e.Member, tgtT)
 		}
 		if custom, ok := tgtT.(CustomType); ok {
-			if fields, ok := tc.Global.Structs[custom.Name]; ok {
+			if meta, ok := tc.Global.StructMeta[custom.Name]; ok {
+				for _, f := range meta.Fields {
+					if f.Name == e.Member {
+						if env.CurFile != "" && meta.File != "" && env.CurFile != meta.File && !f.IsPub {
+							return nil, fmt.Errorf("[%s] cannot access private field '%s' on struct '%s'", e.At, e.Member, custom.Name)
+						}
+						if err := requireUnsafePointerUse(f.Type, env, e.At); err != nil {
+							return nil, err
+						}
+						return f.Type, nil
+					}
+				}
+			} else if fields, ok := tc.Global.Structs[custom.Name]; ok {
 				for _, f := range fields {
 					if f.Name == e.Member {
 						if err := requireUnsafePointerUse(f.Type, env, e.At); err != nil {
@@ -766,13 +794,21 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		return pool, tc.validateType(pool, e.At)
 
 	case *StructInitExpr:
+		meta, hasMeta := tc.Global.StructMeta[e.Name]
+		if hasMeta {
+			if env.CurFile != "" && meta.File != "" && env.CurFile != meta.File && !meta.IsPub {
+				return nil, fmt.Errorf("[%s] cannot instantiate private struct '%s'", e.At, e.Name)
+			}
+		}
 		fields, ok := tc.Global.Structs[e.Name]
 		if !ok {
 			return nil, fmt.Errorf("[%s] unknown struct '%s'", e.At, e.Name)
 		}
 		fieldMap := make(map[string]UbeType)
+		fieldPubMap := make(map[string]bool)
 		for _, f := range fields {
 			fieldMap[f.Name] = f.Type
+			fieldPubMap[f.Name] = f.IsPub
 		}
 		provided := make(map[string]bool)
 		for _, init := range e.Fields {
@@ -782,6 +818,9 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			}
 			if provided[init.Name] {
 				return nil, fmt.Errorf("[%s] duplicate field '%s' in struct '%s' initialization", init.Val.Loc(), init.Name, e.Name)
+			}
+			if hasMeta && env.CurFile != "" && meta.File != "" && env.CurFile != meta.File && !fieldPubMap[init.Name] {
+				return nil, fmt.Errorf("[%s] cannot initialize private field '%s' on struct '%s'", init.Val.Loc(), init.Name, e.Name)
 			}
 			provided[init.Name] = true
 			valT, err := tc.inferExpr(init.Val, env)

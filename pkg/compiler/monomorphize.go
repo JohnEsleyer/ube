@@ -549,14 +549,17 @@ func (m *Monomorphizer) specializeStruct(base string, args []UbeType, pending *[
 	fields := make([]FieldDecl, 0, len(tmpl.Fields))
 	for _, f := range tmpl.Fields {
 		fields = append(fields, FieldDecl{
-			Name: f.Name,
-			Type: substituteType(f.Type, subMap),
+			Name:  f.Name,
+			Type:  substituteType(f.Type, subMap),
+			IsMut: f.IsMut,
+			IsPub: f.IsPub,
 		})
 	}
 
 	specDecl := &StructDecl{
 		At:     tmpl.At,
 		Name:   specName,
+		IsPub:  tmpl.IsPub,
 		Fields: fields,
 	}
 	m.concreteStruct[specName] = specDecl
@@ -609,6 +612,7 @@ func (m *Monomorphizer) specializeFunc(name string, args []UbeType, pending *[]D
 	specDecl := &FnDecl{
 		At:      tmpl.At,
 		Name:    specName,
+		IsPub:   tmpl.IsPub,
 		Params:  params,
 		RetType: substituteType(tmpl.RetType, subMap),
 		Body:    substituteBlock(tmpl.Body, subMap),
@@ -634,6 +638,7 @@ func (m *Monomorphizer) specializeMethod(tmpl *FnDecl, specializedStruct string,
 	return &FnDecl{
 		At:       tmpl.At,
 		Name:     tmpl.Name,
+		IsPub:    tmpl.IsPub,
 		Receiver: receiver,
 		Params:   params,
 		RetType:  substituteType(tmpl.RetType, subMap),
