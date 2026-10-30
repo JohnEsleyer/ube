@@ -651,6 +651,9 @@ func (m *Monomorphizer) checkTraitConstraint(t UbeType, traitName string, loc So
 	if !exists {
 		return fmt.Errorf("[%s] unknown trait '%s'", loc, traitName)
 	}
+	if loc.File != "" && trait.At.File != "" && loc.File != trait.At.File && !trait.IsPub {
+		return fmt.Errorf("[%s] cannot access private trait '%s'", loc, traitName)
+	}
 	base := typeBaseName(t)
 	methods := m.allMethods[base]
 

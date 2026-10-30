@@ -209,6 +209,10 @@ func printFnDoc(fn *compiler.FnDecl) {
 }
 
 func printExternFnDoc(fn *compiler.ExternFnDecl) {
+	pubPrefix := ""
+	if fn.IsPub {
+		pubPrefix = "pub "
+	}
 	var params []string
 	for _, p := range fn.Params {
 		params = append(params, fmt.Sprintf("%s: %s", p.Name, p.Type.String()))
@@ -217,5 +221,5 @@ func printExternFnDoc(fn *compiler.ExternFnDecl) {
 	if fn.RetType != nil {
 		ret = fmt.Sprintf(" -> %s", fn.RetType.String())
 	}
-	fmt.Printf("extern fn %s(%s)%s\n\n", fn.Name, strings.Join(params, ", "), ret)
+	fmt.Printf("%sextern fn %s(%s)%s\n\n", pubPrefix, fn.Name, strings.Join(params, ", "), ret)
 }

@@ -424,6 +424,11 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			// Trait dynamic method calls
 			if tr, isTrait := tgtT.(TraitType); isTrait {
 				e.ReceiverType = tgtT
+				if meta, hasMeta := tc.Global.TraitMeta[tr.Name]; hasMeta {
+					if env.CurFile != "" && meta.File != "" && env.CurFile != meta.File && !meta.IsPub {
+						return nil, fmt.Errorf("[%s] cannot access private trait '%s'", e.At, tr.Name)
+					}
+				}
 				if tDecl, ok := tc.Global.Traits[tr.Name]; ok {
 					for _, m := range tDecl.Methods {
 						if m.Name == mem.Member {
@@ -1015,6 +1020,11 @@ func (tc *Typechecker) validateType(t UbeType, loc SourceLocation) error {
 	case PrimitiveType, StringType, StringBuilderType:
 		return nil
 	case TraitType:
+		if meta, ok := tc.Global.TraitMeta[v.Name]; ok {
+			if loc.File != "" && meta.File != "" && loc.File != meta.File && !meta.IsPub {
+				return fmt.Errorf("[%s] cannot access private trait '%s'", loc, v.Name)
+			}
+		}
 		if _, ok := tc.Global.Traits[v.Name]; !ok {
 			return fmt.Errorf("[%s] unknown trait '%s'", loc, v.Name)
 		}
@@ -1058,6 +1068,21 @@ func (tc *Typechecker) validateType(t UbeType, loc SourceLocation) error {
 		}
 		return nil
 	case CustomType:
+		if meta, ok := tc.Global.StructMeta[v.Name]; ok {
+			if loc.File != "" && meta.File != "" && loc.File != meta.File && !meta.IsPub {
+				return fmt.Errorf("[%s] cannot access private struct '%s'", loc, v.Name)
+			}
+		}
+		if meta, ok := tc.Global.EnumMeta[v.Name]; ok {
+			if loc.File != "" && meta.File != "" && loc.File != meta.File && !meta.IsPub {
+				return fmt.Errorf("[%s] cannot access private enum '%s'", loc, v.Name)
+			}
+		}
+		if meta, ok := tc.Global.TraitMeta[v.Name]; ok {
+			if loc.File != "" && meta.File != "" && loc.File != meta.File && !meta.IsPub {
+				return fmt.Errorf("[%s] cannot access private trait '%s'", loc, v.Name)
+			}
+		}
 		return nil
 	default:
 		return nil

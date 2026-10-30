@@ -207,3 +207,175 @@ fn main() {
 		t.Fatalf("expected private method error message, got: %v", err)
 	}
 }
+
+func TestPub_RejectsPrivateStructInstantiation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	modPath := filepath.Join(tmpDir, "internal.ube")
+	modSource := `
+struct SecretConfig {
+	api_key: string
+}
+`
+	if err := os.WriteFile(modPath, []byte(modSource), 0644); err != nil {
+		t.Fatalf("failed to write internal.ube: %v", err)
+	}
+
+	mainPath := filepath.Join(tmpDir, "main.ube")
+	mainSource := `
+import "internal.ube"
+
+fn main() {
+	let cfg = SecretConfig{api_key: "abc"}
+	println(cfg.api_key)
+}
+`
+	if err := os.WriteFile(mainPath, []byte(mainSource), 0644); err != nil {
+		t.Fatalf("failed to write main.ube: %v", err)
+	}
+
+	loader := compiler.NewModuleLoader()
+	prog, err := loader.Load(mainPath)
+	if err != nil {
+		t.Fatalf("failed to load module: %v", err)
+	}
+
+	tc := compiler.NewTypechecker()
+	err = tc.Check(prog)
+	if err == nil {
+		t.Fatalf("expected typechecker to reject instantiating private struct 'SecretConfig'")
+	}
+	if !strings.Contains(err.Error(), "cannot access private struct 'SecretConfig'") &&
+		!strings.Contains(err.Error(), "cannot instantiate private struct 'SecretConfig'") {
+		t.Fatalf("expected private struct error message, got: %v", err)
+	}
+}
+
+func TestPub_RejectsPrivateFieldInit(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	modPath := filepath.Join(tmpDir, "user.ube")
+	modSource := `
+pub struct User {
+	pub name: string,
+	password_hash: string
+}
+`
+	if err := os.WriteFile(modPath, []byte(modSource), 0644); err != nil {
+		t.Fatalf("failed to write user.ube: %v", err)
+	}
+
+	mainPath := filepath.Join(tmpDir, "main.ube")
+	mainSource := `
+import "user.ube"
+
+fn main() {
+	let u = User{name: "Alice", password_hash: "hash123"}
+	println(u.name)
+}
+`
+	if err := os.WriteFile(mainPath, []byte(mainSource), 0644); err != nil {
+		t.Fatalf("failed to write main.ube: %v", err)
+	}
+
+	loader := compiler.NewModuleLoader()
+	prog, err := loader.Load(mainPath)
+	if err != nil {
+		t.Fatalf("failed to load module: %v", err)
+	}
+
+	tc := compiler.NewTypechecker()
+	err = tc.Check(prog)
+	if err == nil {
+		t.Fatalf("expected typechecker to reject initializing private field 'password_hash'")
+	}
+	if !strings.Contains(err.Error(), "cannot initialize private field 'password_hash'") {
+		t.Fatalf("expected private field init error message, got: %v", err)
+	}
+}
+
+func TestPub_RejectsPrivateEnumAccess(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	modPath := filepath.Join(tmpDir, "states.ube")
+	modSource := `
+enum Status {
+	Draft,
+	Active
+}
+`
+	if err := os.WriteFile(modPath, []byte(modSource), 0644); err != nil {
+		t.Fatalf("failed to write states.ube: %v", err)
+	}
+
+	mainPath := filepath.Join(tmpDir, "main.ube")
+	mainSource := `
+import "states.ube"
+
+fn main() {
+	let s = Status.Draft
+}
+`
+	if err := os.WriteFile(mainPath, []byte(mainSource), 0644); err != nil {
+		t.Fatalf("failed to write states.ube: %v", err)
+	}
+
+	loader := compiler.NewModuleLoader()
+	prog, err := loader.Load(mainPath)
+	if err != nil {
+		t.Fatalf("failed to load module: %v", err)
+	}
+
+	tc := compiler.NewTypechecker()
+	err = tc.Check(prog)
+	if err == nil {
+		t.Fatalf("expected typechecker to reject accessing private enum 'Status'")
+	}
+	if !strings.Contains(err.Error(), "cannot access private enum 'Status'") {
+		t.Fatalf("expected private enum error message, got: %v", err)
+	}
+}
+
+func TestPub_RejectsPrivateTraitAccess(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	modPath := filepath.Join(tmpDir, "workers.ube")
+	modSource := `
+trait InternalTask {
+	fn perform() -> i32
+}
+`
+	if err := os.WriteFile(modPath, []byte(modSource), 0644); err != nil {
+		t.Fatalf("failed to write workers.ube: %v", err)
+	}
+
+	mainPath := filepath.Join(tmpDir, "main.ube")
+	mainSource := `
+import "workers.ube"
+
+fn run_task(t: InternalTask) {
+	println(t.perform())
+}
+
+fn main() {
+}
+`
+	if err := os.WriteFile(mainPath, []byte(mainSource), 0644); err != nil {
+		t.Fatalf("failed to write main.ube: %v", err)
+	}
+
+	loader := compiler.NewModuleLoader()
+	prog, err := loader.Load(mainPath)
+	if err != nil {
+		t.Fatalf("failed to load module: %v", err)
+	}
+
+	tc := compiler.NewTypechecker()
+	err = tc.Check(prog)
+	if err == nil {
+		t.Fatalf("expected typechecker to reject using private trait 'InternalTask' in signature")
+	}
+	if !strings.Contains(err.Error(), "cannot access private trait 'InternalTask'") {
+		t.Fatalf("expected private trait error message, got: %v", err)
+	}
+}

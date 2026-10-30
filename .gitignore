@@ -33,6 +33,7 @@ editors/vscode/client/out/
 
 # textify
 codebase.txt
+context.txt
 
 # AI Prompts
 instructions/

@@ -31,6 +31,12 @@ type EnumMeta struct {
 	File     string
 }
 
+type TraitMeta struct {
+	Trait *TraitDecl
+	IsPub bool
+	File  string
+}
+
 type TypeEnvironment struct {
 	Parent         *TypeEnvironment
 	Vars           map[string]VarInfo
@@ -39,6 +45,7 @@ type TypeEnvironment struct {
 	Enums          map[string][]VariantDecl
 	EnumMeta       map[string]EnumMeta
 	Traits         map[string]*TraitDecl
+	TraitMeta      map[string]TraitMeta
 	Funcs          map[string]FuncSignature
 	GenericStructs map[string]*StructDecl
 	GenericFuncs   map[string]*FnDecl
@@ -58,6 +65,7 @@ func NewTypeEnvironment(parent *TypeEnvironment) *TypeEnvironment {
 		Enums:          make(map[string][]VariantDecl),
 		EnumMeta:       make(map[string]EnumMeta),
 		Traits:         make(map[string]*TraitDecl),
+		TraitMeta:      make(map[string]TraitMeta),
 		Funcs:          make(map[string]FuncSignature),
 		GenericStructs: make(map[string]*StructDecl),
 		GenericFuncs:   make(map[string]*FnDecl),
@@ -78,6 +86,7 @@ func childTypeEnvironment(parent *TypeEnvironment) *TypeEnvironment {
 		env.ScopeDepth = parent.ScopeDepth
 		env.UnsafeDepth = parent.UnsafeDepth
 		env.Traits = parent.Traits
+		env.TraitMeta = parent.TraitMeta
 		env.GenericStructs = parent.GenericStructs
 		env.GenericFuncs = parent.GenericFuncs
 	}
@@ -663,6 +672,7 @@ func (tc *Typechecker) Check(prog *Program) error {
 			tc.Global.EnumMeta[d.Name] = EnumMeta{Variants: d.Variants, IsPub: d.IsPub, File: d.At.File}
 		case *TraitDecl:
 			tc.Global.Traits[d.Name] = d
+			tc.Global.TraitMeta[d.Name] = TraitMeta{Trait: d, IsPub: d.IsPub, File: d.At.File}
 		}
 	}
 
