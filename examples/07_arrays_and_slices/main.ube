@@ -1,0 +1,39 @@
+
+fn sum_slice(vals: []i32) -> i32 {
+    let mut total = 0
+    for v in vals {
+        total += v
+    }
+    return total
+}
+
+fn main() {
+    // Fixed-size array (stack allocated)
+    let arr: [3]i32 = [3]i32{10, 20, 30}
+    // Fixed arrays automatically coerce to []i32 when passed to functions
+    println(sum_slice(arr)) // 60
+
+    // Dynamic slice (arena backed)
+    let mut items = []i32{}
+    items.push(1)
+    items.push(2)
+    items.push(3)
+
+    println(items.len) // 3
+
+
+    // Popping returns an optional (i32?), unwrapped with `or_else`
+    let popped = items.pop() or_else 0
+    println(popped) // 3
+
+    // Or unwrapping with `if let`
+    if let val = items.pop(){
+        println(val) // 2
+    }
+
+    // Slicing sub-ranges [start:end]
+    items.push(40)
+    items.push(50)
+    let sub = items[0:2]
+    println(sub.len) // 1
+}

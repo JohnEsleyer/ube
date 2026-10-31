@@ -1,0 +1,31 @@
+
+fn main() {
+    let speed = 75
+
+    // If / Else If / Else
+    if speed > 80 {
+        println_str("Too fast")
+    } else if speed > 60 {
+        println_str("Cruising")
+    } else {
+        println_str("Slow")
+    }
+
+    // While loop with continue and break
+    let mut i = 0
+    while i < 10 {
+        i += 1
+        if i == 2 {
+            continue
+        }
+        if i == 5 {
+            break
+        }
+        println(i)
+    }
+
+    // For loop over range
+    for idx in 0..3 {
+        println(idx) // 0, 1, 2
+    }
+}

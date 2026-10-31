@@ -1,0 +1,35 @@
+// 1. Foreign Function Interface (FFI) declarations
+// Link against standard C libc functions with matching primitive types
+extern fn abs(n: i32) -> i32
+extern fn sinf(rad: f32) -> f32
+extern fn rand() -> i32
+extern fn putchar(c: i32) -> i32
+
+fn main() {
+    let negative: i32 = -42
+    let angle: f32 = 0.0
+    let val: i32 = 1337
+
+    // 2. Calling C libc functions inside unsafe block
+    unsafe {
+        let positive = abs(negative)
+        println(positive) // 42
+
+        let sin_val = sinf(angle)
+        println(sin_val)  // 0.0
+
+        let random_num = rand()
+        println(random_num)
+
+        // Print 'U', 'b', 'e', '\n' directly via C putchar (ASCII codes)
+        putchar(85)  // 'U'
+        putchar(98)  // 'b'
+        putchar(101) // 'e'
+        putchar(10)  // '\n'
+
+        // 3. Raw pointer address-of (&) and dereference (*) inside unsafe
+        let ptr: *i32 = &val
+        let deref_val = *ptr
+        println(deref_val) // 1337
+    }
+}

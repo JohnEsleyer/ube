@@ -1,0 +1,23 @@
+
+pub struct Player {
+    pub name: string
+    pub level: i32
+    secret_seed: i32 // Private to this file/module
+}
+
+fn (p Player) describe(){
+    print("Player: ")
+    print(p.name)
+    print(", Level: ")
+    println(p.level)
+}
+
+fn main(){
+    let p = Player{
+            name: "Aria",
+            level: 42,
+            secret_seed: 9999
+    }
+
+    p.describe()
+}

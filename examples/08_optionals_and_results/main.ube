@@ -1,0 +1,37 @@
+// Optional return (value or null)
+fn find_user(id: i32) -> string? {
+    if id == 1 {
+        return "Alice"
+    }
+    return null
+}
+
+// Result return (success or typed error)
+fn parse_port(s: string) -> i32 ! string {
+    if s == "invalid" {
+        return error("Malformed port")
+    }
+    return 8080
+}
+
+fn start_server() -> bool ! string {
+    // '?' propagates errors up to the caller
+    let port = parse_port("8080")?
+    println(port)
+    return true
+}
+
+fn main(){
+    // If-let unwrapping for optionals
+    if let user = find_user(1){
+        println_str(user) // Alice
+    }
+
+    // Defaulting with or or_else
+    let user2 = find_user(99) or_else "Guest"
+    println_str(user2) // Guest
+
+    // Defaulting results with or_else
+    let port = parse_port("invalid") or_else 3000
+    println(port) // 3000
+}

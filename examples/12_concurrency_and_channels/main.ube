@@ -1,0 +1,29 @@
+
+fn worker(jobs: Chan[i32], done: Chan[bool]){
+    while let job = jobs.recv(){
+        print("Worker processed: ")
+        println(job)
+    }
+    done.send(true)
+}
+
+fn main(){
+    let jobs = Chan[i32](5)
+    let done = Chan[bool](1)
+
+    spawn worker(jobs, done)
+
+    jobs.send(100)
+    jobs.send(200)
+    jobs.close()
+
+    // Multiplexing channels with select using '=>'
+    select {
+         is_done = done => {
+            println_str("Worker completed all jobs.")
+        }
+        default => {
+            println_str("Worker still busy...")
+        }
+    }
+}

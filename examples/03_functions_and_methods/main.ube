@@ -1,0 +1,42 @@
+
+
+struct Counter {
+    val: i32
+}
+
+// Regular function
+fn add(a: i32, b: i32) -> i32 {
+    return a + b
+}
+
+// Value receiver method (read-only copy)
+fn (c Counter) read() -> i32 {
+    return c.val
+}
+
+// Mutable receiver method (modifies receiver in-place)
+fn (mut c Counter) bump(amount: i32) {
+    c.val += amount
+}
+
+// Mutable parameter loan (in-out parameter)
+fn transfer(mut dst: Counter, mut src: Counter, amount: i32){
+    src.val -= amount
+    dst.val += amount
+}
+
+fn main(){
+    let sum = add(10, 20)
+    println(sum) // 30
+
+    let mut c1 = Counter{val: 50}
+    c1.bump(10)
+    println(c1.read()) // 60
+
+    let mut c2 = Counter{val: 0}
+    // Mutable arguments must be explicitly marked `mut`
+    transfer(mut c2, mut c1, 20)
+
+    println(c1.read()) // 40
+    println(c2.read()) // 20
+}

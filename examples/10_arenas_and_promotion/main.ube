@@ -1,0 +1,22 @@
+
+fn main(){
+    let mut preserved = []i32{}
+
+    arena {
+        let mut scratch = []i32{}
+        scratch.push(10)
+        scratch.push(20)
+
+        // Copies data into parent arena before child wipes
+        preserved = promote(scratch)
+    } // Entire child arena is freed instantly in 1 instruction
+
+    println(preserved.len) // 2
+
+    // Arena expression form
+    let message = arena {
+        let mut s = "Hello"
+        promote(s)
+    }
+    println_str(message)
+}

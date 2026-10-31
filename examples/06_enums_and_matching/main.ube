@@ -1,0 +1,32 @@
+enum Status {
+    Idle,
+    Loading(i32),
+    Error(string)
+}
+
+fn handle_status(s: Status){
+    match s {
+        Idle => {
+            println_str("Status: Idle")
+        }
+        Loading(progress) => {
+            print("Progress: ")
+            print(progress)
+            println_str("%")
+        }
+        Error(err_msg) => {
+            print("Failed with: ")
+            println_str(err_msg)
+        }
+    }
+}
+
+fn main(){
+    let s1 = Status.Idle
+    let s2 = Status.Loading(75)
+    let s3 = Status.Error("Network timeout")
+
+    handle_status(s1)
+    handle_status(s2)
+    handle_status(s3)
+}

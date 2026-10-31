@@ -16,9 +16,9 @@
 
 ## 🍠 Overview
 
-Ube is a modern, statically typed systems programming language designed to bridge the gap between low-level performance and developer ergonomics. It combines the readable, approachable syntax and concurrency model of Go with the pause-free speed, deterministic memory layout, and zero runtime overhead of C.
+Ube is a modern, statically typed systems programming language designed to bridge the gap between developer ergonomics and bare-metal performance. It combines the readable, approachable syntax and concurrency model of Go with the pause-free speed, deterministic memory layout, and zero runtime overhead of ANSI C99.
 
-Ube delivers **Zero Garbage Collection (GC)** without requiring manual `malloc`/`free` or complex Rust-style lifetime annotations. It is built from the ground up for real-time game engines, CLI tools, embedded systems, networking servers, and performance-critical software.
+Ube delivers **Zero Garbage Collection (GC)** without requiring manual `malloc`/`free` or complex Rust-style lifetime annotations. It is built for real-time game engines, CLI tools, embedded devices, high-throughput network services, and performance-critical systems.
 
 ---
 
@@ -47,156 +47,172 @@ ube version
 
 ## 🧁 Compilation Pipeline
 
-1. **Frontend**: Lexing, parsing, monomorphization of generics, visibility checks, total affine ownership tracking, disjoint mutable-loan checking, and arena lifetime escape analysis.
+1. **Frontend**: Lexing, parsing, monomorphization of generics, visibility checks, affine ownership tracking, disjoint mutable-loan checking, and regional escape analysis.
 2. **C Code Generation**: Emits clean, deterministic ANSI C99 code (`.c`).
-3. **Native Compilation**: Invokes system `clang` or `gcc` with `-O2` optimization to generate standalone, dependency-free executables.
+3. **Native Compilation**: Invokes system `clang` or `gcc` with `-O2` optimization to produce standalone, dependency-free executables.
 
 ---
 
 ## 🧠 Memory Architecture: Zero GC
 
-Ube does not use a tracing or reference-counting garbage collector. Memory is organized into deterministic regional bump arenas:
+Ube operates without a tracing garbage collector or reference counting. Memory safety and reclamation are achieved through three complementary mechanisms:
 
-1. **The Regional Bump Arena (`arena { ... }`)**: Every allocation (dynamic slices, strings, string builders) defaults to the active arena level. Exiting an arena rewinds the watermark pointer in **1 CPU instruction**, freeing all allocations instantly without heap fragmentation.
-2. **Explicit Promotion (`promote(...)`)**: When memory allocated inside an arena must outlive it, `promote` copies the value into the parent arena before the child arena is rewound.
-3. **The Upward Reference Invariant**: Inner arenas cannot mutate outer references (e.g. calling `.push()` on an outer slice from inside an arena is rejected at compile time).
-4. **Generational Handle Pools (`Pool[T]`)**: For long-lived entity graphs, pooled allocations are referenced via generational index handles (`Handle[T]`). Calling `free` on a handle consumes it linearly, so use-after-free and double-free are rejected before the program runs.
+```
+┌───────────────────────────────────────────────────────────┐
+│                    Stack Allocations                      │
+│        Primitives (i32, f32), Fixed Arrays ([N]T)         │
+└───────────────────────────────────────────────────────────┘
+                            │
+┌───────────────────────────▼───────────────────────────────┐
+│              Regional Bump Arenas (arena { })             │
+│   Strings, Slices ([]T), StringBuilders, Scratch Memory   │
+│   - Instant reclamation on exit (1 CPU instruction)       │
+│   - Explicit promotion across boundaries (promote(x))     │
+└───────────────────────────────────────────────────────────┘
+                            │
+┌───────────────────────────▼───────────────────────────────┐
+│             Generational Entity Pools (Pool[T])           │
+│   Long-lived entities, game objects, graph structures     │
+│   - Generational index handles (Handle[T])                │
+│   - Linear static consumption prevents use-after-free     │
+└───────────────────────────────────────────────────────────┘
+```
 
-### Compile-Time Safety Without a Borrow Checker
+---
 
-Ube deliberately avoids Rust-style lifetime annotations. Instead, a small set of
-linear and structural rules gives it static memory safety:
+## 🛡️ Core Compiler Rules
 
-1. **Move on assignment** — assigning or initializing from an owned value makes
-   the source statically dead:
-   ```ube
-   let a = Resource{id: 1}
-   let b = a          // 'a' is moved
-   println(a.id)      // compile error: use of moved variable 'a'
-   ```
-   Reassigning the variable reactivates it.
-2. **Disjoint mutable loans** — mutable parameters use an explicit `mut`
-   marker. A variable cannot be loaned mutably twice, or mutably and immutably,
-   in the same call:
-   ```ube
-   fn add(mut dst: Counter, src: Counter) { dst.val += src.val }
-   add(mut c, c)      // compile error: aliasing violation
-   ```
-3. **Ownership handoff on `send`** — sending an owned value through a channel
-   consumes it in the sending thread.
-4. **Linear pool handles** — `pool.free(h)` consumes `h`; any later
-   `pool.get(h)` or `pool.free(h)` is a compile error.
-5. **Loop move protection** — a value declared outside a loop cannot be moved
-   inside it, because the next iteration would observe the moved value.
-6. **Arena sandboxing** — an `arena` expression cannot export an arena-backed
-   reference unless the terminal expression is `promote(...)`.
+Ube guarantees static memory safety without lifetime annotations by enforcing a small, predictable set of compile-time rules:
 
-These checks run during a single type-checking pass, with no lifetime
-parameters, no borrow-splitting, and no runtime ownership bookkeeping.
+### 1. Copy Types vs. Affine Types
+* **Copy Types** (`i8`–`i64`, `u8`–`u64`, `f32`, `f64`, `bool`, raw pointers `*T`):  
+  Bitwise copied on assignment or argument pass. May be read and copied repeatedly.
+* **Affine Types** (`string`, slices `[]T`, structs with non-copy fields, `Pool[T]`, `Chan[T]`):  
+  Have a single unique owner. Moving or passing them transfers ownership.
+
+### 2. Move on Assignment
+Assigning or initializing from an owned affine variable marks the source **statically dead**:
+```ube
+let a = "Ube"
+let b = a          // 'a' is moved to 'b'
+// println(a)      // COMPILE ERROR: use of moved variable 'a'
+println(b)         // OK
+```
+*Reassignment* reactivates a mutable variable:
+```ube
+let mut s = "first"
+let other = s      // 's' is moved
+s = "second"       // Reassignment reactivates 's'
+println(s)         // OK: prints "second"
+```
+
+### 3. Disjoint Mutable Loans (`mut`)
+Mutable function parameters and mutable receivers (`mut`) create an exclusive loan. The caller must explicitly mark the argument with `mut`, and aliasing the same variable across arguments in the same call is statically rejected:
+```ube
+fn transfer(mut dst: Counter, mut src: Counter, amt: i32) { ... }
+
+// COMPILE ERROR: aliasing violation (cannot loan 'c' mutably twice):
+// transfer(mut c, mut c, 10)
+
+// OK: disjoint variables
+transfer(mut c1, mut c2, 10)
+```
+
+### 4. Optional Unwrapping for Safety
+Functions and methods that might fail return an optional `T?` (`null` or `T`):
+* `slice.pop()` returns `T?`
+* `pool.get(handle)` returns `T?`
+Raw optionals cannot be printed or accessed directly. You must unwrap them via `if let` or `or_else`:
+```ube
+if let item = items.pop() {
+    println(item)
+}
+let fallback = items.pop() or_else 0
+```
+
+### 5. Linear Generational Pool Handles
+Calling `pool.free(h)` consumes the handle `h`. Any subsequent call to `pool.get(h)` or `pool.free(h)` is rejected at compile time as a use-after-move error.
+
+### 6. Sandboxed Unsafe & Foreign Code
+Foreign C declarations (`extern fn`) and raw pointer dereferences (`*ptr`) **must** reside inside an `unsafe { ... }` block. Calling an `extern fn` from safe code produces a compiler error.
 
 ---
 
 ## 📖 Complete Syntax & Language Tour
 
-### 1. Variables & Mutability
-
-Variables are immutable by default using `let`. Use `let mut` for mutable bindings:
-
+### 1. Variables & Types
 ```ube
-let pi: f32 = 3.14159
-let name = "Ube"        // Type inferred as string
+// Immutable bindings
+let year: i32 = 2025
+let ratio: f32 = 3.14        // Floating-point literals default to f32
+let flag: bool = true
+let name: string = "Ube"
 
-let mut counter = 0
-counter = counter + 1
-counter += 5            // Compound assignment: +=, -=, *=, /=, %=, &=, |=, ^=, <<=, >>=
+// Mutable bindings
+let mut total = 0
+total += 10
+total *= 2
+println(total) // 20
 ```
 
-### 2. Primitive Types
+### 2. Control Flow
+```ube
+// If-else
+if total > 50 {
+    println("High")
+} else if total == 20 {
+    println("Exact")
+} else {
+    println("Low")
+}
 
-| Type Category | Types |
-| :--- | :--- |
-| **Integers** | `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64` |
-| **Floating Point** | `f32`, `f64` |
-| **Boolean** | `bool` (`true`, `false`) |
-| **String** | `string` (UTF-8 arena-allocated string slices) |
-| **Void** | `void` |
-| **Literals** | Dec (`42`), Hex (`0xFF`), Binary (`0b1010_0001`), Float (`3.14`) |
+// While loops
+let mut i = 0
+while i < 10 {
+    i += 1
+    if i == 2 { continue }
+    if i == 5 { break }
+}
 
----
+// For-in loops over ranges and collections
+for idx in 0..5 {
+    println(idx) // 0, 1, 2, 3, 4
+}
+```
 
 ### 3. Functions & Methods
-
-#### Standard Functions
 ```ube
+struct Player {
+    score: i32
+}
+
+// Regular function
 fn add(a: i32, b: i32) -> i32 {
     return a + b
 }
 
-fn log_msg(msg: string) {
-    println_str(msg)
+// Read-only value receiver
+fn (p Player) get_score() -> i32 {
+    return p.score
+}
+
+// Mutable receiver (modifies caller)
+fn (mut p Player) add_points(pts: i32) {
+    p.score += pts
 }
 ```
 
-#### Struct Receivers (Value & Mutable)
+### 4. Structs & Encapsulation
+The `pub` keyword exports structs, fields, and functions to importing modules:
 ```ube
-struct Counter {
-    val: i32
-}
-
-// Value receiver (read-only copy)
-fn (c Counter) read() -> i32 {
-    return c.val
-}
-
-// Mutable receiver (mutates original)
-fn (mut c Counter) bump(amount: i32) {
-    c.val = c.val + amount
+pub struct Config {
+    pub port: i32,
+    secret_key: string // Private to this module
 }
 ```
 
-#### Mutable Parameters (`mut`)
-A `mut` parameter is an exclusive in-out loan. The caller must mark the
-argument with `mut`, and the loan must be disjoint from every other argument in
-the same call:
-
-```ube
-fn append_all(mut target: []i32, src: []i32) {
-    for v in src { target.push(v) }
-}
-
-fn main() {
-    let mut dst = []i32{}
-    append_all(mut dst, []i32{1, 2, 3})
-    println(dst.len) // 3
-}
-```
-
----
-
-### 4. Structs & Field Visibility
-
-Public declarations and fields use the `pub` keyword:
-
-```ube
-pub struct Player {
-    pub name: string,
-    pub score: i32,
-    secret_seed: i32    // Private to its own module/file
-}
-
-let p = Player{
-    name: "Aria",
-    score: 100,
-    secret_seed: 42
-}
-```
-
----
-
-### 5. Tagged Enums & Pattern Matching
-
-Enums are type-safe algebraic data types (discriminated unions). Match arms must be exhaustive:
-
+### 5. Tagged Enums & Exhaustive Matching
+Enums support data payloads and must be exhaustively matched using `=>`:
 ```ube
 enum Shape {
     Circle(f32),
@@ -207,396 +223,224 @@ enum Shape {
 fn describe(s: Shape) {
     match s {
         Circle(r) => {
-            print_str("Circle with radius: ")
+            print("Circle radius: ")
             println(r)
         }
         Rect(w, h) => {
-            print_str("Rectangle area: ")
+            print("Area: ")
             println(w * h)
         }
         Point => {
-            println_str("Zero-dimensional point")
+            println("Point at origin")
         }
     }
 }
 ```
 
----
-
-### 6. Fixed Arrays, Dynamic Slices & Strings
-
-#### Fixed-Size Arrays (`[N]T`)
-Stack-allocated contiguous elements with fixed length:
-```ube
-let mut buffer: [4]i32 = [4]i32{10, 20, 30, 40}
-buffer[0] = 99
-println(buffer[0])
-```
-
-#### Dynamic Slices (`[]T`)
-Arena-backed growable slices with built-in methods:
+### 6. Arrays & Slices
+* Fixed stack arrays: `[N]T` (e.g. `[3]i32{1, 2, 3}`). Fixed arrays automatically coerce to `[]T` when passed to slice parameters.
+* Dynamic arena slices: `[]T` with `.push()`, `.pop()`, `.len`, and `.cap`.
+* Slicing sub-ranges uses colon notation: `slice[start:end]`.
 ```ube
 let mut items = []i32{}
 items.push(10)
 items.push(20)
 items.push(30)
 
-println(items.len)      // 3
-println(items.cap)      // Underlying capacity
-let last = items.pop()  // 30
-
-// Slicing sub-ranges
-let sub = items[0..1]
+println(items[0])       // 10
+let sub = items[0:2]    // sub-slice of first 2 elements
+let last = items.pop() or_else 0
+println(last)           // 30
 ```
 
-#### Passing Arrays as Slices
-Arrays automatically coerce to read slices when passing to functions:
+### 7. Optionals (`T?`) & Results (`T ! E`)
 ```ube
-fn sum_slice(vals: []i32) -> i32 {
-    let mut total = 0
-    for v in vals { total += v }
-    return total
-}
-
-let arr = [3]i32{1, 2, 3}
-sum_slice(arr) // Automatically converted to []i32
-```
-
----
-
-### 7. Control Flow
-
-#### `if` / `else`
-```ube
-if count > 10 {
-    println_str("High")
-} else if count == 10 {
-    println_str("Target")
-} else {
-    println_str("Low")
-}
-```
-
-#### `while` Loops
-```ube
-let mut i = 0
-while i < 10 {
-    i += 1
-    if i == 5 { continue }
-    if i == 8 { break }
-}
-```
-
-#### `for..in` Iteration
-Iterate over dynamic slices, arrays, or ranges:
-```ube
-// Range iteration
-for idx in 0..5 {
-    println(idx)
-}
-
-// Slice / Array iteration
-for item in items {
-    println(item)
-}
-```
-
----
-
-### 8. Optionals (`T?`) & Results (`T ! E`)
-
-#### Optionals (`T?`)
-Represents an optional value (`null` or `T`):
-```ube
-fn find_user(id: i32) -> string? {
-    if id == 1 {
-        return "Alice"
-    }
+// Optional return
+fn lookup(id: i32) -> string? {
+    if id == 1 { return "Admin" }
     return null
 }
 
-// If-let unwrapping
-if let name = find_user(1) {
-    println_str(name)
+// Result return with error handling
+fn parse_port(code: i32) -> i32 ! string {
+    if code <= 0 { return error("invalid port") }
+    return code
 }
 
-// Fallback defaulting with or_else
-let username = find_user(99) or_else "Guest"
-```
-
-#### Error Handling with Results (`T ! E`)
-No runtime exceptions. Functions return typed success or error:
-```ube
-fn parse_port(s: string) -> i32 ! string {
-    if s == "invalid" {
-        return error("Malformed port string")
-    }
-    return 8080
-}
-
-// Error propagation with the try (?) operator
-fn start_server() -> bool ! string {
-    let port = parse_port("8080")?
+fn boot() -> bool ! string {
+    // '?' propagates error to caller
+    let port = parse_port(8080)?
     println(port)
     return true
 }
 
-// Fallback handling with or_else
-let active_port = parse_port("invalid") or_else 3000
-```
-
----
-
-### 9. Generics & Trait Constraints
-
-Ube monomorphizes all generics during compilation—zero runtime overhead:
-
-```ube
-struct Box[T] {
-    val: T
-}
-
-fn (b Box[T]) unwrap() -> T {
-    return b.val
-}
-
-fn identity[T](val: T) -> T {
-    return val
-}
-
-// Trait Constraints
-trait Printable {
-    fn to_str() -> string
-}
-
-fn display[T: Printable](item: T) {
-    println_str(item.to_str())
-}
-```
-
----
-
-### 10. Traits & Dynamic Dispatch
-
-When dynamic polymorphism is required, traits can be passed as fat pointers (`vtables`):
-
-```ube
-trait Speaker {
-    fn speak() -> string
-}
-
-struct Dog { name: string }
-fn (d Dog) speak() -> string { return "Woof!" }
-
-struct Cat { name: string }
-fn (c Cat) speak() -> string { return "Meow!" }
-
-fn make_noise(s: Speaker) {
-    println_str(s.speak())
-}
-
 fn main() {
-    let d = Dog{name: "Rex"}
-    let c = Cat{name: "Luna"}
-    make_noise(d)
-    make_noise(c)
-}
-```
+    // Unwrapping with `or_else`
+    let role = lookup(99) or_else "Guest"
+    println(role)
 
----
-
-### 11. Regional Memory Arenas (`arena` & `promote`)
-
-Use `arena` blocks to guarantee immediate memory reclamation without pauses:
-
-```ube
-fn main() {
-    let mut persistent_slice = []i32{}
-
-    // Arena statement
-    arena {
-        let mut scratch = []i32{}
-        scratch.push(10)
-        scratch.push(20)
-
-        // Promotes scratch data into parent arena before child wipes
-        persistent_slice = promote(scratch)
-    } // 💥 The entire scratch arena is wiped clean in 1 instruction.
-
-    println(persistent_slice.len) // 2
-
-    // Arena expression
-    let doubled = arena {
-        let mut list = []i32{}
-        list.push(42)
-        promote(list)
+    // Unwrapping with `if let`
+    if let user = lookup(1) {
+        println(user)
     }
 }
 ```
 
----
-
-### 12. Channels & Concurrency (`spawn` & `select`)
-
-Ube uses shared-nothing concurrency. Complex pointers cannot cross thread boundaries; owned values are moved across worker threads. After `jobs.send(value)`, the sending thread can no longer access `value`:
-
+### 8. Regional Memory Arenas (`arena` & `promote`)
+Arena allocations are rewound in a single instruction upon exiting the block:
 ```ube
-fn worker(jobs: Chan[i32], done: Chan<bool>) {
-    while let job = jobs.recv() {
-        print_str("Processing job: ")
-        println(job)
+fn main() {
+    let mut persistent = []i32{}
+
+    arena {
+        let mut scratch = []i32{}
+        scratch.push(100)
+        scratch.push(200)
+
+        // Copies data into the parent arena before child wipes clean
+        persistent = promote(scratch)
+    } // scratch arena is instantly freed here
+
+    println(persistent.len) // 2
+}
+```
+
+### 9. Generational Handle Pools (`Pool[T]`)
+For entity graphs and games where lifecycles are non-hierarchical:
+```ube
+struct Bullet {
+    damage: i32
+}
+
+fn main() {
+    let mut pool = Pool[Bullet](128)
+
+    // alloc returns a Handle[Bullet]
+    let h1 = pool.alloc(Bullet{damage: 50})
+
+    // get() returns Bullet? (optional) for generational safety
+    if let b = pool.get(h1) {
+        println(b.damage) // 50
+    }
+
+    // free() linearly consumes h1
+    pool.free(h1)
+    // pool.get(h1) -> rejected at compile time: use of moved variable
+}
+```
+
+### 10. Concurrency & Channels (`spawn` & `select`)
+Ube uses shared-nothing concurrency. Message passing transfers ownership across threads:
+```ube
+fn worker(ch: Chan[i32], done: Chan[bool]) {
+    while let msg = ch.recv() {
+        println(msg)
     }
     done.send(true)
 }
 
 fn main() {
-    let jobs = Chan[i32](10)
-    let done = Chan[bool](1)
+    let ch = Chan[i32].new(10)
+    let done = Chan[bool].new(1)
 
-    spawn worker(jobs, done)
+    spawn worker(ch, done)
 
-    jobs.send(101)
-    jobs.send(102)
-    jobs.close()
+    ch.send(42)
+    ch.close()
 
-    // Multiplexing with select
+    // Multiplexing channels with select
     select {
-        case is_done = <-done: {
-            println_str("Worker completed task.")
+        is_done = done => {
+            println("Worker finished successfully.")
         }
-        default: {
-            println_str("Waiting for worker...")
+        default => {
+            println("Worker is still busy...")
         }
     }
 }
 ```
 
----
-
-### 13. Resource Management (`defer`)
-
-The `defer` statement ensures code runs whenever the enclosing function or loop block exits:
-
+### 11. Resource Cleanup (`defer`)
+Defers execution until the enclosing function or loop iteration exits:
 ```ube
-fn process_file() {
-    println_str("Opening file resource")
-    defer println_str("Closing file resource") // Runs at function exit
+fn demo() {
+    defer println("Exiting demo function")
 
     let mut i = 0
     while i < 3 {
-        defer println_str("Loop step cleanup") // Runs on every iteration, break, or continue
+        defer println("Loop step complete")
         i += 1
     }
 }
 ```
 
----
-
-### 14. Generational Pool Allocator (`Pool[T]`)
-
-For persistent entity systems (e.g. game objects) where objects have unpredictable lifecycles:
-
+### 12. Low-Level Control (`unsafe` & `extern`)
 ```ube
-struct Bullet {
-    x: f32,
-    y: f32
-}
+extern fn abs(n: i32) -> i32
+extern fn sinf(rad: f32) -> f32
 
 fn main() {
-    let mut bullets = Pool[Bullet](128)
+    let mut val: i32 = 42
 
-    let h1 = bullets.alloc(Bullet{x: 0.0, y: 10.0})
-    println(bullets.get(h1).y) // 10.0
+    unsafe {
+        // Calling foreign C symbols
+        println(abs(-100))    // 100
+        println(sinf(0.0))    // 0.0
 
-    bullets.free(h1)
-
-    // free() linearly consumes h1, so this is rejected at compile time:
-    // bullets.get(h1) -> error: use of moved variable 'h1'
-}
-```
-
-`Pool.spawn` / `Pool.despawn` remain available as the runtime-generational
-spelling, while `Pool.alloc` / `Pool.free` additionally enforce linear handle
-consumption statically.
-
----
-
-### 15. Low-Level Control (`unsafe` & `extern`)
-
-#### Unsafe Blocks
-Enables raw pointer manipulation and hardware-level operations:
-```ube
-let x: i32 = 42
-unsafe {
-    let ptr: *i32 = &x
-    println(*ptr)
-}
-```
-
-#### Foreign Function Interface (C FFI)
-Directly link and invoke C standard library functions or native dynamic libraries:
-```ube
-extern fn puts(str: string) -> i32
-extern fn sin(rad: f64) -> f64
-
-fn main() {
-    puts("Hello from native libc puts!")
-    let val = sin(3.14159 / 2.0)
+        // Taking addresses and dereferencing pointers
+        let ptr: *i32 = &val
+        let read_val = *ptr
+        println(read_val)     // 42
+    }
 }
 ```
 
 ---
 
-### 16. Modules & Multi-File Imports
+## ⚡ Language Cheatsheet
 
-Split projects cleanly across separate files:
-
-```ube
-// math.ube
-pub fn square(x: i32) -> i32 {
-    return x * x
-}
-
-fn internal_debug() {
-    // Only visible in math.ube
-}
-```
-
-```ube
-// main.ube
-import "math.ube"
-
-fn main() {
-    println(square(5)) // 25
-}
-```
+| Construct | Syntax | Notes |
+| :--- | :--- | :--- |
+| **Variable (Immutable)** | `let x = 10` | Type inferred (`i32`) |
+| **Variable (Mutable)** | `let mut x = 10` | Allows reassignment & compound ops |
+| **Float Literal** | `let f: f32 = 3.14` | Decimals default to `f32` |
+| **Fixed Array** | `let a: [3]i32 = [3]i32{1, 2, 3}` | Stack-allocated, auto-coerces to `[]T` |
+| **Dynamic Slice** | `let mut s = []i32{}` | Arena-backed, growable (`push`, `pop`) |
+| **Sub-Slice** | `let sub = s[0:2]` | Uses colon `[start:end]` |
+| **Slice Pop** | `let val = s.pop() or_else 0` | `.pop()` returns optional `T?` |
+| **Optional Type** | `T?` (`let x: i32? = null`) | Either `T` or `null` |
+| **Result Type** | `T ! E` (`return error("msg")`) | Typed success or error |
+| **Error Propagate** | `let v = parse()?` | Bubbles error out of function |
+| **Fallback Default** | `let v = opt or_else fallback` | Unwraps optional or result |
+| **If-Let Unwrap** | `if let v = opt { ... }` | Scope-binds unwrapped value |
+| **While-Let Loop** | `while let item = ch.recv() { ... }` | Loops while optional is not `null` |
+| **Loop Range** | `for i in 0..5 { ... }` | Iterates `0` up to `4` |
+| **Enum Match** | `match val { Arm => { ... } }` | Exhaustive, separated by `=>` |
+| **Arena Block** | `arena { let x = promote(y) }` | Bump allocated, freed in 1 cycle |
+| **Channel Make** | `let ch = Chan[i32].new(cap)` | Thread-safe bounded channel |
+| **Channel Select** | `select { v = ch => { } default => { } }` | Event multiplexing with `=>` |
+| **Pool Alloc** | `let mut p = Pool[T](64)` | Generational handle pool |
+| **Pool Get** | `if let e = p.get(h) { ... }` | Returns optional `T?` |
+| **Pool Free** | `p.free(h)` | Linearly invalidates handle `h` |
+| **Unsafe Block** | `unsafe { let ptr: *T = &val }` | Required for `*T` and `extern fn` |
+| **Print (inline)** | `print("Hello ", name)` | No trailing newline |
+| **Print (line)** | `println(val)` | Appends trailing newline |
 
 ---
 
-## 🛠️ CLI Toolchain Reference
-
-The `ube` binary provides a complete developer workflow:
+## 🛠️ Developer CLI Workflow
 
 | Command | Usage | Description |
 | :--- | :--- | :--- |
-| `ube run <file>` | `ube run main.ube` | Compiles and executes your project in-memory. |
-| `ube build <file>` | `ube build main.ube -o app` | Builds an optimized native executable (`-O2`). |
-| `ube test [target]` | `ube test tests/` | Runs all test files (`test_*.ube` or functions named `test_*`). |
-| `ube check <file>` | `ube check main.ube` | Audits syntax, types, and arena escapes without invoking C compiler. |
-| `ube fmt <target>` | `ube fmt .` | Formats Ube source files to canonical indentation & spacing. |
-| `ube doc [target]` | `ube doc main.ube` | Generates documentation for public structs, functions, enums, and traits. |
-| `ube ai context` | `ube ai context . -o ctx.txt`| Generates a complete codebase architecture dump for LLM prompts. |
-| `ube ai guide` | `ube ai guide` | Prints the complete Ube grammar reference for LLMs. |
-| `ube lsp` | `ube lsp` | Starts the Language Server Protocol (hover, symbols, auto-complete). |
-
----
-
-## 🧩 VS Code Extension
-
-Official language support for Visual Studio Code is located under `editors/vscode`:
-- Syntax highlighting for all Ube keywords, types, and operators (`->`, `!`, `?`, `arena`).
-- Code snippets (`arena`, `fn`, `struct`, `match`, `spawn`, `select`).
-- LSP integration for Hover types, Go-to Definition, Document Symbols, and Diagnostics.
+| `ube run` | `ube run main.ube` | Compiles and executes in-memory. |
+| `ube build` | `ube build main.ube -o app` | Builds an optimized native executable (`-O2`). |
+| `ube test` | `ube test tests/` | Runs all test files or `test_*` functions. |
+| `ube check` | `ube check main.ube` | Audits syntax, ownership, and types without compiling. |
+| `ube fmt` | `ube fmt .` | Canonical auto-formatter for all `.ube` files. |
+| `ube doc` | `ube doc main.ube` | Generates documentation for public exports. |
+| `ube lsp` | `ube lsp` | Runs Language Server Protocol for editors. |
+| `ube ai guide` | `ube ai guide` | Outputs the complete formal language guide for LLMs. |
+| `ube ai context`| `ube ai context . -o ctx.txt`| Generates codebase architecture context for LLMs. |
 
 ---
 
