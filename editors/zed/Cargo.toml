@@ -1,0 +1,13 @@
+[package]
+name = "ube"
+version = "0.1.0"
+edition = "2021"
+authors = ["John Esleyer"]
+description = "Zed extension for the Ube programming language"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+zed_extension_api = "0.2.0"

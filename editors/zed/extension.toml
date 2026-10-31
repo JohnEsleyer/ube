@@ -1,0 +1,15 @@
+id = "ube"
+name = "Ube"
+version = "0.1.0"
+schema_version = 1
+authors = ["John Esleyer"]
+description = "Ube language support for Zed: Tree-sitter syntax highlighting, brackets, outline, and native LSP integration."
+repository = "https://github.com/JohnEsleyer/ube"
+
+[grammars.ube]
+repository = "https://github.com/johnesleyer/tree-sitter-ube"
+rev = "d081f73331721a1f7c208c83bad99a948bb64126"
+
+[language_servers.ube-lsp]
+name = "ube-lsp"
+languages = ["Ube"]

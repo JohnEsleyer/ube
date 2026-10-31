@@ -1,0 +1,23 @@
+name = "Ube"
+grammar = "ube"
+path_suffixes = ["ube"]
+line_comments = ["// "]
+tab_size = 4
+hard_tabs = false
+
+brackets = [
+  { start = "{", end = "}", close = true, newline = true },
+  { start = "[", end = "]", close = true, newline = true },
+  { start = "(", end = ")", close = true, newline = true },
+  { start = "\"", end = "\"", close = true, newline = false, not_in = ["string", "comment"] }
+]
+
+autoclose_before = ";:.,=}])> \n\t"
+
+# Indentation patterns
+increase_indent_pattern = "(?:\\{[^}]*|\\([^)]*|\\[[^\\]]*)$"
+decrease_indent_pattern = "^\\s*[\\}\\]\\)]"
+
+decrease_indent_patterns = [
+  { pattern = "^\\s*else\\b", valid_after = ["if"] },
+]

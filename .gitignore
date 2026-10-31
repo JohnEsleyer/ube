@@ -30,6 +30,8 @@ __pycache__/
 node_modules/
 editors/vscode/client/out/
 *.tsbuildinfo
+editors/zed/grammars
+editors/zed/target
 
 # textify
 codebase.txt
