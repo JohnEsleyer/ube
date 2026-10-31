@@ -20,20 +20,20 @@ fn main(){
     // Affine Types (string)
     // In Ube, string literals and strings are arena-backed and owned.
     let language: string = "Ube"
-    println_str(language)
+    println(language)
 
     // Move Semantics Demonstration
     let a = "Grounded Systems"
     let b = a  // 'a' is moved to 'b'; 'a' is now statically dead
 
-    println_str(b) // OK
-    // println_str(a) // Compile error if uncommented: use of moved variable 'a'
+    println(b) // OK
+    // println(a) // Compile error if uncommented: use of moved variable 'a'
 
     // Re-assigning to a mutable variable reactivates it:
     let mut status = "init"
     let prev = status // 'status' is moved
     status = "running" // 'status is reactivated by reassignment
 
-    println_str(status)
+    println(status)
 
 }

@@ -48,3 +48,6 @@ textify/
 
 # Dev tools
 dev/
+
+# Site
+/site

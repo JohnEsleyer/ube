@@ -65,7 +65,7 @@
         },
         {
           "name": "keyword.other.ube",
-          "match": "\\b(import|struct|enum|trait|let|mut|fn|extern)\\b"
+          "match": "\\b(let|mut|fn|struct|enum|trait|extern|import)\\b"
         }
       ]
     },

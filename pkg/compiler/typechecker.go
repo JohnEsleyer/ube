@@ -489,14 +489,44 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		if err := tc.assertCompat(PrimitiveType{Name: "bool"}, condT, s.At); err != nil {
 			return err
 		}
-		if err := tc.checkBlock(s.Then, env); err != nil {
+		thenEnv := childTypeEnvironment(env)
+		for k, v := range env.Vars {
+			thenEnv.Vars[k] = v
+		}
+		if err := tc.checkBlock(s.Then, thenEnv); err != nil {
 			return err
 		}
 		if s.Else != nil {
-			if blk, ok := s.Else.(*BlockStmt); ok {
-				return tc.checkBlock(blk, env)
+			elseEnv := childTypeEnvironment(env)
+			for k, v := range env.Vars {
+				elseEnv.Vars[k] = v
 			}
-			return tc.checkStmt(s.Else, env)
+			if blk, ok := s.Else.(*BlockStmt); ok {
+				if err := tc.checkBlock(blk, elseEnv); err != nil {
+					return err
+				}
+			} else {
+				if err := tc.checkStmt(s.Else, elseEnv); err != nil {
+					return err
+				}
+			}
+			// If a variable was moved in either branch, reconcile in parent
+			for name, tInfo := range thenEnv.Vars {
+				if tInfo.Moved {
+					env.updateVar(name, func(v *VarInfo) { v.Moved = true })
+				}
+			}
+			for name, eInfo := range elseEnv.Vars {
+				if eInfo.Moved {
+					env.updateVar(name, func(v *VarInfo) { v.Moved = true })
+				}
+			}
+		} else {
+			for name, tInfo := range thenEnv.Vars {
+				if tInfo.Moved {
+					env.updateVar(name, func(v *VarInfo) { v.Moved = true })
+				}
+			}
 		}
 
 	case *IfLetStmt:

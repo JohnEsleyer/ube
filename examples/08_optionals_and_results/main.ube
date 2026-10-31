@@ -24,12 +24,12 @@ fn start_server() -> bool ! string {
 fn main(){
     // If-let unwrapping for optionals
     if let user = find_user(1){
-        println_str(user) // Alice
+        println(user) // Alice
     }
 
     // Defaulting with or or_else
     let user2 = find_user(99) or_else "Guest"
-    println_str(user2) // Guest
+    println(user2) // Guest
 
     // Defaulting results with or_else
     let port = parse_port("invalid") or_else 3000

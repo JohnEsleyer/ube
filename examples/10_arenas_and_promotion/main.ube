@@ -18,5 +18,5 @@ fn main(){
         let mut s = "Hello"
         promote(s)
     }
-    println_str(message)
+    println(message)
 }

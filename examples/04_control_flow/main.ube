@@ -4,11 +4,11 @@ fn main() {
 
     // If / Else If / Else
     if speed > 80 {
-        println_str("Too fast")
+        println("Too fast")
     } else if speed > 60 {
-        println_str("Cruising")
+        println("Cruising")
     } else {
-        println_str("Slow")
+        println("Slow")
     }
 
     // While loop with continue and break

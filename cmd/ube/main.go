@@ -66,6 +66,8 @@ func execute(args []string) error {
 		return runFmt(args[1:])
 	case "doc":
 		return runDoc(args[1:])
+	case "flow":
+		return runFlow(args[1:])
 	case "context":
 		return runContext(args[1:])
 	case "guide", "primer":

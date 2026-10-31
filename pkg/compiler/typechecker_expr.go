@@ -341,6 +341,13 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				if err != nil {
 					return nil, err
 				}
+				if opt, isOpt := argT.(OptionalType); isOpt {
+					argName := assignmentRoot(arg)
+					if argName == "" {
+						argName = "expr"
+					}
+					return nil, fmt.Errorf("[%s] cannot print optional type '%s' directly (value may be null)\n  hint: unwrap it with 'or_else <default>' or an 'if let' block:\n        let val = %s or_else <default>\n        if let val = %s { %s(val) }", arg.Loc(), opt, argName, argName, id.Name)
+				}
 				if !printableType(argT) {
 					return nil, fmt.Errorf("[%s] %s does not support type '%s'", e.At, id.Name, argT)
 				}
@@ -495,8 +502,13 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					return nil, fmt.Errorf("[%s] push expects 1 argument", e.At)
 				}
 				if root := assignmentRoot(mem.Target); root != "" {
-					if info, found := env.LookupVar(root); found && env.ScopeDepth > info.Depth {
-						return nil, fmt.Errorf("[%s] Safety Error: Outer slice mutation attempted within inner arena at line %d; use promote(...) to export data", e.At, e.At.Line)
+					if info, found := env.LookupVar(root); found {
+						if !info.IsMut {
+							return nil, fmt.Errorf("[%s] cannot call 'push' on immutable slice '%s'; declare it with 'let mut'", e.At, root)
+						}
+						if env.ScopeDepth > info.Depth {
+							return nil, fmt.Errorf("[%s] Safety Error: Outer slice mutation attempted within inner arena at line %d; use promote(...) to export data", e.At, e.At.Line)
+						}
 					}
 				}
 				argT, err := tc.inferExpr(e.Args[0], env)

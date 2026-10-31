@@ -1,6 +1,19 @@
 ; Comments
 (comment) @comment
 
+; Explicit bindings for variable declarations
+("let") @keyword
+("mut") @keyword
+("fn") @keyword
+("struct") @keyword
+("enum") @keyword
+("match") @keyword
+
+; Member expressions should not re-classify statements
+(member_expression
+  target: (identifier) @type
+  member: (identifier) @property)
+
 ; Visibility and Modifiers
 (visibility) @keyword
 (mutability) @keyword

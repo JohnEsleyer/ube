@@ -20,10 +20,10 @@ fn main(){
     // Multiplexing channels with select using '=>'
     select {
          is_done = done => {
-            println_str("Worker completed all jobs.")
+            println("Worker completed all jobs.")
         }
         default => {
-            println_str("Worker still busy...")
+            println("Worker still busy...")
         }
     }
 }

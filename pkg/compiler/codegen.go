@@ -472,6 +472,9 @@ func (g *Generator) Generate() string {
 	}
 	for _, decl := range g.Program.Decls {
 		if fn, ok := decl.(*ExternFnDecl); ok {
+			if fn.Name == "puts" {
+				continue
+			}
 			params := make([]string, len(fn.Params))
 			for i, param := range fn.Params {
 				params[i] = g.toCType(param.Type)

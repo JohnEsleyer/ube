@@ -300,17 +300,17 @@ func TestIssue_ArrayForIn(t *testing.T) {
 // TEST 8: Slice mutation propagates through helper calls.
 // ----------------------------------------------------------------------------
 func TestIssue_SliceMutationAcrossHelperFunctions(t *testing.T) {
-	src := `fn push_inner(s: []i32) {
+	src := `fn push_inner(mut s: []i32) {
 		s.push(42)
 	}
 
-	fn push_outer(s: []i32) {
-		push_inner(s)
+	fn push_outer(mut s: []i32) {
+		push_inner(mut s)
 	}
 
 	fn main() {
 		let mut numbers = []i32{}
-		push_outer(numbers)
+		push_outer(mut numbers)
 		println(numbers.len)
 	}`
 
@@ -327,7 +327,7 @@ func TestIssue_SliceMutationAcrossHelperFunctions(t *testing.T) {
 // TEST 9: Scope-allocated references may not escape through function arguments.
 // ----------------------------------------------------------------------------
 func TestIssue_ScopeEscapeViaFunctionArgument(t *testing.T) {
-	src := `fn attach(dst: [][]i32, src: []i32) {
+	src := `fn attach(mut dst: [][]i32, src: []i32) {
 		dst.push(src)
 	}
 
@@ -336,7 +336,7 @@ func TestIssue_ScopeEscapeViaFunctionArgument(t *testing.T) {
 		arena {
 			let mut inner = []i32{}
 			inner.push(100)
-			attach(outer, inner)
+			attach(mut outer, inner)
 		}
 		println(outer[0][0])
 	}`

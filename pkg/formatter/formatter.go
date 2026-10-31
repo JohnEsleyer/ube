@@ -65,7 +65,7 @@ func Format(filename, source string) (string, error) {
 
 		leadingClosers := 0
 		for _, r := range trimmed {
-			if r == '}' {
+			if r == '}' || r == ')' || r == ']' {
 				leadingClosers++
 			} else {
 				break
@@ -295,7 +295,7 @@ func formatLine(line string) string {
 		case text == ")" || text == "]" || text == "," || text == ";" || text == "." || text == ":" || text == "?":
 			space = false
 		case text == "}":
-			space = prev != "" && prev != "{" && prev != "(" && prev != "[" && prev != "."
+			space = prev != "" && prev != "{" && prev != "(" && prev != "[" && prev != "." && prev != "=>"
 		case text == "(":
 			space = !(isWordLike(formatToken{kind: tokenKindOf(prev)}) || prev == ")" || prev == "]" || prev == "}")
 		case text == "[":

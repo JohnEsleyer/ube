@@ -401,10 +401,10 @@ func TestFunctionAllocatingAndReturning(t *testing.T) {
 		return s
 	}
 	fn append_suffix(base: string) -> string { return base + "_sweet" }
-	fn push_caller_slice(target: []i32, val: i32) { target.push(val) }
+	fn push_caller_slice(mut target: []i32, val: i32) { target.push(val) }
 	fn main() {
 		let mut numbers = make_range(4)
-		push_caller_slice(numbers, 999)
+		push_caller_slice(mut numbers, 999)
 		for num in numbers { println(num) }
 		let s = append_suffix("ube")
 		println(s)

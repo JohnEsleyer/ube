@@ -22,7 +22,7 @@ fn (d Dog) speak() -> string {
 
 // Dynamic dispatch via trait fat pointer
 fn announce(s: Speaker){
-    println_str(s.speak())
+    println(s.speak())
 }
 
 fn main(){

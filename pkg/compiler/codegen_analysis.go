@@ -177,7 +177,8 @@ func (g *Generator) analyzeSliceMutations() {
 					continue
 				}
 				_, isSlice := param.Type.(SliceType)
-				if param.IsMut || (isSlice && g.stmtMutatesName(fn.Body, param.Name)) {
+				_ = isSlice
+				if param.IsMut {
 					g.sliceMutParams[name][i] = true
 					changed = true
 				}

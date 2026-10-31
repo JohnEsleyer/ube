@@ -1,15 +1,15 @@
 
 fn work(){
-    println_str("1. Enter function")
-    defer println_str("4. Exit function cleanup")
+    println("1. Enter function")
+    defer println("4. Exit function cleanup")
 
     let mut i = 0
     while i < 2 {
-        defer println_str("Loop iteration cleanup")
+        defer println("Loop iteration cleanup")
         i += 1
     }
 
-    println_str("2. Work in progress")
+    println("2. Work in progress")
 
 }
 

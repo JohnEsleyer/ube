@@ -7,16 +7,16 @@ enum Status {
 fn handle_status(s: Status){
     match s {
         Idle => {
-            println_str("Status: Idle")
+            println("Status: Idle")
         }
         Loading(progress) => {
             print("Progress: ")
             print(progress)
-            println_str("%")
+            println("%")
         }
         Error(err_msg) => {
             print("Failed with: ")
-            println_str(err_msg)
+            println(err_msg)
         }
     }
 }
