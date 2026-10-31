@@ -126,6 +126,11 @@ func (p *Parser) parseMultiplicative() Expr {
 
 func (p *Parser) parseUnary() Expr {
 	tok := p.peek(0)
+	if tok.Type == TokenMut {
+		p.advance()
+		operand := p.parseUnary()
+		return &UnaryExpr{At: tok.Loc, Op: "mut", Operand: operand}
+	}
 	if tok.Type == TokenMinus || tok.Type == TokenBang || tok.Type == TokenAmp || tok.Type == TokenStar || tok.Type == TokenTilde {
 		p.advance()
 		operand := p.parseUnary()

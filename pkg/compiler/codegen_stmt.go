@@ -46,8 +46,8 @@ func (g *Generator) genDecl(decl Decl) {
 				if sl, ok := p.Type.(SliceType); ok {
 					m := mangleTypeName(sl.Elem.String())
 					g.sliceVars[p.Name] = m
-					g.sliceParamVars[p.Name] = true
 				}
+				g.sliceParamVars[p.Name] = true
 			}
 			params = append(params, fmt.Sprintf("%s %s", ct, p.Name))
 		}

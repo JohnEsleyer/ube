@@ -273,10 +273,15 @@ func (p *Parser) parseExternDecl() *ExternFnDecl {
 
 	var params []FieldDecl
 	for !p.check(TokenRParen) && !p.check(TokenEOF) {
+		pMut := false
+		if p.check(TokenMut) {
+			p.advance()
+			pMut = true
+		}
 		pName := p.expect(TokenIdent, "Expected parameter name").Val
 		p.expect(TokenColon, "Expected ':' after parameter name")
 		pType := p.parseType()
-		params = append(params, FieldDecl{Name: pName, Type: pType})
+		params = append(params, FieldDecl{Name: pName, Type: pType, IsMut: pMut})
 		if p.check(TokenComma) {
 			p.advance()
 		}
@@ -330,10 +335,15 @@ func (p *Parser) parseFnDecl() *FnDecl {
 
 	var params []FieldDecl
 	for !p.check(TokenRParen) && !p.check(TokenEOF) {
+		pMut := false
+		if p.check(TokenMut) {
+			p.advance()
+			pMut = true
+		}
 		pName := p.expect(TokenIdent, "Expected parameter name").Val
 		p.expect(TokenColon, "Expected ':'")
 		pType := p.parseType()
-		params = append(params, FieldDecl{Name: pName, Type: pType})
+		params = append(params, FieldDecl{Name: pName, Type: pType, IsMut: pMut})
 		if p.check(TokenComma) {
 			p.advance()
 		}

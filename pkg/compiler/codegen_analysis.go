@@ -173,10 +173,11 @@ func (g *Generator) analyzeSliceMutations() {
 				name = fmt.Sprintf("%s_%s", fn.Receiver.Type, fn.Name)
 			}
 			for i, param := range fn.Params {
-				if _, isSlice := param.Type.(SliceType); !isSlice || g.sliceMutParams[name][i] {
+				if g.sliceMutParams[name][i] {
 					continue
 				}
-				if g.stmtMutatesName(fn.Body, param.Name) {
+				_, isSlice := param.Type.(SliceType)
+				if param.IsMut || (isSlice && g.stmtMutatesName(fn.Body, param.Name)) {
 					g.sliceMutParams[name][i] = true
 					changed = true
 				}

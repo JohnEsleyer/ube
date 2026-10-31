@@ -7,6 +7,7 @@ type VarInfo struct {
 	IsMut      bool
 	Depth      int
 	ValueDepth int
+	LoopDepth  int
 	Moved      bool
 }
 
@@ -223,22 +224,76 @@ func (tc *Typechecker) isCopyType(t UbeType) bool {
 	if t == nil {
 		return true
 	}
-	switch t.(type) {
+	switch typ := t.(type) {
 	case PrimitiveType, RangeType, ChanType, SliceType:
+		return true
+	case ArrayType:
+		return tc.isCopyType(typ.Elem)
+	case OptionalType:
+		return tc.isCopyType(typ.Inner)
+	case ResultType:
+		return tc.isCopyType(typ.Ok) && tc.isCopyType(typ.Err)
+	default:
+		return false
+	}
+}
+
+// isMoveOnAssignmentType reports whether a value of this type is linearly
+// consumed by `let b = a` / `b = a`. Slices and builders are owned resources
+// even though they are passed to ordinary functions as borrowed views for
+// backwards compatibility with Ube's existing slice helpers.
+func (tc *Typechecker) isMoveOnAssignmentType(t UbeType) bool {
+	if t == nil {
+		return false
+	}
+	if !tc.isCopyType(t) {
+		return true
+	}
+	switch t.(type) {
+	case SliceType, StringBuilderType:
 		return true
 	default:
 		return false
 	}
 }
 
-func (tc *Typechecker) markMovedIfAffine(expr Expr, env *TypeEnvironment) {
-	if id, ok := expr.(*IdentExpr); ok {
-		if info, found := env.LookupVar(id.Name); found && !tc.isCopyType(info.Type) {
-			env.updateVar(id.Name, func(v *VarInfo) {
-				v.Moved = true
-			})
-		}
+func movedValueError(loc SourceLocation, name string) error {
+	return fmt.Errorf("[%s] use of moved value '%s' (use of moved variable '%s')", loc, name, name)
+}
+
+// markMovedIfAffine marks an affine resource as consumed by a call, channel
+// send, or pool free. It also enforces the loop boundary invariant: a value
+// declared outside a loop cannot be moved on one iteration and then be
+// missing on the next.
+func (tc *Typechecker) markMovedIfAffine(expr Expr, env *TypeEnvironment) error {
+	return tc.markMovedIfType(expr, env, func(t UbeType) bool {
+		return !tc.isCopyType(t)
+	})
+}
+
+// markMovedOnAssignment applies move-on-assignment semantics. Slices and
+// StringBuilder values are additionally treated as owned resources here, so
+// `let b = a` makes `a` statically dead.
+func (tc *Typechecker) markMovedOnAssignment(expr Expr, env *TypeEnvironment) error {
+	return tc.markMovedIfType(expr, env, tc.isMoveOnAssignmentType)
+}
+
+func (tc *Typechecker) markMovedIfType(expr Expr, env *TypeEnvironment, shouldMove func(UbeType) bool) error {
+	root := assignmentRoot(expr)
+	if root == "" {
+		return nil
 	}
+	info, found := env.LookupVar(root)
+	if !found || !shouldMove(info.Type) {
+		return nil
+	}
+	if env.LoopDepth > 0 && info.LoopDepth < env.LoopDepth {
+		return fmt.Errorf("[%s] cannot move variable '%s' inside a loop; it was declared outside the loop", expr.Loc(), root)
+	}
+	env.updateVar(root, func(v *VarInfo) {
+		v.Moved = true
+	})
+	return nil
 }
 
 func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
@@ -279,11 +334,13 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			}
 		}
 		valT = valT.WithRegion(env.ScopeDepth)
-		tc.markMovedIfAffine(s.Value, env)
+		if err := tc.markMovedOnAssignment(s.Value, env); err != nil {
+			return err
+		}
 		if tc.hasLifetime(valT) && tc.exprDepth(s.Value, env) > env.ScopeDepth {
 			return fmt.Errorf("[%s] Safety Error: value rooted at scope depth %d cannot escape into '%s' at depth %d", s.At, tc.exprDepth(s.Value, env), s.Name, env.ScopeDepth)
 		}
-		env.Vars[s.Name] = VarInfo{Type: valT, IsMut: s.Mut, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Value, env), Moved: false}
+		env.Vars[s.Name] = VarInfo{Type: valT, IsMut: s.Mut, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Value, env), LoopDepth: env.LoopDepth, Moved: false}
 
 	case *DeferStmt:
 		if _, ok := s.Call.(*CallExpr); !ok {
@@ -363,7 +420,9 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 				})
 			}
 		}
-		tc.markMovedIfAffine(s.RHS, env)
+		if err := tc.markMovedOnAssignment(s.RHS, env); err != nil {
+			return err
+		}
 		if opt, ok := lhsT.(OptionalType); ok {
 			if lit, isNull := s.RHS.(*LiteralExpr); isNull && lit.Val == "null" {
 				return nil
@@ -450,7 +509,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			return fmt.Errorf("[%s] if-let requires optional type, got '%s'", s.At, optT)
 		}
 		thenEnv := childTypeEnvironment(env)
-		thenEnv.Vars[s.VarName] = VarInfo{Type: oType.Inner, IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Expr, env)}
+		thenEnv.Vars[s.VarName] = VarInfo{Type: oType.Inner, IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Expr, env), LoopDepth: thenEnv.LoopDepth}
 		if err := tc.checkBlock(s.Then, thenEnv); err != nil {
 			return err
 		}
@@ -494,7 +553,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		}
 		loopEnv := childTypeEnvironment(env)
 		loopEnv.LoopDepth = env.LoopDepth + 1
-		loopEnv.Vars[s.VarName] = VarInfo{Type: unwrappedType, IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Call, env)}
+		loopEnv.Vars[s.VarName] = VarInfo{Type: unwrappedType, IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Call, env), LoopDepth: loopEnv.LoopDepth}
 		return tc.checkBlock(s.Body, loopEnv)
 
 	case *ForStmt:
@@ -516,7 +575,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		s.IterType = iterT
 		loopEnv := childTypeEnvironment(env)
 		loopEnv.LoopDepth = env.LoopDepth + 1
-		loopEnv.Vars[s.ItemName] = VarInfo{Type: elemT, IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Iter, env)}
+		loopEnv.Vars[s.ItemName] = VarInfo{Type: elemT, IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Iter, env), LoopDepth: loopEnv.LoopDepth}
 		return tc.checkBlock(s.Body, loopEnv)
 
 	case *ArenaStmt:
@@ -572,7 +631,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			}
 			sc.ChanElem = chanType.Elem
 			caseEnv := childTypeEnvironment(env)
-			caseEnv.Vars[sc.VarName] = VarInfo{Type: chanType.Elem, IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(sc.Chan, env)}
+			caseEnv.Vars[sc.VarName] = VarInfo{Type: chanType.Elem, IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(sc.Chan, env), LoopDepth: caseEnv.LoopDepth}
 			if err := tc.checkBlock(sc.Body, caseEnv); err != nil {
 				return err
 			}
@@ -631,7 +690,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			}
 			armEnv := childTypeEnvironment(env)
 			for i, b := range arm.Bindings {
-				armEnv.Vars[b] = VarInfo{Type: expected[i], IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Expr, env)}
+				armEnv.Vars[b] = VarInfo{Type: expected[i], IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Expr, env), LoopDepth: armEnv.LoopDepth}
 			}
 			if blk, ok := arm.Body.(*BlockStmt); ok {
 				if err := tc.checkBlock(blk, armEnv); err != nil {
@@ -760,7 +819,7 @@ func (tc *Typechecker) Check(prog *Program) error {
 				env.Vars[fn.Receiver.Name] = VarInfo{Type: fn.Receiver.Type, IsMut: fn.Receiver.IsMut, Depth: 0, ValueDepth: 0}
 			}
 			for _, p := range fn.Params {
-				env.Vars[p.Name] = VarInfo{Type: p.Type, IsMut: false, Depth: 0, ValueDepth: 0}
+				env.Vars[p.Name] = VarInfo{Type: p.Type, IsMut: p.IsMut, Depth: 0, ValueDepth: 0}
 			}
 			if err := tc.checkBlock(fn.Body, env); err != nil {
 				return err

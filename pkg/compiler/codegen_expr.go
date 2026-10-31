@@ -85,6 +85,9 @@ func (g *Generator) genExpr(expr Expr) string {
 		return fmt.Sprintf("(%s %s %s)", g.genExpr(e.Left), e.Op, g.genExpr(e.Right))
 
 	case *UnaryExpr:
+		if e.Op == "mut" {
+			return g.genExpr(e.Operand)
+		}
 		return fmt.Sprintf("%s(%s)", e.Op, g.genExpr(e.Operand))
 
 	case *CallExpr:
@@ -100,6 +103,14 @@ func (g *Generator) genExpr(expr Expr) string {
 				ct := g.toCType(elemType)
 				return fmt.Sprintf("({ %s %s = {0}; (void)ube_raw_chan_recv(%s, &%s); %s; })", ct, tmp, g.genExpr(mem.Target), tmp, tmp)
 			}
+		}
+		if gen, ok := e.Callee.(*GenericTypeExpr); ok && len(e.Args) == 1 && (gen.BaseType == "Chan" || gen.BaseType == "Pool") {
+			if gen.BaseType == "Chan" {
+				return fmt.Sprintf("ube_raw_chan_new(%s, sizeof(%s))", g.genExpr(e.Args[0]), g.toCType(gen.ElemType))
+			}
+			m := mangleTypeName(gen.ElemType.String())
+			g.toCType(PoolType{Elem: gen.ElemType})
+			return fmt.Sprintf("Pool_%s_new(%s)", m, g.genExpr(e.Args[0]))
 		}
 		if id, ok := e.Callee.(*IdentExpr); ok && id.Name == "format" {
 			if len(e.Args) == 0 {
@@ -294,7 +305,7 @@ func (g *Generator) genExpr(expr Expr) string {
 			if mem.Member == "close" {
 				return fmt.Sprintf("ube_raw_chan_close(%s)", g.genExpr(mem.Target))
 			}
-			if e.PoolElem != nil && mem.Member == "spawn" {
+			if e.PoolElem != nil && (mem.Member == "spawn" || mem.Member == "alloc") {
 				pName := mangleTypeName(e.PoolElem.String())
 				return fmt.Sprintf("Pool_%s_spawn(%s, %s)", pName, g.genExpr(mem.Target), g.genExpr(e.Args[0]))
 			}
@@ -302,7 +313,7 @@ func (g *Generator) genExpr(expr Expr) string {
 				pName := mangleTypeName(e.PoolElem.String())
 				return fmt.Sprintf("Pool_%s_get(%s, %s)", pName, g.genExpr(mem.Target), g.genExpr(e.Args[0]))
 			}
-			if e.PoolElem != nil && mem.Member == "despawn" {
+			if e.PoolElem != nil && (mem.Member == "despawn" || mem.Member == "free") {
 				pName := mangleTypeName(e.PoolElem.String())
 				return fmt.Sprintf("Pool_%s_despawn(%s, %s)", pName, g.genExpr(mem.Target), g.genExpr(e.Args[0]))
 			}

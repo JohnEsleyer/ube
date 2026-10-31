@@ -56,6 +56,13 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			if err != nil {
 				return nil, err
 			}
+			// Zero-leak arena sandbox invariant: arena-backed references may
+			// only escape through an explicit promote(...) terminal value.
+			if tc.hasLifetime(t) {
+				if _, isPromote := es.Expr.(*PromoteExpr); !isPromote {
+					return nil, fmt.Errorf("[%s] arena expression cannot return unpromoted value of type '%s'; use promote(...) to retain it", e.At, t)
+				}
+			}
 			e.Type = t
 			return t, nil
 		}
@@ -120,7 +127,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		}
 		if v, ok := env.LookupVar(e.Name); ok {
 			if v.Moved {
-				return nil, fmt.Errorf("[%s] use of moved value '%s'", e.At, e.Name)
+				return nil, movedValueError(e.At, e.Name)
 			}
 			if err := requireUnsafePointerUse(v.Type, env, e.At); err != nil {
 				return nil, err
@@ -221,6 +228,9 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		}
 
 	case *UnaryExpr:
+		if e.Op == "mut" {
+			return tc.inferExpr(e.Operand, env)
+		}
 		opndT, err := tc.inferExpr(e.Operand, env)
 		if err != nil {
 			return nil, err
@@ -264,6 +274,44 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 	case *CallExpr:
 		if id, ok := e.Callee.(*IdentExpr); ok && tc.Externs[id.Name] && env.UnsafeDepth == 0 {
 			return nil, fmt.Errorf("[%s] Safety Error: foreign function '%s' can only be called inside unsafe { ... }", e.At, id.Name)
+		}
+		// Direct generic constructors: Chan[T](cap) and Pool[T](cap).
+		if gen, ok := e.Callee.(*GenericTypeExpr); ok && (gen.BaseType == "Chan" || gen.BaseType == "Pool") {
+			if len(e.Args) != 1 {
+				return nil, fmt.Errorf("[%s] %s constructor expects a capacity", e.At, gen.BaseType)
+			}
+			capT, err := tc.inferExpr(e.Args[0], env)
+			if err != nil {
+				return nil, err
+			}
+			if !integerType(capT) {
+				return nil, fmt.Errorf("[%s] %s capacity must be an integer, got '%s'", e.At, gen.BaseType, capT)
+			}
+			if gen.BaseType == "Chan" {
+				ch := ChanType{Elem: gen.ElemType}
+				return ch, tc.validateType(ch, e.At)
+			}
+			p := PoolType{Elem: gen.ElemType}
+			return p, tc.validateType(p, e.At)
+		}
+		if id, ok := e.Callee.(*IdentExpr); ok && (id.Name == "Chan" || id.Name == "Pool") && len(e.TypeArgs) == 1 {
+			if len(e.Args) != 1 {
+				return nil, fmt.Errorf("[%s] %s constructor expects a capacity", e.At, id.Name)
+			}
+			capT, err := tc.inferExpr(e.Args[0], env)
+			if err != nil {
+				return nil, err
+			}
+			if !integerType(capT) {
+				return nil, fmt.Errorf("[%s] %s capacity must be an integer, got '%s'", e.At, id.Name, capT)
+			}
+			elemT := tc.resolveType(e.TypeArgs[0])
+			if id.Name == "Chan" {
+				ch := ChanType{Elem: elemT}
+				return ch, tc.validateType(ch, e.At)
+			}
+			p := PoolType{Elem: elemT}
+			return p, tc.validateType(p, e.At)
 		}
 		if id, ok := e.Callee.(*IdentExpr); ok && id.Name == "format" {
 			if len(e.Args) == 0 {
@@ -528,6 +576,11 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					if err := tc.assertCompat(ch.Elem, argT, e.At); err != nil {
 						return nil, err
 					}
+					// Complete linear ownership handoff: the sending thread
+					// can never touch the value again.
+					if err := tc.markMovedIfAffine(e.Args[0], env); err != nil {
+						return nil, err
+					}
 					return PrimitiveType{Name: "void"}, nil
 				}
 			}
@@ -546,15 +599,18 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					}
 					return p, nil
 				}
-				if mem.Member == "spawn" {
+				if mem.Member == "spawn" || mem.Member == "alloc" {
 					if len(e.Args) != 1 {
-						return nil, fmt.Errorf("[%s] Pool.spawn expects one value", e.At)
+						return nil, fmt.Errorf("[%s] Pool.%s expects one value", e.At, mem.Member)
 					}
 					valueType, err := tc.inferExpr(e.Args[0], env)
 					if err != nil {
 						return nil, err
 					}
 					if err := tc.assertCompat(p.Elem, valueType, e.At); err != nil {
+						return nil, err
+					}
+					if err := tc.markMovedIfAffine(e.Args[0], env); err != nil {
 						return nil, err
 					}
 					return CustomType{Name: "UbeHandle"}, nil
@@ -572,9 +628,9 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					}
 					return OptionalType{Inner: p.Elem}, nil
 				}
-				if mem.Member == "despawn" {
+				if mem.Member == "despawn" || mem.Member == "free" {
 					if len(e.Args) != 1 {
-						return nil, fmt.Errorf("[%s] Pool.despawn expects a handle", e.At)
+						return nil, fmt.Errorf("[%s] Pool.%s expects a handle", e.At, mem.Member)
 					}
 					handleType, err := tc.inferExpr(e.Args[0], env)
 					if err != nil {
@@ -582,6 +638,13 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					}
 					if err := tc.assertCompat(CustomType{Name: "UbeHandle"}, handleType, e.At); err != nil {
 						return nil, err
+					}
+					// free() linearly consumes the handle, making any later
+					// get()/free() on it a compile-time error.
+					if mem.Member == "free" {
+						if err := tc.markMovedIfAffine(e.Args[0], env); err != nil {
+							return nil, err
+						}
 					}
 					return PrimitiveType{Name: "bool"}, nil
 				}
@@ -599,7 +662,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 						}
 					}
 				}
-				if err := tc.checkCallArgs(e.Args, sig.Params, sig.Escaping, env, e.At); err != nil {
+				if err := tc.checkCallArgsWithReceiver(mem.Target, sig.ReceiverMut, e.Args, sig.Params, sig.Escaping, env, e.At); err != nil {
 					return nil, err
 				}
 				if err := requireUnsafePointerUse(sig.RetType, env, e.At); err != nil {
@@ -875,10 +938,34 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 }
 
 func (tc *Typechecker) checkCallArgs(args []Expr, params []FieldDecl, escaping []bool, env *TypeEnvironment, loc SourceLocation) error {
+	return tc.checkCallArgsWithReceiver(nil, false, args, params, escaping, env, loc)
+}
+
+// checkCallArgsWithReceiver verifies call arguments, enforces move semantics,
+// and rejects aliasing between mutable loans in a single call.
+func (tc *Typechecker) checkCallArgsWithReceiver(receiver Expr, receiverMut bool, args []Expr, params []FieldDecl, escaping []bool, env *TypeEnvironment, loc SourceLocation) error {
 	if len(args) != len(params) {
 		return fmt.Errorf("[%s] function expects %d arguments, got %d", loc, len(params), len(args))
 	}
+
+	mutRoots := make(map[string]bool)
+	allRoots := make(map[string]bool)
+
+	if receiver != nil {
+		rRoot := assignmentRoot(receiver)
+		if rRoot != "" {
+			allRoots[rRoot] = true
+			if receiverMut {
+				if vi, found := env.LookupVar(rRoot); found && !vi.IsMut {
+					return fmt.Errorf("[%s] cannot call mutating method on immutable value '%s'", loc, rRoot)
+				}
+				mutRoots[rRoot] = true
+			}
+		}
+	}
+
 	for i, arg := range args {
+		_, explicitMut := mutArgOperand(arg)
 		actual, err := tc.inferExpr(arg, env)
 		if err != nil {
 			return err
@@ -886,6 +973,32 @@ func (tc *Typechecker) checkCallArgs(args []Expr, params []FieldDecl, escaping [
 		if _, rawPointer := actual.(PointerType); rawPointer && env.UnsafeDepth == 0 {
 			return fmt.Errorf("[%s] Safety Error: passing a raw pointer requires an unsafe block", arg.Loc())
 		}
+
+		paramMut := params[i].IsMut
+		if explicitMut && !paramMut {
+			return fmt.Errorf("[%s] argument is marked 'mut' but parameter '%s' is not mutable", arg.Loc(), params[i].Name)
+		}
+		root := assignmentRoot(arg)
+		if paramMut {
+			if root != "" {
+				if vi, found := env.LookupVar(root); found && !vi.IsMut {
+					return fmt.Errorf("[%s] cannot pass immutable variable '%s' as mutable parameter '%s'", arg.Loc(), root, params[i].Name)
+				}
+				// A mutable loan must be disjoint from every other argument
+				// and from a mutable receiver in the same call.
+				if allRoots[root] {
+					return fmt.Errorf("[%s] aliasing violation: variable '%s' cannot be passed as mutable argument while already referenced in the same call", arg.Loc(), root)
+				}
+				mutRoots[root] = true
+				allRoots[root] = true
+			}
+		} else if root != "" {
+			if mutRoots[root] {
+				return fmt.Errorf("[%s] aliasing violation: variable '%s' cannot be passed as both mutable and immutable argument in the same call", arg.Loc(), root)
+			}
+			allRoots[root] = true
+		}
+
 		if i < len(escaping) && escaping[i] && tc.hasLifetime(actual) {
 			if depth := tc.exprDepth(arg, env); depth > 0 {
 				return fmt.Errorf("[%s] Safety Error: argument rooted at scope depth %d may escape through a function parameter", arg.Loc(), depth)
@@ -911,7 +1024,13 @@ func (tc *Typechecker) checkCallArgs(args []Expr, params []FieldDecl, escaping [
 		if err := tc.assertCompat(paramType, actual, arg.Loc()); err != nil {
 			return err
 		}
-		tc.markMovedIfAffine(arg, env)
+		// Mutable parameters are loans, not moves. Every other affine
+		// argument is linearly consumed by the call.
+		if !paramMut {
+			if err := tc.markMovedIfAffine(arg, env); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

@@ -8,7 +8,7 @@
 **The sweet, grounded systems language.**  
 *Easy to program like Go. Fast like C. Zero Garbage Collection.*
 
-**Latest version: `0.5.5`**
+**Latest version: `0.5.6`**
 
 </div>
 
@@ -47,7 +47,7 @@ ube version
 
 ## 🧁 Compilation Pipeline
 
-1. **Frontend**: Lexing, parsing, monomorphization of generics, visibility checks, affine ownership tracking, and arena lifetime escape analysis.
+1. **Frontend**: Lexing, parsing, monomorphization of generics, visibility checks, total affine ownership tracking, disjoint mutable-loan checking, and arena lifetime escape analysis.
 2. **C Code Generation**: Emits clean, deterministic ANSI C99 code (`.c`).
 3. **Native Compilation**: Invokes system `clang` or `gcc` with `-O2` optimization to generate standalone, dependency-free executables.
 
@@ -60,7 +60,39 @@ Ube does not use a tracing or reference-counting garbage collector. Memory is or
 1. **The Regional Bump Arena (`arena { ... }`)**: Every allocation (dynamic slices, strings, string builders) defaults to the active arena level. Exiting an arena rewinds the watermark pointer in **1 CPU instruction**, freeing all allocations instantly without heap fragmentation.
 2. **Explicit Promotion (`promote(...)`)**: When memory allocated inside an arena must outlive it, `promote` copies the value into the parent arena before the child arena is rewound.
 3. **The Upward Reference Invariant**: Inner arenas cannot mutate outer references (e.g. calling `.push()` on an outer slice from inside an arena is rejected at compile time).
-4. **Generational Handle Pools (`Pool[T]`)**: For long-lived entity graphs, pooled allocations are referenced via generational index handles (`Handle[T]`), preventing use-after-free and dangling pointers.
+4. **Generational Handle Pools (`Pool[T]`)**: For long-lived entity graphs, pooled allocations are referenced via generational index handles (`Handle[T]`). Calling `free` on a handle consumes it linearly, so use-after-free and double-free are rejected before the program runs.
+
+### Compile-Time Safety Without a Borrow Checker
+
+Ube deliberately avoids Rust-style lifetime annotations. Instead, a small set of
+linear and structural rules gives it static memory safety:
+
+1. **Move on assignment** — assigning or initializing from an owned value makes
+   the source statically dead:
+   ```ube
+   let a = Resource{id: 1}
+   let b = a          // 'a' is moved
+   println(a.id)      // compile error: use of moved variable 'a'
+   ```
+   Reassigning the variable reactivates it.
+2. **Disjoint mutable loans** — mutable parameters use an explicit `mut`
+   marker. A variable cannot be loaned mutably twice, or mutably and immutably,
+   in the same call:
+   ```ube
+   fn add(mut dst: Counter, src: Counter) { dst.val += src.val }
+   add(mut c, c)      // compile error: aliasing violation
+   ```
+3. **Ownership handoff on `send`** — sending an owned value through a channel
+   consumes it in the sending thread.
+4. **Linear pool handles** — `pool.free(h)` consumes `h`; any later
+   `pool.get(h)` or `pool.free(h)` is a compile error.
+5. **Loop move protection** — a value declared outside a loop cannot be moved
+   inside it, because the next iteration would observe the moved value.
+6. **Arena sandboxing** — an `arena` expression cannot export an arena-backed
+   reference unless the terminal expression is `promote(...)`.
+
+These checks run during a single type-checking pass, with no lifetime
+parameters, no borrow-splitting, and no runtime ownership bookkeeping.
 
 ---
 
@@ -119,6 +151,23 @@ fn (c Counter) read() -> i32 {
 // Mutable receiver (mutates original)
 fn (mut c Counter) bump(amount: i32) {
     c.val = c.val + amount
+}
+```
+
+#### Mutable Parameters (`mut`)
+A `mut` parameter is an exclusive in-out loan. The caller must mark the
+argument with `mut`, and the loan must be disjoint from every other argument in
+the same call:
+
+```ube
+fn append_all(mut target: []i32, src: []i32) {
+    for v in src { target.push(v) }
+}
+
+fn main() {
+    let mut dst = []i32{}
+    append_all(mut dst, []i32{1, 2, 3})
+    println(dst.len) // 3
 }
 ```
 
@@ -389,7 +438,7 @@ fn main() {
 
 ### 12. Channels & Concurrency (`spawn` & `select`)
 
-Ube uses shared-nothing concurrency. Complex pointers cannot cross thread boundaries; data is safely moved across worker threads:
+Ube uses shared-nothing concurrency. Complex pointers cannot cross thread boundaries; owned values are moved across worker threads. After `jobs.send(value)`, the sending thread can no longer access `value`:
 
 ```ube
 fn worker(jobs: Chan[i32], done: Chan<bool>) {
@@ -461,10 +510,14 @@ fn main() {
 
     bullets.free(h1)
 
-    // Stale handle detection prevents dangling references / use-after-free:
-    // bullets.get(h1) -> Triggers handle invalidation panic
+    // free() linearly consumes h1, so this is rejected at compile time:
+    // bullets.get(h1) -> error: use of moved variable 'h1'
 }
 ```
+
+`Pool.spawn` / `Pool.despawn` remain available as the runtime-generational
+spelling, while `Pool.alloc` / `Pool.free` additionally enforce linear handle
+consumption statically.
 
 ---
 

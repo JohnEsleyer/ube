@@ -20,8 +20,24 @@ func assignmentRoot(expr Expr) string {
 		return assignmentRoot(e.Target)
 	case *IndexExpr:
 		return assignmentRoot(e.Target)
+	case *UnaryExpr:
+		if e.Op == "mut" {
+			return assignmentRoot(e.Operand)
+		}
+	case *TraitCoerceExpr:
+		return assignmentRoot(e.Value)
+	case *ArrayToSliceExpr:
+		return assignmentRoot(e.ArrayExpr)
 	}
 	return ""
+}
+
+// mutArgOperand unwraps an explicit `mut` argument marker at a call site.
+func mutArgOperand(expr Expr) (Expr, bool) {
+	if u, ok := expr.(*UnaryExpr); ok && u.Op == "mut" {
+		return u.Operand, true
+	}
+	return expr, false
 }
 
 func (tc *Typechecker) hasLifetime(t UbeType) bool {
