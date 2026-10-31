@@ -125,6 +125,21 @@ editors/zed/
 - **LSP features (Hover, Definition) not working**:
   - Ensure `ube` is in your system `$PATH` (`which ube`).
   - You can test the language server directly in your terminal: `ube lsp`.
+- **"Ube Icons" not appearing in the icon theme selector**:
+  - Zed caches extension metadata in `~/.local/share/zed/extensions/index.json`. If the icon theme was added to the extension **after** it was first installed as a dev extension, this cache becomes stale and the theme won't appear in `icon theme selector: toggle`.
+  - **Fix:** Manually update the index to register the icon theme:
+    ```sh
+    python3 << 'EOF'
+    import json
+    idx = '/home/$USER/.local/share/zed/extensions/index.json'
+    with open(idx) as f: data = json.load(f)
+    data['extensions']['ube']['manifest']['icon_themes'] = ['icon_themes/ube.json']
+    data['icon_themes']['Ube Icons'] = {'extension': 'ube', 'path': 'icon_themes/ube.json'}
+    with open(idx, 'w') as f: json.dump(data, f, indent=4)
+    print("Done — restart Zed")
+    EOF
+    ```
+  - **Alternative:** Uninstall the extension in Zed and re-add it via `zed: install dev extension` → select `editors/zed`. Zed will rebuild the index from scratch, picking up the icon theme.
 - **Check Zed Logs**:
   - Linux: `tail -n 50 ~/.local/share/zed/logs/Zed.log`
   - macOS: `tail -n 50 ~/Library/Logs/Zed/Zed.log`
