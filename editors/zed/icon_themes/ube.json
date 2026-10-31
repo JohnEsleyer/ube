@@ -1,0 +1,31 @@
+{
+  "$schema": "https://zed.dev/schema/icon_themes/v0.3.0.json",
+  "name": "Ube Icons",
+  "author": "John Esleyer",
+  "themes": [
+    {
+      "name": "Ube Icons",
+      "appearance": "dark",
+      "file_suffixes": {
+        "ube": "ube"
+      },
+      "file_icons": {
+        "ube": {
+          "path": "./icons/ube.svg"
+        }
+      }
+    },
+    {
+      "name": "Ube Icons",
+      "appearance": "light",
+      "file_suffixes": {
+        "ube": "ube"
+      },
+      "file_icons": {
+        "ube": {
+          "path": "./icons/ube.svg"
+        }
+      }
+    }
+  ]
+}

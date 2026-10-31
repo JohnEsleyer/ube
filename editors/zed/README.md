@@ -14,6 +14,7 @@ Equips the [Zed](https://zed.dev) editor with Tree-sitter grammar support, Vim t
 - **Code Outline & Symbol Search**: Fast navigation in Zed's Outline Panel (`Cmd+Shift+O` / `Ctrl+Shift+O`) across functions, methods, structs, enums, and traits.
 - **Vim Mode Text Objects**: Method-level and struct-level navigation (`af`, `if`, `ac`, `ic`).
 - **Runnable Code Buttons**: Gutter **Run** buttons for `fn main()` and `test_*` functions directly in the editor.
+- **Custom File Icon**: Official Ube jam jar icon for `.ube` files in the project panel and editor tabs.
 - **Language Server Protocol (`ube lsp`)**:
   - Hover type inspection
   - Go to definition
@@ -96,6 +97,10 @@ editors/zed/
 ├── README.md                   # Setup documentation
 ├── src/
 │   └── lib.rs                  # LSP launcher (invokes `ube lsp`)
+├── icon_themes/
+│   └── ube.json                # File icon theme configuration
+├── icons/
+│   └── ube.svg                 # Ube jar logo icon
 ├── languages/
 │   └── ube/
 │       ├── config.toml         # Comment styles, brackets, tabs, regex indents

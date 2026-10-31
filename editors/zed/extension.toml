@@ -5,6 +5,7 @@ schema_version = 1
 authors = ["John Esleyer"]
 description = "Ube language support for Zed: Tree-sitter syntax highlighting, brackets, outline, and native LSP integration."
 repository = "https://github.com/JohnEsleyer/ube"
+icon_themes = ["icon_themes/ube.json"]
 
 [grammars.ube]
 repository = "https://github.com/johnesleyer/tree-sitter-ube"
