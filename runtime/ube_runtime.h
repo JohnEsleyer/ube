@@ -12,13 +12,13 @@
 #include <time.h>
 
 /*
- * Ube runtime for WebAssembly.
+ * Ube runtime for 100% sandboxed WebAssembly.
  *
- * This header deliberately uses no POSIX-only headers (no pthread.h, dirent.h,
+ * This header deliberately uses no OS-only headers (no pthread.h, dirent.h,
  * sys/stat.h or unistd.h). Everything here runs against Wasm linear memory and
  * the C standard library subset provided by WASI / Emscripten, with a native C
  * fallback so the same generated source can still be tested on a developer
- * machine.
+ * machine. Host capabilities enter only through typed `extern fn` imports.
  */
 
 #define UBE_SCOPE_CHUNK_SIZE (64 * 1024)
@@ -864,6 +864,8 @@ static inline void ube_panic_capacity(int64_t capacity) {
 })
 
 // --- 7. Polymorphic Output ---
+// Sandboxed Wasm host-import bridge used by `extern fn host_print(s: string)`.
+static inline void host_print(string s) { printf("%.*s\n", (int)s.len, s.data); }
 static inline void println_str(const char* s) { puts(s); }
 static inline void println(int32_t v) { printf("%d\n", v); }
 static inline void ube_print_string(string s) { printf("%.*s\n", (int)s.len, s.data); }

@@ -5,9 +5,9 @@ import (
 	"strings"
 )
 
-func requireUnsafePointerUse(t UbeType, env *TypeEnvironment, loc SourceLocation) error {
-	if _, isPointer := t.(PointerType); isPointer && env.UnsafeDepth == 0 {
-		return fmt.Errorf("[%s] Safety Error: using a raw pointer requires an unsafe block", loc)
+func requireUnsafePointerUse(t UbeType, loc SourceLocation) error {
+	if _, isPointer := t.(PointerType); isPointer {
+		return fmt.Errorf("[%s] raw pointers are forbidden: Ube is 100%% sandboxed WebAssembly", loc)
 	}
 	return nil
 }

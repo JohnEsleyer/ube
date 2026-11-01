@@ -31,8 +31,7 @@ func (p *Parser) parseStmt() Stmt {
 		p.advance()
 		return &ArenaStmt{At: tok.Loc, Body: p.parseBlock()}
 	case TokenUnsafe:
-		p.advance()
-		return &UnsafeStmt{At: tok.Loc, Body: p.parseBlock()}
+		p.errorAt(tok.Loc, "'unsafe' is forbidden: Ube is 100% sandboxed WebAssembly")
 	case TokenSpawn:
 		p.advance()
 		call := p.parseExpr()

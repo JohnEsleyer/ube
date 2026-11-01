@@ -31,7 +31,7 @@ func build(args []string) error {
 		return err
 	}
 	if forbidUnsafe && unsafePresent(report) {
-		return fmt.Errorf("build rejected by --forbid-unsafe: raw unsafe escape hatches are present")
+		return fmt.Errorf("build rejected by --forbid-unsafe: unsafe constructs are forbidden by the language")
 	}
 
 	cPath := filepath.Join(os.TempDir(), fmt.Sprintf("ube-%d.c", time.Now().UnixNano()))
@@ -59,7 +59,7 @@ func build(args []string) error {
 
 func parseBuildArgs(args []string) (string, string, bool, bool, bool, error) {
 	if len(args) == 0 {
-		return "", "", false, false, false, fmt.Errorf("usage: ube build <file.ube> [-o app.wasm] [--html] [--emit-c] [--forbid-unsafe]")
+		return "", "", false, false, false, fmt.Errorf("usage: ube build <file.ube> [-o app.wasm] [--html] [--emit-c]")
 	}
 	file, output, emitC, html, forbidUnsafe := "", "", false, false, false
 	for i := 0; i < len(args); i++ {
@@ -73,6 +73,7 @@ func parseBuildArgs(args []string) (string, string, bool, bool, bool, error) {
 		case "--emit-c":
 			emitC = true
 		case "--forbid-unsafe":
+			// Compatibility flag: the parser always forbids unsafe already.
 			forbidUnsafe = true
 		case "--html":
 			html = true

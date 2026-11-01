@@ -131,7 +131,13 @@ func (p *Parser) parseUnary() Expr {
 		operand := p.parseUnary()
 		return &UnaryExpr{At: tok.Loc, Op: "mut", Operand: operand}
 	}
-	if tok.Type == TokenMinus || tok.Type == TokenBang || tok.Type == TokenAmp || tok.Type == TokenStar || tok.Type == TokenTilde {
+	if tok.Type == TokenAmp {
+		p.errorAt(tok.Loc, "address-of operator '&' is forbidden: Ube is 100% sandboxed WebAssembly")
+	}
+	if tok.Type == TokenStar {
+		p.errorAt(tok.Loc, "pointer dereference '*' is forbidden: Ube is 100% sandboxed WebAssembly")
+	}
+	if tok.Type == TokenMinus || tok.Type == TokenBang || tok.Type == TokenTilde {
 		p.advance()
 		operand := p.parseUnary()
 		return &UnaryExpr{At: tok.Loc, Op: tok.Val, Operand: operand}
@@ -283,11 +289,7 @@ func (p *Parser) parsePrimary() Expr {
 	}
 	tok := p.peek(0)
 	if tok.Type == TokenUnsafe {
-		p.advance()
-		p.expect(TokenLBrace, "Expected '{' after unsafe")
-		value := p.parseExpr()
-		p.expect(TokenRBrace, "Expected '}' after unsafe expression")
-		return &UnsafeExpr{At: tok.Loc, Value: value}
+		p.errorAt(tok.Loc, "'unsafe' expressions are forbidden: Ube is 100% sandboxed WebAssembly")
 	}
 
 	switch tok.Type {

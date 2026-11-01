@@ -27,7 +27,6 @@ func CompletionItems(source string, p lspPosition) []map[string]any {
 			map[string]any{"label": "pop", "kind": 2, "detail": "pop() from slice -> T?"},
 			map[string]any{"label": "clear", "kind": 2, "detail": "clear() slice length to 0"},
 			map[string]any{"label": "contains", "kind": 2, "detail": "contains(val) -> bool"},
-			map[string]any{"label": "ptr", "kind": 10, "detail": "raw byte pointer *u8 (unsafe)"},
 			map[string]any{"label": "send", "kind": 2, "detail": "send(val) into channel"},
 			map[string]any{"label": "recv", "kind": 2, "detail": "recv() from channel"},
 			map[string]any{"label": "close", "kind": 2, "detail": "close() channel"},
@@ -38,7 +37,7 @@ func CompletionItems(source string, p lspPosition) []map[string]any {
 		return items
 	}
 
-	for _, s := range strings.Fields("fn let mut struct enum trait match if else while for in arena unsafe spawn return break continue defer or_else import select extern") {
+	for _, s := range strings.Fields("fn let mut struct enum trait match if else while for in arena spawn return break continue defer or_else import select extern") {
 		items = append(items, map[string]any{"label": s, "kind": 14})
 	}
 	for _, t := range strings.Fields("i32 u32 i64 u64 u8 f32 f64 bool string void Chan Pool UbeHandle StringBuilder") {

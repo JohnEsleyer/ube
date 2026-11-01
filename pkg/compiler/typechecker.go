@@ -54,7 +54,6 @@ type TypeEnvironment struct {
 	CurRet         UbeType
 	LoopDepth      int
 	ScopeDepth     int
-	UnsafeDepth    int
 }
 
 func NewTypeEnvironment(parent *TypeEnvironment) *TypeEnvironment {
@@ -85,7 +84,6 @@ func childTypeEnvironment(parent *TypeEnvironment) *TypeEnvironment {
 		env.CurRet = parent.CurRet
 		env.LoopDepth = parent.LoopDepth
 		env.ScopeDepth = parent.ScopeDepth
-		env.UnsafeDepth = parent.UnsafeDepth
 		env.Traits = parent.Traits
 		env.TraitMeta = parent.TraitMeta
 		env.GenericStructs = parent.GenericStructs
@@ -118,9 +116,8 @@ func (e *TypeEnvironment) updateVar(name string, update func(*VarInfo)) bool {
 }
 
 type Typechecker struct {
-	Global    *TypeEnvironment
-	Externs   map[string]bool
-	HasUnsafe bool
+	Global  *TypeEnvironment
+	Externs map[string]bool
 }
 
 func NewTypechecker() *Typechecker {
@@ -614,10 +611,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		return tc.checkBlock(s.Body, scopeEnv)
 
 	case *UnsafeStmt:
-		tc.HasUnsafe = true
-		unsafeEnv := childTypeEnvironment(env)
-		unsafeEnv.UnsafeDepth = env.UnsafeDepth + 1
-		return tc.checkBlock(s.Body, unsafeEnv)
+		return fmt.Errorf("[%s] 'unsafe' is forbidden: Ube is 100%% sandboxed WebAssembly", s.At)
 
 	case *LoopControlStmt:
 		if env.LoopDepth == 0 {

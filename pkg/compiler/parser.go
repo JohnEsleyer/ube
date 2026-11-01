@@ -374,8 +374,7 @@ func (p *Parser) parseType() UbeType {
 
 	if tok.Type == TokenStar {
 		p.advance()
-		base := p.parseType()
-		t = PointerType{Base: base}
+		p.errorAt(tok.Loc, "raw pointers '*T' are forbidden: Ube is 100% sandboxed WebAssembly")
 	} else if tok.Type == TokenLBracket && p.peek(1).Type == TokenRBracket {
 		p.advance()
 		p.advance()

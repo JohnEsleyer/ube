@@ -1,22 +1,22 @@
-// 1. External C FFI & Pointer types (Gap 2)
-extern fn puts(s: *u8) -> i32
+// 1. WebAssembly Host Import (Safe & Sandboxed)
+extern fn host_print(s: string)
 extern fn sin(val: f64) -> f64
 
-// 2. Structs & Generational Pool (Gap 1, Gap 15)
+// 2. Structs & Generational Pool
 struct Particle {
     x: f32,
     y: f32,
     active: bool
 }
 
-// 3. Tagged Enums with Multi-statement Block Match (Gap 6)
+// 3. Tagged Enums with Multi-statement Block Match
 enum Command {
     Spawn(f32, f32),
     Despawn(i32),
     Quit
 }
 
-// 4. Optional Return Types & if let ... else (Gap 3, Gap 4)
+// 4. Optional Return Types & if let ... else
 fn find_even(num: i32) -> i32? {
     if num % 2 == 0 {
         return num
@@ -25,7 +25,7 @@ fn find_even(num: i32) -> i32? {
     }
 }
 
-// 5. Result types with custom non-i32 return (Gap 5)
+// 5. Result types with custom non-i32 return
 fn validate_particle(p: Particle) -> Particle ! string {
     if p.x < 0.0 {
         return error("particle position out of bounds")
@@ -43,7 +43,6 @@ fn worker_task(ch: Chan[i32]) {
 fn main() {
     println("=== 🍠 Running Ube Comprehensive Validation ===")
 
-    // Test A: Generic Slices with custom structs (Gap 1)
     let mut particles = []Particle{}
     particles.push(Particle{ x: 10.5, y: 20.0, active: true })
     particles.push(Particle{ x: 30.0, y: 40.5, active: false })
@@ -51,7 +50,6 @@ fn main() {
     particles.push(Particle{ x: 70.0, y: 80.0, active: false })
     particles.push(Particle{ x: 90.0, y: 100.0, active: true })
 
-    // Test B: Struct field mutation (Gap 9)
     particles[0].x = 99.0
 
     println("Iterating generic slice []Particle:")
@@ -59,7 +57,6 @@ fn main() {
         println(p.x)
     }
 
-    // Logical operators short-circuit; loop control skips and exits iterations.
     let mut count = 0
     while count < 10 {
         count = count + 1
@@ -68,7 +65,6 @@ fn main() {
     }
     println(count)
 
-    // Test C: if let ... else (Gap 3)
     let found = find_even(42)
     if let val = found {
         println("Found even number:")
@@ -77,13 +73,11 @@ fn main() {
         println("Number was odd!")
     }
 
-    // Test D: Result & fallback (Gap 5, Gap 10)
     let bad_p = Particle{ x: -5.0, y: 1.0, active: true }
     let validated = validate_particle(bad_p) or_else Particle{ x: 0.0, y: 0.0, active: false }
     println("Validated fallback x position:")
     println(validated.x)
 
-    // Test E: Multi-line Block Match (Gap 6)
     let cmd = Command.Spawn(100.0, 200.0)
     match cmd {
         Spawn(x, y) => {
@@ -99,17 +93,14 @@ fn main() {
         }
     }
 
-    // Test F: Channel Concurrency & while let
     let jobs = Chan[i32].new(4)
     spawn worker_task(jobs)
     jobs.send(777)
     jobs.send(888)
     jobs.close()
 
-    // Test G: C FFI Pointer call
-    unsafe {
-        puts("Direct C FFI call executed successfully via puts(*u8)".ptr)
-    }
+    // Test G: Sandboxed WebAssembly Host Import
+    host_print("Sandboxed Wasm Host Import executed successfully")
 
     println("=== All gap fixes successfully verified! ===")
 }

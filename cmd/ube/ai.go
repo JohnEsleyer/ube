@@ -265,7 +265,7 @@ func analyzeFnFlow(fn *compiler.FnDecl) (calls []string, flow []string) {
 
 	orderedFlowTags := []string{
 		"spawn", "select", "arena", "promote", "match",
-		"if-let", "while-let", "for-in", "while", "try?", "or_else", "defer", "unsafe",
+		"if-let", "while-let", "for-in", "while", "try?", "or_else", "defer",
 	}
 	for _, tag := range orderedFlowTags {
 		if v.flow[tag] {
@@ -314,9 +314,6 @@ func (v *flowVisitor) walkStmt(st compiler.Stmt) {
 		v.walkStmt(s.Body)
 	case *compiler.ArenaStmt:
 		v.flow["arena"] = true
-		v.walkStmt(s.Body)
-	case *compiler.UnsafeStmt:
-		v.flow["unsafe"] = true
 		v.walkStmt(s.Body)
 	case *compiler.SpawnStmt:
 		v.flow["spawn"] = true
@@ -395,9 +392,6 @@ func (v *flowVisitor) walkExpr(ex compiler.Expr) {
 		v.walkExpr(e.Fallback)
 	case *compiler.ErrorExpr:
 		v.walkExpr(e.Arg)
-	case *compiler.UnsafeExpr:
-		v.flow["unsafe"] = true
-		v.walkExpr(e.Value)
 	case *compiler.PromoteExpr:
 		v.flow["promote"] = true
 		v.walkExpr(e.Value)
@@ -583,8 +577,10 @@ Its foundational pillars are:
   Every control flow, memory scope, and movement is explicit in the source code.
 - **Inspired by Go:** Approachable syntax, @@fn@@ / @@let@@ bindings, shared-nothing concurrency
   with @@spawn@@, @@select@@, and typed channels @@Chan[T]@@.
-- **Sandboxed and 100% Wasm-First:** Primed for WebAssembly and WASI. Programs run safely,
-  portably, and start in sub-milliseconds with ultra-low p99 latency.
+- **Fully Sandboxed, 100% WebAssembly:** Ube targets WebAssembly and WASI natively.
+  Programs run safely, portably, and start in sub-milliseconds with ultra-low p99
+  latency. The @@unsafe@@ keyword and raw pointer types do not exist; host access
+  happens only through typed @@extern fn@@ Wasm imports.
 - **AI-Native Clarity:** Clean grammar and explicit scoping enable LLMs to analyze, reason about,
   and generate Ube code with near-zero hallucinations.
 
@@ -1012,7 +1008,7 @@ fn main() {
 Ube runs in a sandboxed WebAssembly execution environment. System features,
 rendering, networking, and platform services are provided through clean
 @@extern fn@@ host imports (WASI or JavaScript/host bindings). Host imports are
-ordinary functions at the call site and do not require @@unsafe@@:
+ordinary functions at the call site and never require an unsafe wrapper:
 
 @@@ube
 // Host environment declarations (browser, WASI, or game runtime)
@@ -1025,9 +1021,11 @@ fn main() {
 }
 @@@
 
-No OS-specific C headers, native syscall assembly, or raw pointer arithmetic is
-required. Raw pointer escape hatches still exist for advanced interoperability,
-but idiomatic Ube code stays entirely within the safe Wasm host-import surface.
+Ube is 100% WebAssembly and fully sandboxed: the @@unsafe@@ keyword and raw
+pointer types (@@*T@@) do not exist in the language. There are no OS-specific C
+headers, native syscall assembly, address-of operations, pointer dereferences,
+or @@.ptr@@ escapes. Host capabilities enter only through typed @@extern fn@@
+imports, which the Wasm runtime can grant or deny.
 
 ## 11. Built-in functions and methods
 
@@ -1054,7 +1052,8 @@ but idiomatic Ube code stays entirely within the safe Wasm host-import surface.
    slices are not flat.
 5. Use @@?@@ and @@or_else@@ for results, @@if let@@/@@while let@@ for optionals.
 6. Use @@extern fn@@ for Wasm host imports; keep platform access explicit and
-   capability-driven rather than reaching for native OS APIs.
+   capability-driven. Never use @@unsafe@@, raw pointers, or native syscalls:
+   they are rejected by the compiler because Ube is 100% sandboxed WebAssembly.
 7. There are no closures or exceptions; split code across files with
    @@import "file.ube"@@ when needed.
 `

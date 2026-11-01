@@ -113,10 +113,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		return StringType{}, nil
 
 	case *UnsafeExpr:
-		tc.HasUnsafe = true
-		unsafeEnv := childTypeEnvironment(env)
-		unsafeEnv.UnsafeDepth = env.UnsafeDepth + 1
-		return tc.inferExpr(e.Value, unsafeEnv)
+		return nil, fmt.Errorf("[%s] 'unsafe' expressions are forbidden: Ube is 100%% sandboxed WebAssembly", e.At)
 
 	case *LiteralExpr:
 		return e.Type, nil
@@ -129,7 +126,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			if v.Moved {
 				return nil, movedValueError(e.At, e.Name)
 			}
-			if err := requireUnsafePointerUse(v.Type, env, e.At); err != nil {
+			if err := requireUnsafePointerUse(v.Type, e.At); err != nil {
 				return nil, err
 			}
 			return v.Type, nil
@@ -254,26 +251,16 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			return opndT, nil
 		}
 		if e.Op == "&" {
-			if env.UnsafeDepth == 0 {
-				return nil, fmt.Errorf("[%s] Safety Error: taking a raw pointer requires an unsafe block", e.At)
-			}
-			return PointerType{Base: opndT}, nil
+			return nil, fmt.Errorf("[%s] address-of operator '&' is forbidden: Ube is 100%% sandboxed WebAssembly", e.At)
 		}
 		if e.Op == "*" {
-			if env.UnsafeDepth == 0 {
-				return nil, fmt.Errorf("[%s] Safety Error: dereferencing a raw pointer requires an unsafe block", e.At)
-			}
-			ptr, ok := opndT.(PointerType)
-			if !ok {
-				return nil, fmt.Errorf("[%s] cannot dereference non-pointer type '%s'", e.At, opndT)
-			}
-			return ptr.Base, nil
+			return nil, fmt.Errorf("[%s] pointer dereference '*' is forbidden: Ube is 100%% sandboxed WebAssembly", e.At)
 		}
 		return opndT, nil
 
 	case *CallExpr:
-		// extern fn declarations are Wasm host imports and are safe to call
-		// directly. Only raw pointer escape hatches require an unsafe block.
+		// Wasm host imports declared with 'extern fn' are safe, sandboxed calls.
+		// No unsafe wrapper is required or permitted anywhere in the language.
 		// Direct generic constructors: Chan[T](cap) and Pool[T](cap).
 		if gen, ok := e.Callee.(*GenericTypeExpr); ok && (gen.BaseType == "Chan" || gen.BaseType == "Pool") {
 			if len(e.Args) != 1 {
@@ -676,7 +663,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				if err := tc.checkCallArgsWithReceiver(mem.Target, sig.ReceiverMut, e.Args, sig.Params, sig.Escaping, env, e.At); err != nil {
 					return nil, err
 				}
-				if err := requireUnsafePointerUse(sig.RetType, env, e.At); err != nil {
+				if err := requireUnsafePointerUse(sig.RetType, e.At); err != nil {
 					return nil, err
 				}
 				return sig.RetType, nil
@@ -690,7 +677,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				if err := tc.checkCallArgs(e.Args, sig.Params, sig.Escaping, env, e.At); err != nil {
 					return nil, err
 				}
-				if err := requireUnsafePointerUse(sig.RetType, env, e.At); err != nil {
+				if err := requireUnsafePointerUse(sig.RetType, e.At); err != nil {
 					return nil, err
 				}
 				return sig.RetType, nil
@@ -715,10 +702,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			}
 		}
 		if e.Member == "ptr" {
-			if env.UnsafeDepth == 0 {
-				return nil, fmt.Errorf("[%s] Safety Error: raw pointer access requires an unsafe block", e.At)
-			}
-			return PointerType{Base: PrimitiveType{Name: "u8"}}, nil
+			return nil, fmt.Errorf("[%s] '.ptr' is forbidden: Ube is 100%% sandboxed WebAssembly without raw memory pointers", e.At)
 		}
 		tgtT, err := tc.inferExpr(e.Target, env)
 		if err != nil {
@@ -747,7 +731,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 						if env.CurFile != "" && meta.File != "" && env.CurFile != meta.File && !f.IsPub {
 							return nil, fmt.Errorf("[%s] cannot access private field '%s' on struct '%s'", e.At, e.Member, custom.Name)
 						}
-						if err := requireUnsafePointerUse(f.Type, env, e.At); err != nil {
+						if err := requireUnsafePointerUse(f.Type, e.At); err != nil {
 							return nil, err
 						}
 						return f.Type, nil
@@ -756,7 +740,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			} else if fields, ok := tc.Global.Structs[custom.Name]; ok {
 				for _, f := range fields {
 					if f.Name == e.Member {
-						if err := requireUnsafePointerUse(f.Type, env, e.At); err != nil {
+						if err := requireUnsafePointerUse(f.Type, e.At); err != nil {
 							return nil, err
 						}
 						return f.Type, nil
@@ -780,14 +764,14 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		}
 		if sl, ok := tgtT.(SliceType); ok {
 			e.TargetType = tgtT
-			if err := requireUnsafePointerUse(sl.Elem, env, e.At); err != nil {
+			if err := requireUnsafePointerUse(sl.Elem, e.At); err != nil {
 				return nil, err
 			}
 			return sl.Elem, nil
 		}
 		if arr, ok := tgtT.(ArrayType); ok {
 			e.TargetType = tgtT
-			if err := requireUnsafePointerUse(arr.Elem, env, e.At); err != nil {
+			if err := requireUnsafePointerUse(arr.Elem, e.At); err != nil {
 				return nil, err
 			}
 			return arr.Elem, nil
@@ -981,8 +965,8 @@ func (tc *Typechecker) checkCallArgsWithReceiver(receiver Expr, receiverMut bool
 		if err != nil {
 			return err
 		}
-		if _, rawPointer := actual.(PointerType); rawPointer && env.UnsafeDepth == 0 {
-			return fmt.Errorf("[%s] Safety Error: passing a raw pointer requires an unsafe block", arg.Loc())
+		if _, rawPointer := actual.(PointerType); rawPointer {
+			return fmt.Errorf("[%s] raw pointers are forbidden: Ube is 100%% sandboxed WebAssembly", arg.Loc())
 		}
 
 		paramMut := params[i].IsMut
@@ -1160,7 +1144,7 @@ func (tc *Typechecker) validateType(t UbeType, loc SourceLocation) error {
 		}
 		return nil
 	case PointerType:
-		return tc.validateType(v.Base, loc)
+		return fmt.Errorf("[%s] raw pointer types are forbidden: Ube is 100%% sandboxed WebAssembly", loc)
 	case SliceType:
 		return tc.validateType(v.Elem, loc)
 	case ArrayType:

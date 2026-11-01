@@ -5,7 +5,7 @@
 # The Ube Programming Language
 
 **The sweet, grounded language for games, apps, and backends.**  
-*Fast like C. Clean like Go. Zero GC. 100% Wasm-Native.*
+*100% WebAssembly. Fully Sandboxed. Zero GC. Clean like Go.*
 
 **Latest version: `0.5.6`**
 
@@ -20,6 +20,15 @@ Ube is a statically typed, memory-safe programming language engineered for a spe
 Ube is **not** a low-level systems language. It does not write operating system kernels, manipulate hardware registers, or juggle raw pointer arithmetic. Those domains belong to C, C++, and Zig. 
 
 Instead, Ube exists for developers who love the simplicity and readability of **Go**, but want the pause-free speed, predictable latency, and deterministic memory model of **C**—without the cognitive tax or compiler fights of **Rust**.
+
+---
+
+## 🛡️ Defining Trait: Fully Sandboxed WebAssembly
+
+- **100% WebAssembly Only**: Ube targets Wasm/WASI natively. No C bindings, no native syscall assembly, and no hardware pointers.
+- **Zero Unsafe**: The `unsafe` keyword and raw pointers (`*T`) are permanently eliminated from the language.
+- **Host Imports (`extern fn`)**: Interfacing with the host (WebGPU, Canvas, fetch, DOM, or WASI runtime) occurs cleanly through typed Wasm host imports.
+- **Affine Memory & Regional Arenas**: Zero GC without lifetime annotations.
 
 ---
 
@@ -40,8 +49,8 @@ Instead, Ube exists for developers who love the simplicity and readability of **
 4. **Inspired by Go: Readability and Concurrency**  
    Clean, human-first syntax. Shared-nothing concurrency with tasks (`spawn`), typed message channels (`Chan[T]`), and event multiplexing (`select`) prevents data races by construction.
 
-5. **Sandboxed, Secure, and 100% Wasm-First**  
-   Ube embraces WebAssembly (Wasm) and WASI as its primary execution substrate. Programs are secure by default, start in sub-milliseconds, and compile into clean, portable bytecode that runs identically in browsers, servers, edge workers, and game runtimes.
+5. **Fully Sandboxed, 100% WebAssembly**  
+   Ube targets WebAssembly (Wasm) and WASI natively. Programs are secure by default, start in sub-milliseconds, and compile into clean, portable bytecode that runs identically in browsers, servers, edge workers, and game runtimes. The language has no `unsafe` keyword and no raw pointer types; host capabilities enter only through typed Wasm host imports (`extern fn`).
 
 6. **Designed for Both Humans and Artificial Intelligence**  
    Ube’s strict, unambiguous syntax, explicit data movement, and lack of hidden control flow make code exceptionally straightforward for Large Language Models to inspect, trace, reason about, and generate without hallucinations.
