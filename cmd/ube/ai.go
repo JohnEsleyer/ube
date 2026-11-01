@@ -564,22 +564,29 @@ const ubeLanguageGuide = `# The Ube Programming Language: AI Reference Guide
 This document is a self-contained specification of Ube intended for AI models.
 Read it before writing or modifying Ube code.
 
-## 1. What is Ube?
+## 1. What is Ube? (The Ube Philosophy)
 
-Ube is a statically typed, ahead-of-time systems language that transpiles to
-C99 and is compiled with the system C compiler (gcc/clang, -O2). Its design
-goals are:
+Ube is a statically typed, memory-safe programming language engineered specifically
+for high-level games, modern applications, CLI tools, and high-throughput backends.
 
-- **Zero Garbage Collection:** memory is managed with regional bump arenas that
-  are released in constant time. There are no GC pauses and no reference
-  counting.
-- **Go-like ergonomics with C-level performance:** familiar @@fn@@/@@let@@ syntax,
-  channels, tasks, and pattern matching over tagged enums.
-- **Shared-nothing concurrency:** data crossing a task or channel boundary is
-  copied by value and must be a "flat" type. This removes data races by
-  construction.
+Ube is **not** a low-level systems language. It deliberately omits raw pointer arithmetic,
+manual hardware registers, and operating system kernels.
 
-Ube is **not** Rust, Go, or C, and borrow-checker or GC idioms do not apply.
+Its foundational pillars are:
+
+- **High-Level Focus, Real-World Pragmatism:** Engineered for games, GUI apps, and web backends
+  where low latency, fast iteration, and clean state management matter most.
+- **Safety Without the Lifetime Tax:** Zero Garbage Collection achieved without lifetime annotations
+  ('a) or complex borrow-check syntax. Memory safety is guaranteed via affine move semantics,
+  lexical bump arenas (@@arena@@), and generational entity pools (@@Pool[T]@@).
+- **Zero Magic:** No implicit conversions, no operator overloading, and no background GC pauses.
+  Every control flow, memory scope, and movement is explicit in the source code.
+- **Inspired by Go:** Approachable syntax, @@fn@@ / @@let@@ bindings, shared-nothing concurrency
+  with @@spawn@@, @@select@@, and typed channels @@Chan[T]@@.
+- **Sandboxed and 100% Wasm-First:** Primed for WebAssembly and WASI. Programs run safely,
+  portably, and start in sub-milliseconds with ultra-low p99 latency.
+- **AI-Native Clarity:** Clean grammar and explicit scoping enable LLMs to analyze, reason about,
+  and generate Ube code with near-zero hallucinations.
 
 ## 2. Source files and the CLI
 

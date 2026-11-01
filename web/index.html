@@ -79,7 +79,7 @@
     <div class="container">
         <header>
             <h1>🍠 Ube Language</h1>
-            <p class="subtitle">The sweet, grounded systems language. Fast like C, easy like Go, Zero GC.</p>
+            <p class="subtitle">The sweet, grounded language for games, apps, and backends. Fast like C, clean like Go, Zero GC, 100% Wasm-Native.</p>
         </header>
 
         <div class="card">
@@ -97,16 +97,20 @@ gcc -std=gnu11 -O2 -pthread -Iruntime output.c -o ube_app
 
         <div class="features">
             <div class="feature-item">
-                <div class="feature-title">🚀 Fast as C / Rust</div>
-                <p>Contiguous arena-backed slices with geometric growth, scope-based reclamation, and no garbage collection pauses.</p>
+                <div class="feature-title">🎮 High-Level & Pragmatic</div>
+                <p>Engineered for game loops, UI applications, and cloud backends without low-level systems complexity or raw pointer baggage.</p>
             </div>
             <div class="feature-item">
-                <div class="feature-title">🧁 Easy as Go</div>
-                <p>Minimalist syntax, Go-style receiver methods, channels, and fast compilation without lifetime annotations.</p>
+                <div class="feature-title">🧁 Clean Like Go</div>
+                <p>Readable syntax, Go-style receiver methods, channels, and shared-nothing concurrency without data races.</p>
             </div>
             <div class="feature-item">
-                <div class="feature-title">⚡ Zero-Cost C Interop</div>
-                <p>Direct bindings via <code>extern fn</code>, drop-in single-file C support, and clean C output.</p>
+                <div class="feature-title">🛡️ Safety Without Lifetime Tax</div>
+                <p>Zero GC pauses and deterministic reclamation using lexical bump arenas and generational entity pools without Rust-style lifetime annotations.</p>
+            </div>
+            <div class="feature-item">
+                <div class="feature-title">🌐 100% Wasm-First</div>
+                <p>Naturally sandboxed, ultra-fast sub-millisecond cold starts, and identical execution across browser, desktop, and cloud servers.</p>
             </div>
         </div>
 
