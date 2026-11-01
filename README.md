@@ -245,16 +245,21 @@ fn main() {
 
 | Command | Usage | Description |
 | :--- | :--- | :--- |
-| `ube run` | `ube run main.ube` | Compiles and executes in-memory. |
-| `ube build` | `ube build main.ube --wasm` | Builds a sandboxed WebAssembly / WASI application. |
-| `ube build` | `ube build main.ube -o app` | Builds an optimized native executable. |
+| `ube run` | `ube run main.ube` | Compiles to Wasm and runs it in `wasmtime`, `wasmer`, `node`, `deno`, or `wasm3`. |
+| `ube build` | `ube build main.ube` | Builds a sandboxed WebAssembly/WASI module (`main.wasm`) by default. |
+| `ube build` | `ube build main.ube --html` | Builds a Web Canvas/UI app (`main.html`) with Emscripten. |
+| `ube build` | `ube build main.ube --emit-c` | Keeps the generated C source for inspection or custom toolchains. |
 | `ube test` | `ube test tests/` | Runs all test files or `test_*` functions. |
-| `ube check` | `ube check main.ube` | Audits types, regions, and ownership statically. |
+| `ube check` | `ube check main.ube` | Audits types, regions, ownership, and host imports statically. |
 | `ube fmt` | `ube fmt .` | Canonical auto-formatter for all `.ube` files. |
 | `ube doc` | `ube doc main.ube` | Generates documentation for public exports. |
 | `ube lsp` | `ube lsp` | Starts the Language Server Protocol. |
 | `ube guide` | `ube guide` | Outputs the AI Reference Guide (`ube_guide.md`). |
 | `ube context`| `ube context . -o ctx.txt`| Generates codebase architecture context for AI. |
+
+> The compiler prefers `clang --target=wasm32-wasi`, `zig cc -target wasm32-wasi`,
+> or `emcc`. If no Wasm SDK is installed, `ube build` and `ube run` fall back to
+> a native C host executable so development can continue.
 
 ---
 

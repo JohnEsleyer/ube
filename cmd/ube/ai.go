@@ -569,13 +569,13 @@ Read it before writing or modifying Ube code.
 Ube is a statically typed, memory-safe programming language engineered specifically
 for high-level games, modern applications, CLI tools, and high-throughput backends.
 
-Ube is **not** a low-level systems language. It deliberately omits raw pointer arithmetic,
-manual hardware registers, and operating system kernels.
+Ube is **not** a low-level systems language. It does not manipulate hardware
+registers, device drivers, or raw pointer arithmetic.
 
 Its foundational pillars are:
 
-- **High-Level Focus, Real-World Pragmatism:** Engineered for games, GUI apps, and web backends
-  where low latency, fast iteration, and clean state management matter most.
+- **High-Level Focus, Real-World Pragmatism:** Engineered for game creators, product builders,
+  and backend engineers where low latency, fast iteration, and clean state management matter most.
 - **Safety Without the Lifetime Tax:** Zero Garbage Collection achieved without lifetime annotations
   ('a) or complex borrow-check syntax. Memory safety is guaranteed via affine move semantics,
   lexical bump arenas (@@arena@@), and generational entity pools (@@Pool[T]@@).
@@ -599,8 +599,9 @@ Its foundational pillars are:
 @@@sh
 ube new myapp          # scaffold a project
 ube check main.ube     # parse + typecheck
-ube build main.ube -o app
-ube run main.ube
+ube build main.ube     # build main.wasm by default
+ube build main.ube --html -o game.html
+ube run main.ube       # compile to Wasm and run in a Wasm runtime
 ube test               # discover and run test files
 ube fmt -w .           # format sources
 ube doc main.ube       # print declarations and signatures
@@ -631,7 +632,6 @@ fn main() {
 - @@bool@@ with literals @@true@@ and @@false@@
 - @@string@@ (UTF-8 bytes, heap/arena allocated, **not flat**)
 - @@void@@ for functions that return nothing
-- Raw pointers @@*T@@ (only usable inside @@unsafe@@)
 
 ### Composite types
 
@@ -872,7 +872,7 @@ To move data out of an arena, copy it into the parent region with
 - slices are reallocated in the parent arena (nested slices, structs, and
   optionals are promoted recursively);
 - strings are copied;
-- pointers have their pointee copied.
+- heap-backed values are promoted into the parent arena.
 
 @@@ube
 fn main() {
@@ -937,12 +937,11 @@ rejected at compile time:
 
 - @@string@@, @@StringBuilder@@
 - slices @@[]T@@
-- raw pointers @@*T@@
 - structs or enums containing any of the above
 - @@Pool[T]@@
 
-This guarantees no pointer ever crosses a task boundary, so there is no shared
-mutable state and no locking.
+This guarantees no heap-backed value ever crosses a task boundary, so there is
+no shared mutable state and no locking.
 
 ### Object pools
 
@@ -1008,11 +1007,27 @@ fn main() {
 }
 @@@
 
-## 10. Unsafe and C FFI
+## 10. WebAssembly & Host Imports
 
-@@unsafe { ... }@@ blocks are required for raw pointer operations. @@extern fn@@
-declares a C function. Code using @@unsafe@@ or FFI is flagged by @@ube check
---strict@@.
+Ube runs in a sandboxed WebAssembly execution environment. System features,
+rendering, networking, and platform services are provided through clean
+@@extern fn@@ host imports (WASI or JavaScript/host bindings). Host imports are
+ordinary functions at the call site and do not require @@unsafe@@:
+
+@@@ube
+// Host environment declarations (browser, WASI, or game runtime)
+extern fn host_print(msg: string)
+extern fn host_fetch(url: string) -> string
+
+fn main() {
+    let res = host_fetch("https://api.example.com")
+    host_print(res)
+}
+@@@
+
+No OS-specific C headers, native syscall assembly, or raw pointer arithmetic is
+required. Raw pointer escape hatches still exist for advanced interoperability,
+but idiomatic Ube code stays entirely within the safe Wasm host-import surface.
 
 ## 11. Built-in functions and methods
 
@@ -1022,9 +1037,9 @@ declares a C function. Code using @@unsafe@@ or FFI is flagged by @@ube check
 - Strings: @@s.len@@, @@s[i]@@, @@s[a:b]@@, @@str_trim@@, @@str_split@@,
   @@str_replace@@, @@str_contains@@, @@str_starts_with@@, @@str_ends_with@@,
   @@str_index_of@@, @@str_to_int@@, @@int_to_str@@
-- Files and OS: @@read_file@@, @@write_file@@, @@file_exists@@, @@file_remove@@,
-  @@path_join@@, @@dir_list@@, @@dir_create@@, @@env_get@@, @@env_set@@,
-  @@os_args@@, @@cmd_run@@
+- Host I/O: @@read_file@@, @@write_file@@, @@file_exists@@, @@file_remove@@,
+  @@path_join@@, @@env_get@@, @@env_set@@, @@os_args@@ (capabilities depend on
+  the host; sandboxed hosts may deny directory or process operations)
 - Math: @@abs@@, @@min@@, @@max@@, @@sqrt@@, @@pow@@, @@floor@@, @@ceil@@
 - Time and scheduling: @@time_now_ms@@, @@sleep_ms@@, @@yield@@, @@exit_process@@
 - StringBuilder: @@format@@, @@append@@, @@append_str@@, @@append_int@@,
@@ -1038,7 +1053,8 @@ declares a C function. Code using @@unsafe@@ or FFI is flagged by @@ube check
 4. Only flat values may cross @@spawn@@ and @@Chan@@ boundaries; strings and
    slices are not flat.
 5. Use @@?@@ and @@or_else@@ for results, @@if let@@/@@while let@@ for optionals.
-6. Raw pointers require @@unsafe@@; avoid them unless interfacing with C.
+6. Use @@extern fn@@ for Wasm host imports; keep platform access explicit and
+   capability-driven rather than reaching for native OS APIs.
 7. There are no closures or exceptions; split code across files with
    @@import "file.ube"@@ when needed.
 `

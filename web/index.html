@@ -87,12 +87,16 @@
             <pre><code># Clone and build the Go compiler
 git clone https://github.com/JohnEsleyer/ube.git
 cd ube
-go build -o bin/ubec ./cmd/ubec
+go build -o bin/ube ./cmd/ube
 
-# Generate C, compile, and run
-./bin/ubec examples/01_hello/main.ube -o output.c
-gcc -std=gnu11 -O2 -pthread -Iruntime output.c -o ube_app
-./ube_app</code></pre>
+# Build a sandboxed Wasm module (main.wasm)
+./bin/ube build examples/01_hello/main.ube
+
+# Run it with any Wasm runtime
+./bin/ube run examples/01_hello/main.ube
+
+# Or produce a browser-ready Web Canvas app
+./bin/ube build examples/01_hello/main.ube --html -o hello.html</code></pre>
         </div>
 
         <div class="features">
@@ -116,8 +120,8 @@ gcc -std=gnu11 -O2 -pthread -Iruntime output.c -o ube_app
 
         <div class="card">
             <h2>Language status and roadmap</h2>
-            <p>The compiler frontend is written in Go and emits C. Current language features include arena-backed dynamic slices with geometric growth, polymorphic printing, short-circuiting <code>&amp;&amp;</code> and <code>||</code>, and loop <code>break</code>/<code>continue</code>.</p>
-            <p>Planned work: cooperative M:N fiber scheduling, then WebAssembly and embedded target profiles. The compiler will remain in Go; a self-hosting Ube compiler is not planned.</p>
+            <p>The compiler frontend is written in Go and is Wasm-first: <code>ube build</code> emits portable <code>.wasm</code> modules, while <code>--html</code> produces a Web Canvas/UI app. The runtime uses pure Wasm linear memory, cooperative task scheduling, and typed host imports instead of POSIX threads or OS headers. Language features include arena-backed dynamic slices with geometric growth, generational pools, polymorphic printing, short-circuiting <code>&amp;&amp;</code> and <code>||</code>, and loop <code>break</code>/<code>continue</code>.</p>
+            <p>Planned work: richer browser/GPU host bindings, WASI networking profiles, and deeper cooperative scheduler integration. The compiler will remain in Go; a self-hosting Ube compiler is not planned.</p>
         </div>
     </div>
 </body>

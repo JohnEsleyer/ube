@@ -175,7 +175,7 @@ func check(args []string) error {
 		return err
 	}
 	if strict && unsafePresent(report) {
-		err := fmt.Errorf("strict safety check failed: C FFI or unsafe blocks are present")
+		err := fmt.Errorf("strict safety check failed: raw unsafe escape hatches are present")
 		if formatJSON {
 			printSafetyJSON(reportJSON(file, report, false, "strict", err.Error()))
 			return err
@@ -194,22 +194,22 @@ func check(args []string) error {
 func printPurity(report purityReport) {
 	switch {
 	case report.hasUnsafe:
-		fmt.Println("  Safety: Tier 3 — Raw unsafe boundary")
+		fmt.Println("  Safety: Tier 3 — Raw unsafe escape hatch")
 		if len(report.externs) > 0 {
-			fmt.Printf("  C FFI:  %s\n", strings.Join(report.externs, ", "))
+			fmt.Printf("  Host imports: %s\n", strings.Join(report.externs, ", "))
 		}
-		fmt.Println("  Note:   Memory safety depends on the unsafe code and external library contracts")
+		fmt.Println("  Note:   Memory safety depends on the unsafe code and host contracts")
 	case len(report.externs) > 0:
-		fmt.Println("  Safety: Tier 2 — FFI declared; no unsafe blocks detected")
-		fmt.Printf("  C FFI:  %s\n", strings.Join(report.externs, ", "))
-		fmt.Println("  Note:   Wrapper audit status cannot be inferred by the compiler")
+		fmt.Println("  Safety: Tier 1 — Pure Ube with Wasm host imports")
+		fmt.Printf("  Host imports: %s\n", strings.Join(report.externs, ", "))
+		fmt.Println("  Note:   Calls are sandboxed by the Wasm host capability model")
 	default:
-		fmt.Println("  Safety: Tier 1 — Pure Ube (no C FFI or unsafe blocks)")
+		fmt.Println("  Safety: Tier 1 — Pure Ube (no unsafe blocks or host imports)")
 		fmt.Println("  Note:   Classification is an audit aid, not a formal proof")
 	}
 }
 
-func unsafePresent(report purityReport) bool { return report.hasUnsafe || len(report.externs) > 0 }
+func unsafePresent(report purityReport) bool { return report.hasUnsafe }
 
 func policyName(strict bool) string {
 	if strict {

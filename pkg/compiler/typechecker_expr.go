@@ -272,9 +272,8 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		return opndT, nil
 
 	case *CallExpr:
-		if id, ok := e.Callee.(*IdentExpr); ok && tc.Externs[id.Name] && env.UnsafeDepth == 0 {
-			return nil, fmt.Errorf("[%s] Safety Error: foreign function '%s' can only be called inside unsafe { ... }", e.At, id.Name)
-		}
+		// extern fn declarations are Wasm host imports and are safe to call
+		// directly. Only raw pointer escape hatches require an unsafe block.
 		// Direct generic constructors: Chan[T](cap) and Pool[T](cap).
 		if gen, ok := e.Callee.(*GenericTypeExpr); ok && (gen.BaseType == "Chan" || gen.BaseType == "Pool") {
 			if len(e.Args) != 1 {
