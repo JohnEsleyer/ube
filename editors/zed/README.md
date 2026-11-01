@@ -1,26 +1,28 @@
 # Ube Language Support for Zed
 
-Official language extension for **Ube** — *The sweet, grounded systems language.*
+Official language extension for **Ube** — *The sweet, grounded language for games, apps, and backends.*
 
-Equips the [Zed](https://zed.dev) editor with Tree-sitter grammar support, Vim text objects, runnable code triggers, and integration with the native `ube lsp` language server.
+Equips the [Zed](https://zed.dev) editor with Tree-sitter grammar queries, Vim text objects, runnable code triggers, code snippets, and seamless integration with the native `ube lsp` language server.
 
 ---
 
 ## ✨ Features
 
-- **Tree-sitter Syntax Highlighting**: Accurate, semantic colorization for keywords (`arena`, `promote`, `spawn`, `or_else`), tagged enums, struct definitions, generics, receiver methods, and format strings.
+- **Tree-sitter Syntax Highlighting**: Accurate, semantic colorization for keywords (`arena`, `promote`, `spawn`, `or_else`), tagged enums, struct definitions, generics, receiver methods, format strings, and numbers.
 - **Bracket Matching & Auto-Closing**: Auto-closes brackets, braces, and strings with full support for Zed's rainbow brackets.
 - **Auto-Indentation**: Indentation rules for code blocks, match arms, and clause alignment (`if` / `else`).
 - **Code Outline & Symbol Search**: Fast navigation in Zed's Outline Panel (`Cmd+Shift+O` / `Ctrl+Shift+O`) across functions, methods, structs, enums, and traits.
 - **Vim Mode Text Objects**: Method-level and struct-level navigation (`af`, `if`, `ac`, `ic`).
 - **Runnable Code Buttons**: Gutter **Run** buttons for `fn main()` and `test_*` functions directly in the editor.
+- **Code Snippets**: Quick templates for `main`, `fn`, `fnrecv`, `struct`, `enum`, `match`, `arena`, `spawn`, `chan`, and `pool`.
 - **Custom File Icon**: Official Ube jam jar icon for `.ube` files in the project panel and editor tabs.
 - **Language Server Protocol (`ube lsp`)**:
-  - Hover type inspection
+  - Hover type inspection and docstrings
   - Go to definition
-  - Document and workspace symbols
-  - Auto-completions
-  - Live compiler diagnostics on save
+  - Document symbols
+  - Auto-completions for keywords, builtins, and members
+  - Live compiler diagnostics on change/save
+  - Document formatting via `ube fmt`
 
 ---
 
@@ -61,7 +63,7 @@ Equips the [Zed](https://zed.dev) editor with Tree-sitter grammar support, Vim t
 
 ## ⚙️ Configuration (`settings.json`)
 
-To enable automatic formatting on save with `ube fmt` and configure LSP behavior, add the following to your Zed `settings.json` (`Ctrl+,` / `Cmd+,`):
+Add the following to your Zed `settings.json` (`Ctrl+,` / `Cmd+,`):
 
 ```json
 {
@@ -70,12 +72,7 @@ To enable automatic formatting on save with `ube fmt` and configure LSP behavior
       "tab_size": 4,
       "hard_tabs": false,
       "format_on_save": "on",
-      "formatter": {
-        "external": {
-          "command": "ube",
-          "arguments": ["fmt", "{buffer_path}"]
-        }
-      }
+      "formatter": "language_server"
     }
   },
   "lsp": {
@@ -85,6 +82,16 @@ To enable automatic formatting on save with `ube fmt` and configure LSP behavior
   }
 }
 ```
+
+> **Tip:** You can also format using the CLI formatter directly by setting:
+> ```json
+> "formatter": {
+>   "external": {
+>     "command": "ube",
+>     "arguments": ["fmt", "{buffer_path}"]
+>   }
+> }
+> ```
 
 ---
 
@@ -103,43 +110,15 @@ editors/zed/
 │   └── ube.svg                 # Ube jar logo icon
 ├── languages/
 │   └── ube/
-│       ├── config.toml         # Comment styles, brackets, tabs, regex indents
+│       ├── config.toml         # Comment styles, brackets, tabs
 │       ├── highlights.scm      # Tree-sitter theme styling captures
 │       ├── brackets.scm        # Rainbow bracket matching pairs
 │       ├── indents.scm         # Syntax-based indentation rules
 │       ├── outline.scm         # Symbol outline queries
 │       ├── textobjects.scm     # Vim motions (af, if, ac, ic)
 │       ├── overrides.scm       # Scope-specific setting overrides
-│       └── runnables.scm       # Gutter run actions for main() and test_*
+│       ├── runnables.scm       # Gutter run actions for main() and test_*
+│       └── snippets.json       # Code snippets
 └── grammars/
     └── ube/                    # Tree-sitter grammar repo (with src/parser.c)
 ```
-
----
-
-## 🔍 Troubleshooting
-
-- **`Failed to install dev extension: compiling grammar 'ube'`**:
-  - Zed requires the grammar directory `editors/zed/grammars/ube` to be a Git repository matching the repository URL and 40-character commit SHA in `extension.toml`.
-  - Run `git rev-parse HEAD` inside `editors/zed/grammars/ube` and ensure the full hash is pasted into `rev = "..."` in `extension.toml`.
-- **LSP features (Hover, Definition) not working**:
-  - Ensure `ube` is in your system `$PATH` (`which ube`).
-  - You can test the language server directly in your terminal: `ube lsp`.
-- **"Ube Icons" not appearing in the icon theme selector**:
-  - Zed caches extension metadata in `~/.local/share/zed/extensions/index.json`. If the icon theme was added to the extension **after** it was first installed as a dev extension, this cache becomes stale and the theme won't appear in `icon theme selector: toggle`.
-  - **Fix:** Manually update the index to register the icon theme:
-    ```sh
-    python3 << 'EOF'
-    import json
-    idx = '/home/$USER/.local/share/zed/extensions/index.json'
-    with open(idx) as f: data = json.load(f)
-    data['extensions']['ube']['manifest']['icon_themes'] = ['icon_themes/ube.json']
-    data['icon_themes']['Ube Icons'] = {'extension': 'ube', 'path': 'icon_themes/ube.json'}
-    with open(idx, 'w') as f: json.dump(data, f, indent=4)
-    print("Done — restart Zed")
-    EOF
-    ```
-  - **Alternative:** Uninstall the extension in Zed and re-add it via `zed: install dev extension` → select `editors/zed`. Zed will rebuild the index from scratch, picking up the icon theme.
-- **Check Zed Logs**:
-  - Linux: `tail -n 50 ~/.local/share/zed/logs/Zed.log`
-  - macOS: `tail -n 50 ~/Library/Logs/Zed/Zed.log`

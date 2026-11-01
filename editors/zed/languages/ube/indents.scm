@@ -1,12 +1,18 @@
 [
   (block)
-  (struct_body)
-  (enum_body)
-  (trait_body)
+  (fn_declaration)
+  (function_declaration)
+  (struct_declaration)
+  (enum_declaration)
+  (trait_declaration)
   (match_statement)
+  (match_arm)
   (select_statement)
-  (argument_list)
-  (parameter_list)
+  (select_case)
+  (if_statement)
+  (while_statement)
+  (for_statement)
+  (arena_statement)
 ] @indent
 
 [
@@ -14,5 +20,3 @@
   "]"
   ")"
 ] @outdent
-
-(if_statement) @start.if

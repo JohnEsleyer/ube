@@ -1,0 +1,89 @@
+{
+  "Main Function": {
+    "prefix": "main",
+    "body": [
+      "fn main() {",
+      "\t${1:println(\"Kamusta, Ube! 🍠\")}",
+      "}"
+    ],
+    "description": "Standard main entry point"
+  },
+  "Function": {
+    "prefix": "fn",
+    "body": [
+      "fn ${1:name}(${2:params}) -> ${3:i32} {",
+      "\t${0}",
+      "}"
+    ],
+    "description": "Standard function"
+  },
+  "Receiver Method": {
+    "prefix": "fnrecv",
+    "body": [
+      "fn (${1:self} ${2:Type}) ${3:method_name}(${4:params}) -> ${5:void} {",
+      "\t${0}",
+      "}"
+    ],
+    "description": "Go-style struct receiver method"
+  },
+  "Struct": {
+    "prefix": "struct",
+    "body": [
+      "struct ${1:Name} {",
+      "\t${2:field}: ${3:i32},",
+      "}"
+    ],
+    "description": "Struct declaration"
+  },
+  "Tagged Enum": {
+    "prefix": "enum",
+    "body": [
+      "enum ${1:Name} {",
+      "\t${2:Variant}(${3:i32}),",
+      "\t${4:Other}",
+      "}"
+    ],
+    "description": "Tagged union / sum type"
+  },
+  "Pattern Match": {
+    "prefix": "match",
+    "body": [
+      "match ${1:variable} {",
+      "\t${2:Variant}(${3:x}) => {",
+      "\t\t${0}",
+      "\t},",
+      "}"
+    ],
+    "description": "Pattern matching on enums"
+  },
+  "Arena Scratchpad": {
+    "prefix": "arena",
+    "body": [
+      "arena {",
+      "\t${0}",
+      "} // Wiped in 1 instruction!"
+    ],
+    "description": "Regional memory arena reset block"
+  },
+  "Spawn Task": {
+    "prefix": "spawn",
+    "body": [
+      "spawn ${1:worker_fn}(${2:channel})"
+    ],
+    "description": "Spawn a concurrent task"
+  },
+  "Channel": {
+    "prefix": "chan",
+    "body": [
+      "let ${1:ch} = Chan[${2:i32}].new(${3:8})"
+    ],
+    "description": "Buffered message passing channel"
+  },
+  "Generational Pool": {
+    "prefix": "pool",
+    "body": [
+      "let mut ${1:pool} = Pool[${2:Entity}].new(${3:64})"
+    ],
+    "description": "Generational entity pool"
+  }
+}

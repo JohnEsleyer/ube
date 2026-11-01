@@ -1,15 +1,15 @@
-(
-  (function_declaration
-    name: (identifier) @_name
-    (#eq? @_name "main")
-  ) @run
-  (#set! tag ube-main)
-)
+(fn_declaration
+  name: (identifier) @run
+  (#eq? @run "main")) @runnable
 
-(
-  (function_declaration
-    name: (identifier) @_name
-    (#match? @_name "^test_")
-  ) @run
-  (#set! tag ube-test)
-)
+(fn_declaration
+  name: (identifier) @run
+  (#match? @run "^test_")) @runnable
+
+(function_declaration
+  name: (identifier) @run
+  (#eq? @run "main")) @runnable
+
+(function_declaration
+  name: (identifier) @run
+  (#match? @run "^test_")) @runnable

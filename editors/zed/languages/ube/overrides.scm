@@ -1,6 +1,3 @@
-[
-  (string_literal)
-  (format_string_literal)
-] @string
-
-(comment) @comment.inclusive
+(comment) @comment
+(string_literal) @string
+(format_string) @string.special

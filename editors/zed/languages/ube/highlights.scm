@@ -1,120 +1,80 @@
-; Comments
-(comment) @comment
-
-; Explicit bindings for variable declarations
-("let") @keyword
-("mut") @keyword
-("fn") @keyword
-("struct") @keyword
-("enum") @keyword
-("match") @keyword
-
-; Member expressions should not re-classify statements
-(member_expression
-  target: (identifier) @type
-  member: (identifier) @property)
-
-; Visibility and Modifiers
-(visibility) @keyword
-(mutability) @keyword
+; ==============================================================================
+; Tree-sitter Highlighting Queries for Ube
+; ==============================================================================
 
 ; Keywords
-[
-  "import"
-  "struct"
-  "enum"
-  "trait"
-  "extern"
-  "arena"
-  "unsafe"
-  "defer"
-  "spawn"
-] @keyword
-
-[
-  "fn"
-] @keyword.function
+"fn" @keyword.function
+"return" @keyword.return
 
 [
   "let"
-] @keyword
-
-[
-  "return"
-] @keyword.return
+  "mut"
+  "pub"
+] @keyword.modifier
 
 [
   "if"
   "else"
+  "while"
+  "for"
+  "in"
   "match"
   "select"
-  "case"
-  "default"
+  "spawn"
+  "arena"
+  "promote"
+  "defer"
+  "or_else"
   "break"
   "continue"
 ] @keyword.control
 
 [
-  "for"
-  "while"
-  "in"
-] @keyword.repeat
+  "struct"
+  "enum"
+  "trait"
+  "extern"
+  "import"
+] @keyword
 
-"or_else" @keyword.operator
+; Constants & Literals
+[
+  "true"
+  "false"
+] @boolean
 
-; Literals
-(boolean_literal) @boolean
-(null_literal) @constant.builtin
-(number_literal) @number
-(string_literal) @string
-(format_string_literal) @string
-(escape_sequence) @string.escape
+"null" @constant.builtin
 
-; Built-in and Custom Types
-(primitive_type) @type.builtin
-(type_identifier) @type
+[
+  (integer_literal)
+  (int_literal)
+  (number)
+] @number
 
-; Function and Method Declarations
-(function_declaration
-  name: (identifier) @function)
+[
+  (float_literal)
+] @number.float
 
-(trait_method_declaration
-  name: (identifier) @function)
+[
+  (string_literal)
+  (string)
+] @string
 
-(extern_function_declaration
-  name: (identifier) @function)
+[
+  (format_string)
+  (interpolated_string)
+] @string.special
 
-; Function & Method Calls
-(call_expression
-  function: (identifier) @function)
+[
+  (escape_sequence)
+] @string.escape
 
-(call_expression
-  function: (member_expression
-    member: (identifier) @function.method @function))
-
-; Parameters
-(parameter
-  name: (identifier) @variable.parameter)
-
-(receiver
-  name: (identifier) @variable.parameter)
-
-; Field Access and Initializers
-(field_declaration
-  name: (identifier) @property)
-
-(field_initializer
-  name: (identifier) @property)
-
-(member_expression
-  member: (identifier) @property)
-
-; Enum Variants
-(variant_declaration
-  name: (identifier) @variant)
-
-(match_pattern
-  name: (identifier) @variant)
+; Comments
+[
+  (line_comment)
+  (block_comment)
+  (comment)
+] @comment
 
 ; Operators
 [
@@ -122,41 +82,40 @@
   "=>"
   "?"
   "!"
-  "="
-  "+="
-  "-="
-  "*="
-  "/="
-  "%="
-  "&="
-  "|="
-  "^="
-  "<<="
-  ">>="
+  ".."
+  "+"
+  "-"
+  "*"
+  "/"
+  "%"
   "=="
   "!="
   "<"
   "<="
   ">"
   ">="
-  "<<"
-  ">>"
+  "="
+  "+="
+  "-="
+  "*="
+  "/="
+  "%="
   "&&"
   "||"
-  "+"
-  "-"
-  "*"
-  "/"
-  "%"
   "&"
   "|"
   "^"
   "~"
-  "<-"
-  ".."
+  "<<"
+  ">>"
+  "&="
+  "|="
+  "^="
+  "<<="
+  ">>="
 ] @operator
 
-; Delimiters & Brackets
+; Delimiters
 [
   "("
   ")"
@@ -168,6 +127,54 @@
 
 [
   ","
-  ":"
   "."
+  ":"
+  ";"
 ] @punctuation.delimiter
+
+; Built-in types
+((identifier) @type.builtin
+  (#match? @type.builtin "^(i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|bool|string|void|Chan|Pool|UbeHandle|StringBuilder)$"))
+
+; Capitalized identifiers as user types
+((identifier) @type
+  (#match? @type "^[A-Z][a-zA-Z0-9_]*$"))
+
+(primitive_type) @type.builtin
+(custom_type) @type
+(type_identifier) @type
+
+; Built-in functions
+((identifier) @function.builtin
+  (#match? @function.builtin "^(print|println|println_str|format|time_now_ms|sleep_ms|yield|exit_process|int_to_str|str_to_int|read_file|write_file|file_exists|file_remove|path_join|dir_list|dir_create|env_get|env_set|cmd_run|str_contains|str_starts_with|str_ends_with|str_trim|str_index_of|str_split|str_replace|os_args|abs|min|max|sqrt|pow|floor|ceil)$"))
+
+; Function and Method Declarations
+(fn_declaration
+  name: (identifier) @function)
+
+(function_declaration
+  name: (identifier) @function)
+
+(extern_fn_declaration
+  name: (identifier) @function)
+
+; Method Calls and Direct Calls
+(call_expression
+  function: (identifier) @function.call)
+
+(call_expression
+  function: (member_expression
+    member: (identifier) @function.method))
+
+; Parameters & Members
+(parameter
+  name: (identifier) @variable.parameter)
+
+(field_declaration
+  name: (identifier) @variable.member)
+
+(member_expression
+  member: (identifier) @variable.member)
+
+(field_initializer
+  name: (identifier) @variable.member)
