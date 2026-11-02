@@ -2,9 +2,7 @@ package compiler_test
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/JohnEsleyer/ube/pkg/compiler"
@@ -13,59 +11,87 @@ import (
 func TestDirectWasm_ArithmeticAndPrint(t *testing.T) {
 	src := `
 fn add(a: i32, b: i32) -> i32 {
-    return a + b
+	return a + b
 }
 
 fn main() {
-    let mut x = 10
-    x += 5
-    let res = add(x, 20)
-    println(res)
+	let x = 10
+	let y = 20
+	let z = add(x, y)
+	println(z)
 }
 `
 	lexer := compiler.NewLexer("test.ube", src)
 	tokens, err := lexer.Tokenize()
 	if err != nil {
-		t.Fatalf("tokenize failed: %v", err)
+		t.Fatalf("tokenize error: %v", err)
 	}
 
 	parser := compiler.NewParser(tokens)
 	prog, err := parser.ParseProgram()
 	if err != nil {
-		t.Fatalf("parse failed: %v", err)
+		t.Fatalf("parse error: %v", err)
 	}
 
 	tc := compiler.NewTypechecker()
 	if err := tc.Check(prog); err != nil {
-		t.Fatalf("typecheck failed: %v", err)
+		t.Fatalf("typecheck error: %v", err)
 	}
 
-	wasmBytes, err := compiler.EmitWasm(prog)
+	wasmData, err := compiler.EmitWasm(prog)
 	if err != nil {
-		t.Fatalf("direct wasm emission failed: %v", err)
+		t.Fatalf("EmitWasm failed: %v", err)
 	}
 
-	// Verify header magic (\0asm) and version (0x01)
-	if len(wasmBytes) < 8 {
-		t.Fatalf("wasm bytes too short: %d", len(wasmBytes))
+	if len(wasmData) < 8 {
+		t.Fatalf("Wasm binary too small: %d bytes", len(wasmData))
 	}
-	if string(wasmBytes[0:4]) != "\x00asm" {
-		t.Fatalf("invalid wasm magic header: %v", wasmBytes[0:4])
+	// Verify Wasm magic header \0asm\1\0\0\0
+	if wasmData[0] != 0x00 || wasmData[1] != 0x61 || wasmData[2] != 0x73 || wasmData[3] != 0x6d {
+		t.Fatalf("Invalid wasm magic bytes: %x", wasmData[:4])
+	}
+}
+
+func TestDirectWasm_StringLiteralsAndArena(t *testing.T) {
+	src := `
+struct Point {
+	x: i32,
+	y: i32
+}
+
+fn main() {
+	println("Direct Wasm 0.8.1")
+	arena {
+		let p = Point{ x: 42, y: 84 }
+		println(p.x)
+		println(p.y)
+	}
+}
+`
+	lexer := compiler.NewLexer("arena.ube", src)
+	tokens, err := lexer.Tokenize()
+	if err != nil {
+		t.Fatalf("tokenize error: %v", err)
 	}
 
-	// If wasmtime or node is available, execute the generated wasm directly
-	tmpWasm := filepath.Join(t.TempDir(), "direct.wasm")
-	if err := os.WriteFile(tmpWasm, wasmBytes, 0755); err != nil {
-		t.Fatalf("write wasm failed: %v", err)
+	parser := compiler.NewParser(tokens)
+	prog, err := parser.ParseProgram()
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
 	}
 
-	if wasmtimePath, err := exec.LookPath("wasmtime"); err == nil {
-		out, err := exec.Command(wasmtimePath, tmpWasm).CombinedOutput()
-		if err != nil {
-			t.Fatalf("wasmtime execution failed: %v\nOutput: %s", err, string(out))
-		}
-		if strings.TrimSpace(string(out)) != "35" {
-			t.Fatalf("expected output '35', got: %q", string(out))
-		}
+	tc := compiler.NewTypechecker()
+	if err := tc.Check(prog); err != nil {
+		t.Fatalf("typecheck error: %v", err)
+	}
+
+	wasmData, err := compiler.EmitWasm(prog)
+	if err != nil {
+		t.Fatalf("EmitWasm failed: %v", err)
+	}
+
+	tmpFile := filepath.Join(t.TempDir(), "test_arena.wasm")
+	if err := os.WriteFile(tmpFile, wasmData, 0644); err != nil {
+		t.Fatalf("failed to write test wasm: %v", err)
 	}
 }

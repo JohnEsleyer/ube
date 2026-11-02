@@ -7,7 +7,7 @@
 **The sweet, grounded language for games, apps, and backends.**  
 *100% WebAssembly. Fully Sandboxed. Zero GC. Clean like Go.*
 
-**Latest version: `0.8.0`**
+**Latest version: `0.8.1`**
 
 </div>
 

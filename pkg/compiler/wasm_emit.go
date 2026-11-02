@@ -5,124 +5,201 @@ import (
 	"fmt"
 )
 
-// EmitWasm compiles an AST Program directly into standard WebAssembly v1 binary
-// bytes with WASI Preview 1 support, requiring zero C toolchains or external SDKs.
+// EmitWasm compiles an AST program directly into WebAssembly binary bytecode (.wasm)
+// without requiring Clang, Zig, or any intermediate C compiler.
 func EmitWasm(prog *Program) ([]byte, error) {
-	e := newWasmEmitter()
-	return e.compile(prog)
+	emitter := newWasmEmitter()
+	return emitter.compile(prog)
+}
+
+// Bytecode constants for WebAssembly binary encoding
+const (
+	wasmMagic   = 0x6d736100
+	wasmVersion = 0x00000001
+
+	// Type opcodes
+	valTypeI32  = byte(0x7f)
+	valTypeI64  = byte(0x7e)
+	valTypeF32  = byte(0x7d)
+	valTypeF64  = byte(0x7c)
+	valTypeVoid = byte(0x40)
+
+	// Section IDs
+	secCustom   = byte(0)
+	secType     = byte(1)
+	secImport   = byte(2)
+	secFunction = byte(3)
+	secTable    = byte(4)
+	secMemory   = byte(5)
+	secGlobal   = byte(6)
+	secExport   = byte(7)
+	secStart    = byte(8)
+	secElement  = byte(9)
+	secCode     = byte(10)
+	secData     = byte(11)
+
+	// WASI Scratch and Memory Layout
+	scratchCiovec = 0    // Offset 0..7: ciovec { ptr: i32, len: i32 }
+	scratchNwrite = 8    // Offset 8..11: nwritten i32
+	scratchItoa   = 16   // Offset 16..47: itoa string buffer
+	staticDataOff = 64   // Offset 64..: static string literals
+	initialHeap   = 4096 // Offset 4096..: dynamic arena bump allocations
+)
+
+type structMeta struct {
+	fieldOffsets map[string]int
+	totalSize    int
 }
 
 type wasmEmitter struct {
-	types      [][]byte
-	typeMap    map[string]uint32
-	funcs      []uint32 // type index for each defined func
-	codeBodies [][]byte
-	data       []byte
-	dataOffset uint32
-	fnIndices  map[string]uint32
-	globals    []byte
+	types       [][]byte
+	typeMap     map[string]uint32
+	funcs       []uint32 // type index for each defined func
+	codeBodies  [][]byte
+	data        []byte
+	dataOffset  uint32
+	fnIndices   map[string]uint32
+	fdWriteIdx  uint32
+	hasFdWrite  bool
+	structs     map[string]structMeta
 }
 
 func newWasmEmitter() *wasmEmitter {
 	return &wasmEmitter{
 		typeMap:    make(map[string]uint32),
-		dataOffset: 1024, // Reserve first 1024 bytes for scratch/IO
 		fnIndices:  make(map[string]uint32),
+		structs:    make(map[string]structMeta),
+		dataOffset: staticDataOff,
 	}
 }
 
 func (e *wasmEmitter) registerType(params []byte, results []byte) uint32 {
 	key := fmt.Sprintf("%v->%v", params, results)
-	if idx, ok := e.typeMap[key]; ok {
+	if idx, exists := e.typeMap[key]; exists {
 		return idx
 	}
-	var b bytes.Buffer
-	b.WriteByte(0x60) // func type
-	writeUleb128(&b, uint32(len(params)))
-	b.Write(params)
-	writeUleb128(&b, uint32(len(results)))
-	b.Write(results)
+
+	var buf bytes.Buffer
+	buf.WriteByte(0x60) // func type
+	writeUleb128(&buf, uint32(len(params)))
+	buf.Write(params)
+	writeUleb128(&buf, uint32(len(results)))
+	buf.Write(results)
+
 	idx := uint32(len(e.types))
-	e.types = append(e.types, b.Bytes())
+	e.types = append(e.types, buf.Bytes())
 	e.typeMap[key] = idx
 	return idx
 }
 
+func (e *wasmEmitter) internString(s string) (uint32, uint32) {
+	strBytes := []byte(s)
+	length := uint32(len(strBytes))
+	offset := e.dataOffset
+	e.data = append(e.data, strBytes...)
+	e.dataOffset += length
+	return offset, length
+}
+
 func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
-	// Import 0: wasi_snapshot_preview1.fd_write (i32, i32, i32, i32) -> i32
-	fdWriteType := e.registerType([]byte{0x7f, 0x7f, 0x7f, 0x7f}, []byte{0x7f})
-	_ = fdWriteType
-	e.fnIndices["wasi_fd_write"] = 0
+	// Register WASI fd_write import type: (i32, i32, i32, i32) -> i32
+	e.fdWriteIdx = 0
+	e.hasFdWrite = true
+	e.registerType([]byte{valTypeI32, valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
 
-	// Initialize scratch space in memory:
-	// offset 64: newline '\n' (0x0a)
-	e.data = make([]byte, 1024)
-	e.data[64] = '\n'
+	// Pre-scan structs to build memory field layouts
+	for _, decl := range prog.Decls {
+		if s, ok := decl.(*StructDecl); ok {
+			meta := structMeta{
+				fieldOffsets: make(map[string]int),
+			}
+			offset := 0
+			for _, f := range s.Fields {
+				meta.fieldOffsets[f.Name] = offset
+				offset += 4 // standard 32-bit word alignment
+			}
+			meta.totalSize = offset
+			if meta.totalSize == 0 {
+				meta.totalSize = 4
+			}
+			e.structs[s.Name] = meta
+		}
+	}
 
-	// Collect user function declarations
-	var userFns []*FnDecl
+	// First pass: register function signatures and assign function indices
+	// Index 0 is reserved for WASI fd_write
+	funcOffset := uint32(1)
+
+	var fnDecls []*FnDecl
 	var mainFn *FnDecl
+
 	for _, decl := range prog.Decls {
 		if fn, ok := decl.(*FnDecl); ok {
-			userFns = append(userFns, fn)
-			if fn.Name == "main" && fn.Receiver == nil {
+			fnDecls = append(fnDecls, fn)
+			e.fnIndices[fn.Name] = funcOffset + uint32(len(fnDecls)-1)
+			if fn.Name == "main" {
 				mainFn = fn
 			}
 		}
 	}
 
 	if mainFn == nil {
-		return nil, fmt.Errorf("direct wasm emission requires 'fn main()'")
+		return nil, fmt.Errorf("no 'main' function found in program")
 	}
 
-	// Register function signatures (index starts at 1, after fd_write)
-	currFnIdx := uint32(1)
-	for _, fn := range userFns {
+	// Register helper function indices
+	printIntIdx := funcOffset + uint32(len(fnDecls))
+	e.fnIndices["__print_i32"] = printIntIdx
+
+	printStrIdx := printIntIdx + 1
+	e.fnIndices["__print_str"] = printStrIdx
+
+	startIdx := printStrIdx + 1
+	e.fnIndices["_start"] = startIdx
+
+	// Register types for defined functions
+	for _, fn := range fnDecls {
 		var params []byte
 		for range fn.Params {
-			params = append(params, 0x7f) // i32 default for primitives & pointers
+			params = append(params, valTypeI32)
 		}
 		var results []byte
 		if fn.RetType != nil {
 			if _, isVoid := fn.RetType.(PrimitiveType); !isVoid || fn.RetType.String() != "void" {
-				results = append(results, 0x7f)
+				if fn.RetType.String() == "f32" {
+					results = append(results, valTypeF32)
+				} else {
+					results = append(results, valTypeI32)
+				}
 			}
 		}
-		tIdx := e.registerType(params, results)
-		e.funcs = append(e.funcs, tIdx)
-		e.fnIndices[fn.Name] = currFnIdx
-		currFnIdx++
+		typeIdx := e.registerType(params, results)
+		e.funcs = append(e.funcs, typeIdx)
 	}
 
-	// Helper: __ube_print_int (converts i32 to ascii digits, prints via fd_write)
-	printIntType := e.registerType([]byte{0x7f, 0x7f}, nil) // (val, newline) -> void
-	e.funcs = append(e.funcs, printIntType)
-	printIntIdx := currFnIdx
-	e.fnIndices["__ube_print_int"] = printIntIdx
-	currFnIdx++
+	// Register types for helpers:
+	// __print_i32: (i32, i32) -> void  (val, newline)
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{}))
+	// __print_str: (i32, i32, i32) -> void (ptr, len, newline)
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32, valTypeI32}, []byte{}))
+	// _start: () -> void
+	e.funcs = append(e.funcs, e.registerType([]byte{}, []byte{}))
 
-	// Register _start entrypoint (type: () -> void)
-	startType := e.registerType(nil, nil)
-	e.funcs = append(e.funcs, startType)
-	startFnIdx := currFnIdx
-	currFnIdx++
-
-	// Compile user functions
-	for _, fn := range userFns {
+	// Second pass: compile function bodies
+	for _, fn := range fnDecls {
 		body, err := e.compileFunction(fn)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("function %s: %w", fn.Name, err)
 		}
 		e.codeBodies = append(e.codeBodies, body)
 	}
 
-	// Compile __ube_print_int helper
+	// Compile built-in helper functions
 	e.codeBodies = append(e.codeBodies, e.buildPrintIntFunc())
-
-	// Compile _start entrypoint
+	e.codeBodies = append(e.codeBodies, e.buildPrintStrFunc())
 	e.codeBodies = append(e.codeBodies, e.buildStartFunc(e.fnIndices["main"]))
 
-	return e.assembleBinary(startFnIdx)
+	return e.assembleBinary()
 }
 
 type fnContext struct {
@@ -135,47 +212,42 @@ type fnContext struct {
 
 func (e *wasmEmitter) compileFunction(fn *FnDecl) ([]byte, error) {
 	ctx := &fnContext{
-		emitter:   e,
-		locals:    make(map[string]uint32),
-		numParams: uint32(len(fn.Params)),
+		emitter: e,
+		locals:  make(map[string]uint32),
 	}
 
 	for i, param := range fn.Params {
 		ctx.locals[param.Name] = uint32(i)
 	}
+	ctx.numParams = uint32(len(fn.Params))
 
-	var code bytes.Buffer
-	if err := ctx.compileBlock(&code, fn.Body); err != nil {
+	var bodyBuf bytes.Buffer
+	if err := ctx.compileBlock(&bodyBuf, fn.Body); err != nil {
 		return nil, err
 	}
-	code.WriteByte(0x0b) // end opcode
+	bodyBuf.WriteByte(0x0b) // end opcode
 
-	// Assemble function: local declarations + code
-	var body bytes.Buffer
-	var localEntries [][]byte
-	for _, t := range ctx.localTypes {
-		var l bytes.Buffer
-		writeUleb128(&l, 1) // count
-		l.WriteByte(t)     // type
-		localEntries = append(localEntries, l.Bytes())
+	var codeBuf bytes.Buffer
+	writeUleb128(&codeBuf, uint32(len(ctx.localTypes)))
+	for _, lt := range ctx.localTypes {
+		writeUleb128(&codeBuf, 1)
+		codeBuf.WriteByte(lt)
 	}
+	codeBuf.Write(bodyBuf.Bytes())
 
-	writeUleb128(&body, uint32(len(localEntries)))
-	for _, le := range localEntries {
-		body.Write(le)
-	}
-	body.Write(code.Bytes())
+	var fullBuf bytes.Buffer
+	writeUleb128(&fullBuf, uint32(codeBuf.Len()))
+	fullBuf.Write(codeBuf.Bytes())
+	return fullBuf.Bytes(), nil
+}
 
-	var final bytes.Buffer
-	writeUleb128(&final, uint32(body.Len()))
-	final.Write(body.Bytes())
-	return final.Bytes(), nil
+func (ctx *fnContext) allocLocal(t byte) uint32 {
+	idx := ctx.numParams + uint32(len(ctx.localTypes))
+	ctx.localTypes = append(ctx.localTypes, t)
+	return idx
 }
 
 func (ctx *fnContext) compileBlock(buf *bytes.Buffer, block *BlockStmt) error {
-	if block == nil {
-		return nil
-	}
 	for _, stmt := range block.Stmts {
 		if err := ctx.compileStmt(buf, stmt); err != nil {
 			return err
@@ -187,51 +259,64 @@ func (ctx *fnContext) compileBlock(buf *bytes.Buffer, block *BlockStmt) error {
 func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 	switch s := stmt.(type) {
 	case *LetStmt:
-		idx := ctx.numParams + uint32(len(ctx.localTypes))
-		ctx.localTypes = append(ctx.localTypes, 0x7f)
-		ctx.locals[s.Name] = idx
+		valIdx := ctx.allocLocal(valTypeI32)
+		ctx.locals[s.Name] = valIdx
 		if s.Value != nil {
 			if err := ctx.compileExpr(buf, s.Value); err != nil {
 				return err
 			}
 			buf.WriteByte(0x21) // local.set
-			writeUleb128(buf, idx)
+			writeUleb128(buf, valIdx)
 		}
+
 	case *AssignStmt:
 		if ident, ok := s.LHS.(*IdentExpr); ok {
-			idx, exists := ctx.locals[ident.Name]
+			localIdx, exists := ctx.locals[ident.Name]
 			if !exists {
-				return fmt.Errorf("undefined variable in assignment: %s", ident.Name)
+				return fmt.Errorf("unknown variable %s in assignment", ident.Name)
 			}
-			if s.Op == "=" {
-				if err := ctx.compileExpr(buf, s.RHS); err != nil {
-					return err
-				}
-			} else {
-				// Compound assignment: +=, -=, *=, /=
-				buf.WriteByte(0x20) // local.get
-				writeUleb128(buf, idx)
-				if err := ctx.compileExpr(buf, s.RHS); err != nil {
-					return err
-				}
-				switch s.Op {
-				case "+=":
-					buf.WriteByte(0x6a) // i32.add
-				case "-=":
-					buf.WriteByte(0x6b) // i32.sub
-				case "*=":
-					buf.WriteByte(0x6c) // i32.mul
-				case "/=":
-					buf.WriteByte(0x6d) // i32.div_s
-				default:
-					return fmt.Errorf("unsupported assign operator %s", s.Op)
-				}
+			if err := ctx.compileExpr(buf, s.RHS); err != nil {
+				return err
 			}
 			buf.WriteByte(0x21) // local.set
-			writeUleb128(buf, idx)
-		} else {
-			return fmt.Errorf("complex lvalue assignment not yet supported in direct wasm")
+			writeUleb128(buf, localIdx)
+		} else if mem, ok := s.LHS.(*MemberExpr); ok {
+			// Struct field assignment: target.member = RHS
+			structName := mem.TargetType.String()
+			meta, ok := ctx.emitter.structs[structName]
+			if !ok {
+				return fmt.Errorf("unknown struct type %s", structName)
+			}
+			offset, ok := meta.fieldOffsets[mem.Member]
+			if !ok {
+				return fmt.Errorf("unknown field %s on struct %s", mem.Member, structName)
+			}
+			// Push target address
+			if err := ctx.compileExpr(buf, mem.Target); err != nil {
+				return err
+			}
+			// Push value to store
+			if err := ctx.compileExpr(buf, s.RHS); err != nil {
+				return err
+			}
+			buf.WriteByte(0x36) // i32.store
+			writeUleb128(buf, 2)
+			writeUleb128(buf, uint32(offset))
 		}
+
+	case *ExprStmt:
+		if err := ctx.compileExpr(buf, s.Expr); err != nil {
+			return err
+		}
+		if call, ok := s.Expr.(*CallExpr); ok {
+			if ident, ok := call.Callee.(*IdentExpr); ok && (ident.Name == "print" || ident.Name == "println") {
+				return nil
+			}
+		}
+		if _, isCall := s.Expr.(*CallExpr); isCall {
+			buf.WriteByte(0x1a) // drop
+		}
+
 	case *ReturnStmt:
 		if s.Value != nil {
 			if err := ctx.compileExpr(buf, s.Value); err != nil {
@@ -239,12 +324,13 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			}
 		}
 		buf.WriteByte(0x0f) // return
+
 	case *IfStmt:
 		if err := ctx.compileExpr(buf, s.Cond); err != nil {
 			return err
 		}
-		buf.WriteByte(0x04) // if
-		buf.WriteByte(0x40) // void block
+		buf.WriteByte(0x04)        // if
+		buf.WriteByte(valTypeVoid) // blocktype: void
 		if err := ctx.compileBlock(buf, s.Then); err != nil {
 			return err
 		}
@@ -261,48 +347,62 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			}
 		}
 		buf.WriteByte(0x0b) // end
+
 	case *WhileStmt:
-		// block { loop { cond; i32.eqz; br_if 1; body; br 0 } }
-		buf.WriteByte(0x02) // block
-		buf.WriteByte(0x40)
-		buf.WriteByte(0x03) // loop
-		buf.WriteByte(0x40)
+		buf.WriteByte(0x02)        // block
+		buf.WriteByte(valTypeVoid) // void
+		buf.WriteByte(0x03)        // loop
+		buf.WriteByte(valTypeVoid) // void
+
+		ctx.loopLabels = append(ctx.loopLabels, 1)
+
 		if err := ctx.compileExpr(buf, s.Cond); err != nil {
 			return err
 		}
 		buf.WriteByte(0x45) // i32.eqz
-		buf.WriteByte(0x0d) // br_if 1 (exit block)
+		buf.WriteByte(0x0d) // br_if break out
 		writeUleb128(buf, 1)
 
 		if err := ctx.compileBlock(buf, s.Body); err != nil {
 			return err
 		}
-		buf.WriteByte(0x0c) // br 0 (repeat loop)
+
+		buf.WriteByte(0x0c) // br loop again
 		writeUleb128(buf, 0)
+
+		ctx.loopLabels = ctx.loopLabels[:len(ctx.loopLabels)-1]
+
 		buf.WriteByte(0x0b) // end loop
 		buf.WriteByte(0x0b) // end block
-	case *LoopControlStmt:
-		if s.Continue {
-			buf.WriteByte(0x0c) // br 0
-			writeUleb128(buf, 0)
-		} else {
-			buf.WriteByte(0x0c) // br 1
-			writeUleb128(buf, 1)
-		}
-	case *ExprStmt:
-		if err := ctx.compileExpr(buf, s.Expr); err != nil {
+
+	case *ArenaStmt:
+		// arena { ... }
+		// 1. Save global $arena_ptr into a local
+		// 2. Execute block
+		// 3. Rewind global $arena_ptr back to saved value
+		savedLocal := ctx.allocLocal(valTypeI32)
+		buf.WriteByte(0x23) // global.get $arena_ptr (global 0)
+		writeUleb128(buf, 0)
+		buf.WriteByte(0x21) // local.set savedLocal
+		writeUleb128(buf, savedLocal)
+
+		if err := ctx.compileBlock(buf, s.Body); err != nil {
 			return err
 		}
-		// If expression leaves a value on stack, drop it
-		if call, isCall := s.Expr.(*CallExpr); isCall {
-			if ident, ok := call.Callee.(*IdentExpr); ok && (ident.Name == "print" || ident.Name == "println") {
-				// built-ins do not leave values on stack
-				return nil
-			}
-			buf.WriteByte(0x1a) // drop
+
+		buf.WriteByte(0x20) // local.get savedLocal
+		writeUleb128(buf, savedLocal)
+		buf.WriteByte(0x24) // global.set $arena_ptr (global 0)
+		writeUleb128(buf, 0)
+
+	case *LoopControlStmt:
+		if s.Continue {
+			buf.WriteByte(0x0c) // br (to loop start)
+			writeUleb128(buf, 0)
+		} else {
+			buf.WriteByte(0x0c) // br (to block end)
+			writeUleb128(buf, 1)
 		}
-	default:
-		return fmt.Errorf("unsupported statement type %T in direct wasm", stmt)
 	}
 	return nil
 }
@@ -311,36 +411,36 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 	switch e := expr.(type) {
 	case *LiteralExpr:
 		switch e.Type.String() {
-		case "i32", "int":
+		case "i32":
 			var val int32
 			fmt.Sscanf(e.Val, "%d", &val)
 			buf.WriteByte(0x41) // i32.const
 			writeSleb128(buf, val)
 		case "bool":
-			buf.WriteByte(0x41)
+			buf.WriteByte(0x41) // i32.const
 			if e.Val == "true" {
 				writeSleb128(buf, 1)
 			} else {
 				writeSleb128(buf, 0)
 			}
 		case "string":
-			// Place string in data section, push pointer to linear memory
-			strBytes := []byte(e.Val)
-			ptr := ctx.emitter.dataOffset
-			ctx.emitter.data = append(ctx.emitter.data, strBytes...)
-			ctx.emitter.dataOffset += uint32(len(strBytes))
-			buf.WriteByte(0x41)
-			writeSleb128(buf, int32(ptr))
+			// Intern string literal in linear data section and return pointer
+			off, _ := ctx.emitter.internString(e.Val)
+			buf.WriteByte(0x41) // i32.const (memory pointer)
+			writeSleb128(buf, int32(off))
 		default:
-			return fmt.Errorf("unsupported literal type: %s", e.Type)
+			buf.WriteByte(0x41)
+			writeSleb128(buf, 0)
 		}
+
 	case *IdentExpr:
-		idx, exists := ctx.locals[e.Name]
+		localIdx, exists := ctx.locals[e.Name]
 		if !exists {
-			return fmt.Errorf("undefined variable: %s", e.Name)
+			return fmt.Errorf("unknown variable %s", e.Name)
 		}
 		buf.WriteByte(0x20) // local.get
-		writeUleb128(buf, idx)
+		writeUleb128(buf, localIdx)
+
 	case *BinaryExpr:
 		if err := ctx.compileExpr(buf, e.Left); err != nil {
 			return err
@@ -371,34 +471,72 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			buf.WriteByte(0x4a) // i32.gt_s
 		case ">=":
 			buf.WriteByte(0x4e) // i32.ge_s
-		case "&":
+		case "&&":
 			buf.WriteByte(0x71) // i32.and
-		case "|":
+		case "||":
 			buf.WriteByte(0x72) // i32.or
-		case "^":
-			buf.WriteByte(0x73) // i32.xor
-		case "<<":
-			buf.WriteByte(0x74) // i32.shl
-		case ">>":
-			buf.WriteByte(0x75) // i32.shr_s
 		default:
-			return fmt.Errorf("unsupported binary operator: %s", e.Op)
+			return fmt.Errorf("unsupported operator %s in wasm emission", e.Op)
 		}
-	case *UnaryExpr:
-		if err := ctx.compileExpr(buf, e.Operand); err != nil {
+
+	case *MemberExpr:
+		// Struct field load: target.member
+		structName := e.TargetType.String()
+		meta, ok := ctx.emitter.structs[structName]
+		if !ok {
+			return fmt.Errorf("unknown struct type %s", structName)
+		}
+		offset, ok := meta.fieldOffsets[e.Member]
+		if !ok {
+			return fmt.Errorf("unknown field %s on struct %s", e.Member, structName)
+		}
+		if err := ctx.compileExpr(buf, e.Target); err != nil {
 			return err
 		}
-		switch e.Op {
-		case "-":
-			// 0 - val
-			buf.WriteByte(0x41)
-			writeSleb128(buf, 0)
-			buf.WriteByte(0x6b) // i32.sub
-		case "!":
-			buf.WriteByte(0x45) // i32.eqz
-		default:
-			return fmt.Errorf("unsupported unary operator: %s", e.Op)
+		buf.WriteByte(0x28) // i32.load
+		writeUleb128(buf, 2)
+		writeUleb128(buf, uint32(offset))
+
+	case *StructInitExpr:
+		// Allocates struct on the arena bump pointer and populates initialized fields
+		meta, ok := ctx.emitter.structs[e.Name]
+		if !ok {
+			return fmt.Errorf("unknown struct %s in init", e.Name)
 		}
+		structBase := ctx.allocLocal(valTypeI32)
+
+		// 1. structBase = $arena_ptr
+		buf.WriteByte(0x23) // global.get 0
+		writeUleb128(buf, 0)
+		buf.WriteByte(0x21) // local.set structBase
+		writeUleb128(buf, structBase)
+
+		// 2. $arena_ptr += totalSize
+		buf.WriteByte(0x20) // local.get structBase
+		writeUleb128(buf, structBase)
+		buf.WriteByte(0x41) // i32.const
+		writeSleb128(buf, int32(meta.totalSize))
+		buf.WriteByte(0x6a) // i32.add
+		buf.WriteByte(0x24) // global.set 0
+		writeUleb128(buf, 0)
+
+		// 3. Store field values
+		for _, f := range e.Fields {
+			offset := meta.fieldOffsets[f.Name]
+			buf.WriteByte(0x20) // local.get structBase
+			writeUleb128(buf, structBase)
+			if err := ctx.compileExpr(buf, f.Val); err != nil {
+				return err
+			}
+			buf.WriteByte(0x36) // i32.store
+			writeUleb128(buf, 2)
+			writeUleb128(buf, uint32(offset))
+		}
+
+		// Return structBase address
+		buf.WriteByte(0x20) // local.get structBase
+		writeUleb128(buf, structBase)
+
 	case *CallExpr:
 		if ident, ok := e.Callee.(*IdentExpr); ok {
 			if ident.Name == "print" || ident.Name == "println" {
@@ -406,7 +544,7 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			}
 			fnIdx, exists := ctx.emitter.fnIndices[ident.Name]
 			if !exists {
-				return fmt.Errorf("undefined function %s", ident.Name)
+				return fmt.Errorf("unknown function %s", ident.Name)
 			}
 			for _, arg := range e.Args {
 				if err := ctx.compileExpr(buf, arg); err != nil {
@@ -415,291 +553,420 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			}
 			buf.WriteByte(0x10) // call
 			writeUleb128(buf, fnIdx)
-		} else {
-			return fmt.Errorf("indirect function calls not yet supported in direct wasm")
 		}
-	default:
-		return fmt.Errorf("unsupported expression type %T in direct wasm", expr)
 	}
 	return nil
 }
 
 func (ctx *fnContext) compilePrint(buf *bytes.Buffer, args []Expr, newline bool) error {
+	nlVal := int32(0)
+	if newline {
+		nlVal = 1
+	}
+
 	for i, arg := range args {
-		isLast := (i == len(args)-1)
-		nl := int32(0)
-		if isLast && newline {
-			nl = 1
+		isLast := i == len(args)-1
+		currentNL := int32(0)
+		if isLast {
+			currentNL = nlVal
 		}
+
 		if lit, ok := arg.(*LiteralExpr); ok && lit.Type.String() == "string" {
-			strBytes := []byte(lit.Val)
-			ptr := ctx.emitter.dataOffset
-			ctx.emitter.data = append(ctx.emitter.data, strBytes...)
-			ctx.emitter.dataOffset += uint32(len(strBytes))
-
-			// Write iovec to offset 16
-			// iovec.buf = ptr
-			buf.WriteByte(0x41); writeSleb128(buf, 16)
-			buf.WriteByte(0x41); writeSleb128(buf, int32(ptr))
-			buf.WriteByte(0x36); writeUleb128(buf, 2); writeUleb128(buf, 0)
-
-			// iovec.len = len(strBytes)
-			buf.WriteByte(0x41); writeSleb128(buf, 20)
-			buf.WriteByte(0x41); writeSleb128(buf, int32(len(strBytes)))
-			buf.WriteByte(0x36); writeUleb128(buf, 2); writeUleb128(buf, 0)
-
-			// call fd_write(1, 16, 1, 24)
-			buf.WriteByte(0x41); writeSleb128(buf, 1)
-			buf.WriteByte(0x41); writeSleb128(buf, 16)
-			buf.WriteByte(0x41); writeSleb128(buf, 1)
-			buf.WriteByte(0x41); writeSleb128(buf, 24)
-			buf.WriteByte(0x10); writeUleb128(buf, 0) // fd_write
-			buf.WriteByte(0x1a)                        // drop
-
-			if nl == 1 {
-				// write newline from offset 64
-				buf.WriteByte(0x41); writeSleb128(buf, 16)
-				buf.WriteByte(0x41); writeSleb128(buf, 64)
-				buf.WriteByte(0x36); writeUleb128(buf, 2); writeUleb128(buf, 0)
-
-				buf.WriteByte(0x41); writeSleb128(buf, 20)
-				buf.WriteByte(0x41); writeSleb128(buf, 1)
-				buf.WriteByte(0x36); writeUleb128(buf, 2); writeUleb128(buf, 0)
-
-				buf.WriteByte(0x41); writeSleb128(buf, 1)
-				buf.WriteByte(0x41); writeSleb128(buf, 16)
-				buf.WriteByte(0x41); writeSleb128(buf, 1)
-				buf.WriteByte(0x41); writeSleb128(buf, 24)
-				buf.WriteByte(0x10); writeUleb128(buf, 0)
-				buf.WriteByte(0x1a)
-			}
+			off, length := ctx.emitter.internString(lit.Val)
+			buf.WriteByte(0x41) // i32.const ptr
+			writeSleb128(buf, int32(off))
+			buf.WriteByte(0x41) // i32.const len
+			writeSleb128(buf, int32(length))
+			buf.WriteByte(0x41) // i32.const newline
+			writeSleb128(buf, currentNL)
+			buf.WriteByte(0x10) // call __print_str
+			writeUleb128(buf, ctx.emitter.fnIndices["__print_str"])
 		} else {
-			// Integer or general expression -> route through __ube_print_int
 			if err := ctx.compileExpr(buf, arg); err != nil {
 				return err
 			}
-			buf.WriteByte(0x41)
-			writeSleb128(buf, nl)
-			buf.WriteByte(0x10) // call __ube_print_int
-			writeUleb128(buf, ctx.emitter.fnIndices["__ube_print_int"])
+			buf.WriteByte(0x41) // i32.const newline
+			writeSleb128(buf, currentNL)
+			buf.WriteByte(0x10) // call __print_i32
+			writeUleb128(buf, ctx.emitter.fnIndices["__print_i32"])
 		}
 	}
 	return nil
 }
 
-// buildPrintIntFunc creates an integer-to-string formatter in linear memory
-func (e *wasmEmitter) buildPrintIntFunc() []byte {
+// buildPrintStrFunc emits WASI fd_write invocation: (ptr: i32, len: i32, nl: i32) -> void
+func (e *wasmEmitter) buildPrintStrFunc() []byte {
 	var body bytes.Buffer
-	// locals: 3 local i32 (temp variables)
+
+	// ciovec.buf = ptr (store at scratchCiovec)
+	body.WriteByte(0x41) // i32.const 0
+	writeSleb128(&body, scratchCiovec)
+	body.WriteByte(0x20) // local.get 0 (ptr)
+	writeUleb128(&body, 0)
+	body.WriteByte(0x36) // i32.store
+	writeUleb128(&body, 2)
+	writeUleb128(&body, 0)
+
+	// ciovec.len = len (store at scratchCiovec + 4)
+	body.WriteByte(0x41) // i32.const 4
+	writeSleb128(&body, scratchCiovec+4)
+	body.WriteByte(0x20) // local.get 1 (len)
 	writeUleb128(&body, 1)
+	body.WriteByte(0x36) // i32.store
+	writeUleb128(&body, 2)
+	writeUleb128(&body, 0)
+
+	// call fd_write(1, scratchCiovec, 1, scratchNwrite)
+	body.WriteByte(0x41) // i32.const 1 (stdout)
+	writeSleb128(&body, 1)
+	body.WriteByte(0x41) // i32.const ciovec_ptr
+	writeSleb128(&body, scratchCiovec)
+	body.WriteByte(0x41) // i32.const 1 (ciovec count)
+	writeSleb128(&body, 1)
+	body.WriteByte(0x41) // i32.const nwritten_ptr
+	writeSleb128(&body, scratchNwrite)
+	body.WriteByte(0x10) // call fd_write
+	writeUleb128(&body, e.fdWriteIdx)
+	body.WriteByte(0x1a) // drop result code
+
+	// If nl == 1, print newline byte
+	body.WriteByte(0x20) // local.get 2 (nl)
+	writeUleb128(&body, 2)
+	body.WriteByte(0x04)        // if
+	body.WriteByte(valTypeVoid) // void
+
+	// Setup ciovec for "\n" at staticDataOff - 1
+	body.WriteByte(0x41) // i32.const 0
+	writeSleb128(&body, scratchCiovec)
+	body.WriteByte(0x41) // i32.const newline_ptr (offset 48)
+	writeSleb128(&body, 48)
+	body.WriteByte(0x36) // i32.store
+	writeUleb128(&body, 2)
+	writeUleb128(&body, 0)
+
+	body.WriteByte(0x41) // i32.const 4
+	writeSleb128(&body, scratchCiovec+4)
+	body.WriteByte(0x41) // i32.const 1
+	writeSleb128(&body, 1)
+	body.WriteByte(0x36) // i32.store
+	writeUleb128(&body, 2)
+	writeUleb128(&body, 0)
+
+	body.WriteByte(0x41) // i32.const 1 (stdout)
+	writeSleb128(&body, 1)
+	body.WriteByte(0x41) // ciovec ptr
+	writeSleb128(&body, scratchCiovec)
+	body.WriteByte(0x41) // count 1
+	writeSleb128(&body, 1)
+	body.WriteByte(0x41) // nwritten
+	writeSleb128(&body, scratchNwrite)
+	body.WriteByte(0x10) // call fd_write
+	writeUleb128(&body, e.fdWriteIdx)
+	body.WriteByte(0x1a) // drop
+
+	body.WriteByte(0x0b) // end if
+	body.WriteByte(0x0b) // end func
+
+	var full bytes.Buffer
+	writeUleb128(&full, 0) // no extra locals
+	full.Write(body.Bytes())
+
+	var res bytes.Buffer
+	writeUleb128(&res, uint32(full.Len()))
+	res.Write(full.Bytes())
+	return res.Bytes()
+}
+
+// buildPrintIntFunc formats an i32 to ASCII and prints it via __print_str
+func (e *wasmEmitter) buildPrintIntFunc() []byte {
+	// (val: i32, newline: i32) -> void
+	// Locals: 2: ptr, 3: is_neg, 4: digit
+	var body bytes.Buffer
+
+	// ptr = 47 (end of scratchItoa buffer)
+	body.WriteByte(0x41)
+	writeSleb128(&body, 47)
+	body.WriteByte(0x21)
+	writeUleb128(&body, 2)
+
+	// is_neg = 0
+	body.WriteByte(0x41)
+	writeSleb128(&body, 0)
+	body.WriteByte(0x21)
 	writeUleb128(&body, 3)
-	body.WriteByte(0x7f)
 
-	// Simple fallback: write single digit or positive int
-	// If val == 0, write '0'
-	var c bytes.Buffer
-	c.WriteByte(0x20); writeUleb128(&c, 0) // local.get 0
-	c.WriteByte(0x41); writeSleb128(&c, 0)
-	c.WriteByte(0x46) // i32.eq
-	c.WriteByte(0x04); c.WriteByte(0x40)
-	// write '0' at offset 32
-	c.WriteByte(0x41); writeSleb128(&c, 32)
-	c.WriteByte(0x41); writeSleb128(&c, 48) // '0'
-	c.WriteByte(0x3a); writeUleb128(&c, 0); writeUleb128(&c, 0) // i32.store8
-	// iovec.buf = 32, len = 1
-	c.WriteByte(0x41); writeSleb128(&c, 16)
-	c.WriteByte(0x41); writeSleb128(&c, 32)
-	c.WriteByte(0x36); writeUleb128(&c, 2); writeUleb128(&c, 0)
-	c.WriteByte(0x41); writeSleb128(&c, 20)
-	c.WriteByte(0x41); writeSleb128(&c, 1)
-	c.WriteByte(0x36); writeUleb128(&c, 2); writeUleb128(&c, 0)
-	c.WriteByte(0x41); writeSleb128(&c, 1)
-	c.WriteByte(0x41); writeSleb128(&c, 16)
-	c.WriteByte(0x41); writeSleb128(&c, 1)
-	c.WriteByte(0x41); writeSleb128(&c, 24)
-	c.WriteByte(0x10); writeUleb128(&c, 0); c.WriteByte(0x1a)
-	c.WriteByte(0x05) // else
+	// if val == 0 -> write '0'
+	body.WriteByte(0x20)
+	writeUleb128(&body, 0)
+	body.WriteByte(0x45) // eqz
+	body.WriteByte(0x04)
+	body.WriteByte(valTypeVoid)
 
-	// Positive numbers: decompose into buffer
-	// ptr = 60; while val > 0 { ptr--; mem[ptr] = (val % 10) + 48; val /= 10; }
-	c.WriteByte(0x41); writeSleb128(&c, 60)
-	c.WriteByte(0x21); writeUleb128(&c, 2) // local.set 2 (ptr)
+	body.WriteByte(0x20) // local.get ptr
+	writeUleb128(&body, 2)
+	body.WriteByte(0x41) // '0' = 48
+	writeSleb128(&body, 48)
+	body.WriteByte(0x3a) // i32.store8
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 0)
 
-	c.WriteByte(0x02); c.WriteByte(0x40) // block
-	c.WriteByte(0x03); c.WriteByte(0x40) // loop
-	c.WriteByte(0x20); writeUleb128(&c, 0) // val
-	c.WriteByte(0x45) // eqz
-	c.WriteByte(0x0d); writeUleb128(&c, 1) // br_if 1
+	body.WriteByte(0x20) // ptr
+	writeUleb128(&body, 2)
+	body.WriteByte(0x41) // len 1
+	writeSleb128(&body, 1)
+	body.WriteByte(0x20) // newline
+	writeUleb128(&body, 1)
+	body.WriteByte(0x10) // call __print_str
+	writeUleb128(&body, e.fnIndices["__print_str"])
+	body.WriteByte(0x0f) // return
+	body.WriteByte(0x0b) // end if
+
+	// if val < 0 -> val = -val, is_neg = 1
+	body.WriteByte(0x20)
+	writeUleb128(&body, 0)
+	body.WriteByte(0x41)
+	writeSleb128(&body, 0)
+	body.WriteByte(0x48) // lt_s
+	body.WriteByte(0x04)
+	body.WriteByte(valTypeVoid)
+
+	body.WriteByte(0x41)
+	writeSleb128(&body, 0)
+	body.WriteByte(0x20)
+	writeUleb128(&body, 0)
+	body.WriteByte(0x6b) // sub (0 - val)
+	body.WriteByte(0x21)
+	writeUleb128(&body, 0)
+
+	body.WriteByte(0x41)
+	writeSleb128(&body, 1)
+	body.WriteByte(0x21)
+	writeUleb128(&body, 3)
+
+	body.WriteByte(0x0b) // end if
+
+	// Loop: extract digits
+	body.WriteByte(0x02) // block
+	body.WriteByte(valTypeVoid)
+	body.WriteByte(0x03) // loop
+	body.WriteByte(valTypeVoid)
+
+	// val == 0 -> break
+	body.WriteByte(0x20)
+	writeUleb128(&body, 0)
+	body.WriteByte(0x45) // eqz
+	body.WriteByte(0x0d) // br_if
+	writeUleb128(&body, 1)
+
+	// digit = (val % 10) + 48
+	body.WriteByte(0x20)
+	writeUleb128(&body, 0)
+	body.WriteByte(0x41)
+	writeSleb128(&body, 10)
+	body.WriteByte(0x6f) // rem_s
+	body.WriteByte(0x41)
+	writeSleb128(&body, 48)
+	body.WriteByte(0x6a) // add
+	body.WriteByte(0x21)
+	writeUleb128(&body, 4)
+
+	// store at ptr
+	body.WriteByte(0x20)
+	writeUleb128(&body, 2)
+	body.WriteByte(0x20)
+	writeUleb128(&body, 4)
+	body.WriteByte(0x3a) // i32.store8
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 0)
 
 	// ptr--
-	c.WriteByte(0x20); writeUleb128(&c, 2)
-	c.WriteByte(0x41); writeSleb128(&c, 1)
-	c.WriteByte(0x6b)
-	c.WriteByte(0x21); writeUleb128(&c, 2)
-
-	// store digit
-	c.WriteByte(0x20); writeUleb128(&c, 2)
-	c.WriteByte(0x20); writeUleb128(&c, 0)
-	c.WriteByte(0x41); writeSleb128(&c, 10)
-	c.WriteByte(0x6f) // val % 10
-	c.WriteByte(0x41); writeSleb128(&c, 48)
-	c.WriteByte(0x6a) // + '0'
-	c.WriteByte(0x3a); writeUleb128(&c, 0); writeUleb128(&c, 0) // i32.store8
+	body.WriteByte(0x20)
+	writeUleb128(&body, 2)
+	body.WriteByte(0x41)
+	writeSleb128(&body, 1)
+	body.WriteByte(0x6b)
+	body.WriteByte(0x21)
+	writeUleb128(&body, 2)
 
 	// val /= 10
-	c.WriteByte(0x20); writeUleb128(&c, 0)
-	c.WriteByte(0x41); writeSleb128(&c, 10)
-	c.WriteByte(0x6d)
-	c.WriteByte(0x21); writeUleb128(&c, 0)
-	c.WriteByte(0x0c); writeUleb128(&c, 0) // br 0
-	c.WriteByte(0x0b); c.WriteByte(0x0b)
+	body.WriteByte(0x20)
+	writeUleb128(&body, 0)
+	body.WriteByte(0x41)
+	writeSleb128(&body, 10)
+	body.WriteByte(0x6d) // div_s
+	body.WriteByte(0x21)
+	writeUleb128(&body, 0)
 
-	// Output buffer: len = 60 - ptr
-	c.WriteByte(0x41); writeSleb128(&c, 16)
-	c.WriteByte(0x20); writeUleb128(&c, 2)
-	c.WriteByte(0x36); writeUleb128(&c, 2); writeUleb128(&c, 0)
+	body.WriteByte(0x0c) // br 0
+	writeUleb128(&body, 0)
 
-	c.WriteByte(0x41); writeSleb128(&c, 20)
-	c.WriteByte(0x41); writeSleb128(&c, 60)
-	c.WriteByte(0x20); writeUleb128(&c, 2)
-	c.WriteByte(0x6b)
-	c.WriteByte(0x36); writeUleb128(&c, 2); writeUleb128(&c, 0)
+	body.WriteByte(0x0b) // end loop
+	body.WriteByte(0x0b) // end block
 
-	c.WriteByte(0x41); writeSleb128(&c, 1)
-	c.WriteByte(0x41); writeSleb128(&c, 16)
-	c.WriteByte(0x41); writeSleb128(&c, 1)
-	c.WriteByte(0x41); writeSleb128(&c, 24)
-	c.WriteByte(0x10); writeUleb128(&c, 0); c.WriteByte(0x1a)
-	c.WriteByte(0x0b) // end if
+	// If negative, prepend '-'
+	body.WriteByte(0x20)
+	writeUleb128(&body, 3)
+	body.WriteByte(0x04)
+	body.WriteByte(valTypeVoid)
+	body.WriteByte(0x20)
+	writeUleb128(&body, 2)
+	body.WriteByte(0x41)
+	writeSleb128(&body, 45) // '-'
+	body.WriteByte(0x3a)
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 0)
+	body.WriteByte(0x20)
+	writeUleb128(&body, 2)
+	body.WriteByte(0x41)
+	writeSleb128(&body, 1)
+	body.WriteByte(0x6b)
+	body.WriteByte(0x21)
+	writeUleb128(&body, 2)
+	body.WriteByte(0x0b)
 
-	// If newline is requested (param 1 == 1), output newline
-	c.WriteByte(0x20); writeUleb128(&c, 1)
-	c.WriteByte(0x04); c.WriteByte(0x40)
-	c.WriteByte(0x41); writeSleb128(&c, 16)
-	c.WriteByte(0x41); writeSleb128(&c, 64)
-	c.WriteByte(0x36); writeUleb128(&c, 2); writeUleb128(&c, 0)
-	c.WriteByte(0x41); writeSleb128(&c, 20)
-	c.WriteByte(0x41); writeSleb128(&c, 1)
-	c.WriteByte(0x36); writeUleb128(&c, 2); writeUleb128(&c, 0)
-	c.WriteByte(0x41); writeSleb128(&c, 1)
-	c.WriteByte(0x41); writeSleb128(&c, 16)
-	c.WriteByte(0x41); writeSleb128(&c, 1)
-	c.WriteByte(0x41); writeSleb128(&c, 24)
-	c.WriteByte(0x10); writeUleb128(&c, 0); c.WriteByte(0x1a)
-	c.WriteByte(0x0b)
+	// Call __print_str(ptr + 1, 47 - ptr, newline)
+	body.WriteByte(0x20)
+	writeUleb128(&body, 2)
+	body.WriteByte(0x41)
+	writeSleb128(&body, 1)
+	body.WriteByte(0x6a)
 
-	c.WriteByte(0x0b) // end func
-	body.Write(c.Bytes())
+	body.WriteByte(0x41)
+	writeSleb128(&body, 47)
+	body.WriteByte(0x20)
+	writeUleb128(&body, 2)
+	body.WriteByte(0x6b)
 
-	var final bytes.Buffer
-	writeUleb128(&final, uint32(body.Len()))
-	final.Write(body.Bytes())
-	return final.Bytes()
+	body.WriteByte(0x20)
+	writeUleb128(&body, 1)
+	body.WriteByte(0x10)
+	writeUleb128(&body, e.fnIndices["__print_str"])
+
+	body.WriteByte(0x0b) // end
+
+	var full bytes.Buffer
+	writeUleb128(&full, 1) // 1 local entry
+	writeUleb128(&full, 3) // 3 locals of type i32
+	full.WriteByte(valTypeI32)
+	full.Write(body.Bytes())
+
+	var res bytes.Buffer
+	writeUleb128(&res, uint32(full.Len()))
+	res.Write(full.Bytes())
+	return res.Bytes()
 }
 
 func (e *wasmEmitter) buildStartFunc(mainIdx uint32) []byte {
 	var body bytes.Buffer
-	writeUleb128(&body, 0) // 0 local declarations
 
-	// Call main()
-	body.WriteByte(0x10) // call
+	// Store newline character at address 48
+	body.WriteByte(0x41) // i32.const 48
+	writeSleb128(&body, 48)
+	body.WriteByte(0x41) // i32.const 10 ('\n')
+	writeSleb128(&body, 10)
+	body.WriteByte(0x3a) // i32.store8
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 0)
+
+	body.WriteByte(0x10) // call main
 	writeUleb128(&body, mainIdx)
 	body.WriteByte(0x0b) // end
 
-	var final bytes.Buffer
-	writeUleb128(&final, uint32(body.Len()))
-	final.Write(body.Bytes())
-	return final.Bytes()
+	var codeBuf bytes.Buffer
+	writeUleb128(&codeBuf, 0) // 0 locals
+	codeBuf.Write(body.Bytes())
+
+	var fullBuf bytes.Buffer
+	writeUleb128(&fullBuf, uint32(codeBuf.Len()))
+	fullBuf.Write(codeBuf.Bytes())
+	return fullBuf.Bytes()
 }
 
-func (e *wasmEmitter) assembleBinary(startFnIdx uint32) ([]byte, error) {
-	var bin bytes.Buffer
-	// Magic & Version
-	bin.Write([]byte{0x00, 0x61, 0x73, 0x6d})
-	bin.Write([]byte{0x01, 0x00, 0x00, 0x00})
+func (e *wasmEmitter) assembleBinary() ([]byte, error) {
+	var out bytes.Buffer
 
-	// Section 1: Types
-	{
-		var sec bytes.Buffer
-		writeUleb128(&sec, uint32(len(e.types)))
-		for _, t := range e.types {
-			sec.Write(t)
-		}
-		writeSection(&bin, 1, sec.Bytes())
+	// 1. Magic + Version
+	out.Write([]byte{0x00, 0x61, 0x73, 0x6d})
+	out.Write([]byte{0x01, 0x00, 0x00, 0x00})
+
+	// 2. Type section
+	var typeSec bytes.Buffer
+	writeUleb128(&typeSec, uint32(len(e.types)))
+	for _, t := range e.types {
+		typeSec.Write(t)
 	}
+	writeSection(&out, secType, typeSec.Bytes())
 
-	// Section 2: Imports (wasi_snapshot_preview1.fd_write)
-	{
-		var sec bytes.Buffer
-		writeUleb128(&sec, 1) // 1 import
-		writeString(&sec, "wasi_snapshot_preview1")
-		writeString(&sec, "fd_write")
-		sec.WriteByte(0x00) // function import
-		writeUleb128(&sec, 0) // type index 0
-		writeSection(&bin, 2, sec.Bytes())
+	// 3. Import section (WASI Preview 1 fd_write)
+	var importSec bytes.Buffer
+	writeUleb128(&importSec, 1) // 1 import
+	writeString(&importSec, "wasi_snapshot_preview1")
+	writeString(&importSec, "fd_write")
+	importSec.WriteByte(0x00) // import kind: func
+	writeUleb128(&importSec, 0) // type index 0
+	writeSection(&out, secImport, importSec.Bytes())
+
+	// 4. Function section
+	var funcSec bytes.Buffer
+	writeUleb128(&funcSec, uint32(len(e.funcs)))
+	for _, f := range e.funcs {
+		writeUleb128(&funcSec, f)
 	}
+	writeSection(&out, secFunction, funcSec.Bytes())
 
-	// Section 3: Functions (type signatures for internal functions)
-	{
-		var sec bytes.Buffer
-		writeUleb128(&sec, uint32(len(e.funcs)))
-		for _, f := range e.funcs {
-			writeUleb128(&sec, f)
-		}
-		writeSection(&bin, 3, sec.Bytes())
+	// 5. Memory section (1 page minimum, 256 pages maximum)
+	var memSec bytes.Buffer
+	writeUleb128(&memSec, 1) // 1 memory declaration
+	memSec.WriteByte(0x01)   // flags: has maximum
+	writeUleb128(&memSec, 2) // min: 2 pages (128 KB)
+	writeUleb128(&memSec, 256)
+	writeSection(&out, secMemory, memSec.Bytes())
+
+	// 6. Global section ($arena_ptr at global 0, initialized to initialHeap)
+	var globSec bytes.Buffer
+	writeUleb128(&globSec, 1) // 1 global
+	globSec.WriteByte(valTypeI32)
+	globSec.WriteByte(0x01)   // mutability: mutable (1)
+	globSec.WriteByte(0x41)   // i32.const
+	writeSleb128(&globSec, initialHeap)
+	globSec.WriteByte(0x0b)   // end
+	writeSection(&out, secGlobal, globSec.Bytes())
+
+	// 7. Export section (export "memory" and "_start")
+	var expSec bytes.Buffer
+	writeUleb128(&expSec, 2)
+
+	writeString(&expSec, "memory")
+	expSec.WriteByte(0x02) // memory export
+	writeUleb128(&expSec, 0)
+
+	writeString(&expSec, "_start")
+	expSec.WriteByte(0x00) // func export
+	writeUleb128(&expSec, e.fnIndices["_start"])
+	writeSection(&out, secExport, expSec.Bytes())
+
+	// 8. Code section
+	var codeSec bytes.Buffer
+	writeUleb128(&codeSec, uint32(len(e.codeBodies)))
+	for _, body := range e.codeBodies {
+		codeSec.Write(body)
 	}
+	writeSection(&out, secCode, codeSec.Bytes())
 
-	// Section 5: Memory (1 initial page = 64KB)
-	{
-		var sec bytes.Buffer
-		writeUleb128(&sec, 1) // 1 memory
-		sec.WriteByte(0x00)   // limits: min only
-		writeUleb128(&sec, 2) // 2 pages = 128KB
-		writeSection(&bin, 5, sec.Bytes())
-	}
-
-	// Section 7: Exports (memory & _start)
-	{
-		var sec bytes.Buffer
-		writeUleb128(&sec, 2) // 2 exports
-
-		// export "memory"
-		writeString(&sec, "memory")
-		sec.WriteByte(0x02) // memory export
-		writeUleb128(&sec, 0)
-
-		// export "_start"
-		writeString(&sec, "_start")
-		sec.WriteByte(0x00) // func export
-		writeUleb128(&sec, startFnIdx)
-
-		writeSection(&bin, 7, sec.Bytes())
-	}
-
-	// Section 10: Code
-	{
-		var sec bytes.Buffer
-		writeUleb128(&sec, uint32(len(e.codeBodies)))
-		for _, cb := range e.codeBodies {
-			sec.Write(cb)
-		}
-		writeSection(&bin, 10, sec.Bytes())
-	}
-
-	// Section 11: Data (active segment initialized into memory at offset 0)
+	// 9. Data section (static strings)
 	if len(e.data) > 0 {
-		var sec bytes.Buffer
-		writeUleb128(&sec, 1) // 1 segment
-		sec.WriteByte(0x00)   // active, memory 0
-		sec.WriteByte(0x41)   // i32.const 0
-		writeSleb128(&sec, 0)
-		sec.WriteByte(0x0b)   // end
-		writeUleb128(&sec, uint32(len(e.data)))
-		sec.Write(e.data)
-		writeSection(&bin, 11, sec.Bytes())
+		var dataSec bytes.Buffer
+		writeUleb128(&dataSec, 1) // 1 data segment
+		dataSec.WriteByte(0x00)   // memory index 0
+		dataSec.WriteByte(0x41)   // i32.const
+		writeSleb128(&dataSec, staticDataOff)
+		dataSec.WriteByte(0x0b)   // end
+		writeUleb128(&dataSec, uint32(len(e.data)))
+		dataSec.Write(e.data)
+		writeSection(&out, secData, dataSec.Bytes())
 	}
 
-	return bin.Bytes(), nil
+	return out.Bytes(), nil
 }
 
 func writeSection(buf *bytes.Buffer, id byte, data []byte) {
@@ -728,14 +995,16 @@ func writeUleb128(buf *bytes.Buffer, val uint32) {
 }
 
 func writeSleb128(buf *bytes.Buffer, val int32) {
-	for {
+	more := true
+	for more {
 		b := byte(val & 0x7f)
 		val >>= 7
 		sign := (b & 0x40) != 0
 		if (val == 0 && !sign) || (val == -1 && sign) {
-			buf.WriteByte(b)
-			break
+			more = false
+		} else {
+			b |= 0x80
 		}
-		buf.WriteByte(b | 0x80)
+		buf.WriteByte(b)
 	}
 }
