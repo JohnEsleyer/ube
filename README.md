@@ -7,7 +7,7 @@
 **The sweet, grounded language for games, apps, and backends.**  
 *100% WebAssembly. Fully Sandboxed. Zero GC. Clean like Go.*
 
-**Latest version: `0.7.2`**
+**Latest version: `0.7.3`**
 
 </div>
 
@@ -64,13 +64,15 @@ Instead, Ube exists for developers who love the simplicity and readability of **
 curl -sSL https://raw.githubusercontent.com/JohnEsleyer/ube/main/install.sh | bash
 ```
 
-### Build from Source (Requires Go 1.18+)
+### Build from Source (Requires Go 1.18+ and CGO)
 ```sh
 git clone https://github.com/JohnEsleyer/ube.git
 cd ube
-go build -o bin/ube ./cmd/ube
+CGO_ENABLED=1 go build -o bin/ube ./cmd/ube
 sudo cp bin/ube /usr/local/bin/ube
 ```
+
+> **Note:** `CGO_ENABLED=1` is required because `ube` embeds the [Wasmtime](https://wasmtime.dev) runtime via `wasmtime-go`. Precompiled native libraries for Linux (x86_64, aarch64), macOS (Intel & Apple Silicon), and Windows (x86_64) are downloaded automatically by `go build`.
 
 Verify your installation:
 ```sh
@@ -256,7 +258,7 @@ fn main() {
 
 | Command | Usage | Description |
 | :--- | :--- | :--- |
-| `ube run` | `ube run main.ube` | Compiles to Wasm and runs it in `wasmtime`, `wasmer`, `node`, `deno`, or `wasm3`. |
+| `ube run` | `ube run main.ube` | Compiles to Wasm and runs it via the **embedded Wasmtime** Cranelift JIT engine (no external runtime needed). |
 | `ube build` | `ube build main.ube` | Builds a sandboxed WebAssembly/WASI module (`main.wasm`) by default. |
 | `ube build` | `ube build main.ube --html` | Builds a Web Canvas/UI app (`main.html`) with Emscripten. |
 | `ube build` | `ube build main.ube --emit-c` | Keeps the generated C source for inspection or custom toolchains. |
@@ -269,6 +271,10 @@ fn main() {
 > The compiler prefers `clang --target=wasm32-wasi`, `zig cc -target wasm32-wasi`,
 > or `emcc`. If no Wasm SDK is installed, `ube build` and `ube run` fall back to
 > a native C host executable so development can continue.
+>
+> `ube run` uses the **embedded [Wasmtime](https://wasmtime.dev) runtime** (Cranelift JIT) to execute
+> Wasm modules directly inside the `ube` process — no external `wasmtime` binary required.
+> External runtimes (`wasmer`, `node`, `deno`, `wasm3`) are kept as secondary fallbacks.
 
 ---
 
