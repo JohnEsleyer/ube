@@ -263,6 +263,10 @@ fn main() {
 | `ube fmt` | `ube fmt .` | Canonical auto-formatter for all `.ube` files. |
 | `ube doc` | `ube doc main.ube` | Generates documentation for public exports. |
 | `ube lsp` | `ube lsp` | Starts the Language Server Protocol. |
+| `ube sig` | `ube sig -c` | Copies lightweight symbol signatures to clipboard (~300 tokens). |
+| `ube load` | `ube load -ci -c` | Reads AI request from clipboard, extracts AST context, copies back. |
+| `ube patch` | `ube patch -ci` | Applies LLM patch bundle atomically via 2-pass VFS from clipboard. |
+| `ube prompt` | `ube prompt -c` | Copies token-efficient LLM system prompt to clipboard. |
 | `ube guide` | `ube guide` | Outputs the AI Reference Guide (`ube_guide.md`). |
 | `ube context`| `ube context . -o ctx.txt`| Generates codebase architecture context for AI. |
 

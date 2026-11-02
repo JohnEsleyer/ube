@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const version = "0.7.1"
+const version = "0.7.2"
 
 const (
 	colorReset  = "\x1b[0m"
@@ -72,6 +72,14 @@ func execute(args []string) error {
 		return runContext(args[1:])
 	case "guide":
 		return runGuide(args[1:])
+	case "sig", "signatures":
+		return runSig(args[1:])
+	case "load":
+		return runLoad(args[1:])
+	case "patch":
+		return runPatch(args[1:])
+	case "prompt":
+		return runPrompt(args[1:])
 	default:
 		if strings.HasSuffix(args[0], ".ube") {
 			return run(args)
