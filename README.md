@@ -7,7 +7,7 @@
 **The sweet, grounded language for games, apps, and backends.**  
 *100% WebAssembly. Fully Sandboxed. Zero GC. Clean like Go.*
 
-**Latest version: `0.7.1`**
+**Latest version: `0.7.2`**
 
 </div>
 
@@ -53,7 +53,7 @@ Instead, Ube exists for developers who love the simplicity and readability of **
    Ube targets WebAssembly (Wasm) and WASI natively. Programs are secure by default, start in sub-milliseconds, and compile into clean, portable bytecode that runs identically in browsers, servers, edge workers, and game runtimes. The language has no `unsafe` keyword and no raw pointer types; host capabilities enter only through typed Wasm host imports (`extern fn`).
 
 6. **Designed for Both Humans and Artificial Intelligence**  
-   Ube’s strict, unambiguous syntax, explicit data movement, and lack of hidden control flow make code exceptionally straightforward for Large Language Models to inspect, trace, reason about, and generate without hallucinations.
+   Ube’s strict, unambiguous syntax, explicit data movement, and lack of hidden control flow make code exceptionally straightforward for Large Language Models to inspect, trace, reason about, and generate without hallucinations. The native `ube sig / load / patch` pipeline delivers complete LLM-assisted multi-file edits in **1–2 request turns** with zero intermediate files.
 
 ---
 
@@ -252,6 +252,8 @@ fn main() {
 
 ## 🛠️ Developer CLI Workflow
 
+### Core Commands
+
 | Command | Usage | Description |
 | :--- | :--- | :--- |
 | `ube run` | `ube run main.ube` | Compiles to Wasm and runs it in `wasmtime`, `wasmer`, `node`, `deno`, or `wasm3`. |
@@ -263,16 +265,89 @@ fn main() {
 | `ube fmt` | `ube fmt .` | Canonical auto-formatter for all `.ube` files. |
 | `ube doc` | `ube doc main.ube` | Generates documentation for public exports. |
 | `ube lsp` | `ube lsp` | Starts the Language Server Protocol. |
-| `ube sig` | `ube sig -c` | Copies lightweight symbol signatures to clipboard (~300 tokens). |
-| `ube load` | `ube load -ci -c` | Reads AI request from clipboard, extracts AST context, copies back. |
-| `ube patch` | `ube patch -ci` | Applies LLM patch bundle atomically via 2-pass VFS from clipboard. |
-| `ube prompt` | `ube prompt -c` | Copies token-efficient LLM system prompt to clipboard. |
-| `ube guide` | `ube guide` | Outputs the AI Reference Guide (`ube_guide.md`). |
-| `ube context`| `ube context . -o ctx.txt`| Generates codebase architecture context for AI. |
 
 > The compiler prefers `clang --target=wasm32-wasi`, `zig cc -target wasm32-wasi`,
 > or `emcc`. If no Wasm SDK is installed, `ube build` and `ube run` fall back to
 > a native C host executable so development can continue.
+
+---
+
+## 🤖 Native AI Pipeline (`v0.7.2+`)
+
+Ube ships a built-in **1-Click Clipboard Pipeline** that connects your codebase directly to any LLM chat window with zero intermediate files and 1–2 request turns.
+
+```
+[Local Codebase]                        [Claude / ChatGPT / DeepSeek]
+       |                                              |
+       |  1. ube sig -c                               |
+       |-----------------------------------------------> Turn 1 (Map):
+       |  (Symbol skeletons copied to clipboard)      | LLM returns <request>
+       |                                              |
+       |  2. ube load -ci -c                          |
+       |-----------------------------------------------> Turn 2 (Solve):
+       |  (Reads clipboard, traces AST,               | LLM returns <replace>
+       |   copies deep context to clipboard)          |
+       |                                              |
+       |  3. ube patch -ci                            |
+       v                                              |
+ [Atomic Disk Update] <--------------------------------+
+```
+
+### AI Commands
+
+| Command | Example | Description |
+| :--- | :--- | :--- |
+| `ube prompt` | `ube prompt -c` | Copies the token-efficient LLM system prompt to clipboard. Paste at session start. |
+| `ube sig` | `ube sig -c` | Extracts all struct / enum / trait / fn signatures (no bodies). ~300 tokens for an entire project. |
+| `ube load` | `ube load -ci -c` | Reads an LLM request from clipboard, resolves all directives against the AST, copies context back. |
+| `ube patch` | `ube patch -ci` | Reads an LLM patch bundle from clipboard and applies it atomically via 2-pass in-memory VFS. |
+| `ube guide` | `ube guide` | Writes the Ube language reference guide to `ube_guide.md`. |
+| `ube context` | `ube context . -o ctx.txt` | Generates a full codebase architecture summary for AI. |
+
+### `ube load` Directives
+
+Pass a file or pipe from clipboard (`-ci`). The following XML directives are resolved against the live AST:
+
+| Directive | Purpose |
+| :--- | :--- |
+| `<trace symbol="Fn" depth="2" />` | Recursively extracts the function body, its callees, and referenced types up to `depth`. |
+| `<def symbol="StructOrFn" />` | Extracts a single function or type definition. |
+| `<select path="..." fn="..." case="..." />` | Isolates one `match` arm or `switch` case without dumping the whole function. |
+| `<select struct="T" methods="a,b" />` | Extracts specific method implementations for a type. |
+| `<xref symbol="X" action="call\|write\|def" />` | Finds definition sites and all reference lines for a symbol across the codebase. |
+| `<file path="..." search="..." context="5" for-patch="true" />` | Extracts a file slice around a search term; `for-patch="true"` omits line numbers. |
+| `<grep pattern="keyword" glob="*.ube" />` | Finds every line containing a pattern across source files. |
+| `<feature-context>...</feature-context>` | Composite bundle: type defs + entrypoint trace + touchpoint grep in one tag. |
+
+### `ube patch` Directives
+
+LLM responses containing any of the following are applied atomically (all-or-nothing, validated in memory before touching disk):
+
+```xml
+<!-- Surgical in-place replacement (optional function scope guard) -->
+<replace path="src/game.ube" within="update_player">
+<search>
+    p.speed = 5
+</search>
+<with>
+    p.speed = 10
+</with>
+</replace>
+
+<!-- Create or fully overwrite a file -->
+<file path="src/helpers.ube">
+pub fn clamp(v: f32, lo: f32, hi: f32) -> f32 {
+    if v < lo { return lo }
+    if v > hi { return hi }
+    return v
+}
+</file>
+
+<!-- Delete a file -->
+<delete path="src/old_module.ube" />
+```
+
+**Flags:** `-n` / `--dry-run` validates all anchors in memory without writing to disk. `-f` / `--fix` enables fuzzy whitespace-tolerant matching.
 
 ---
 
