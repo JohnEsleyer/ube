@@ -291,6 +291,21 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 			continue
 		}
 
+		if ch == '`' {
+			loc := SourceLocation{File: l.file, Line: l.line, Col: l.col}
+			l.advance() // consume opening '`'
+			var buf strings.Builder
+			for l.pos < len(l.source) && l.peek(0) != '`' {
+				buf.WriteRune(l.advance())
+			}
+			if l.peek(0) != '`' {
+				return nil, fmt.Errorf("[%s] Error: Unterminated raw string literal", loc)
+			}
+			l.advance() // consume closing '`'
+			tokens = append(tokens, Token{Type: TokenRawString, Val: buf.String(), Loc: loc})
+			continue
+		}
+
 		if ch == '"' {
 			l.advance()
 			var buf strings.Builder

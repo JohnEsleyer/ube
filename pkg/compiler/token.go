@@ -82,6 +82,7 @@ const (
 	TokenPipe          TokenType = "|"
 	TokenCaret         TokenType = "^"
 	TokenTilde         TokenType = "~"
+	TokenRawString     TokenType = "RAW_STRING"
 
 	// Delimiters
 	TokenLParen   TokenType = "("

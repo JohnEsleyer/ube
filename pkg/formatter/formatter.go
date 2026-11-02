@@ -15,6 +15,7 @@ type tokenKind int
 const (
 	tokWord tokenKind = iota
 	tokString
+	tokRawString
 	tokOperator
 	tokPunct
 	tokComment
@@ -23,6 +24,18 @@ const (
 type formatToken struct {
 	kind tokenKind
 	text string
+}
+
+// structFieldRow holds parsed info for a single struct field line, used for
+// columnar alignment across a group of consecutive fields.
+type structFieldRow struct {
+	lineIdx int
+	indent  string
+	prefix  string // "pub ", "mut ", "pub mut ", or ""
+	name    string
+	typ     string
+	tag     string // raw string tag, e.g. `json:"id"`
+	comment string
 }
 
 // Format takes Ube source code and returns the canonical formatted version.
@@ -44,6 +57,17 @@ func Format(filename, source string) (string, error) {
 	var formatted []string
 	indent := 0
 
+	// Struct field columnar-alignment state.
+	inStruct := false
+	var pendingRows []structFieldRow
+
+	flushStructRows := func() {
+		if len(pendingRows) > 0 {
+			alignStructFields(formatted, pendingRows)
+			pendingRows = nil
+		}
+	}
+
 	appendLine := func(line string) {
 		formatted = append(formatted, line)
 	}
@@ -51,6 +75,7 @@ func Format(filename, source string) (string, error) {
 	for _, rawLine := range lines {
 		trimmed := strings.TrimSpace(rawLine)
 		if trimmed == "" {
+			flushStructRows()
 			if len(formatted) > 0 && formatted[len(formatted)-1] != "" {
 				appendLine("")
 			}
@@ -76,18 +101,45 @@ func Format(filename, source string) (string, error) {
 			effectiveIndent = 0
 		}
 
+		// When a closing brace is encountered, flush any pending struct rows.
+		if leadingClosers > 0 {
+			flushStructRows()
+			if inStruct {
+				inStruct = false
+			}
+		}
+
 		// Exactly one blank line between top-level declarations.
 		if effectiveIndent == 0 && indent == 0 && isDeclStart(trimmed) && len(formatted) > 0 && formatted[len(formatted)-1] != "" {
 			appendLine("")
 		}
 
-		appendLine(strings.Repeat("    ", effectiveIndent) + formatLine(trimmed))
+		// Detect entering a struct body.
+		if strings.HasPrefix(trimmed, "struct ") {
+			inStruct = true
+		}
+
+		fmtLine := formatLine(trimmed)
+		linePos := len(formatted)
+		appendLine(strings.Repeat("    ", effectiveIndent) + fmtLine)
+
+		// Collect struct field rows for columnar alignment.
+		if inStruct && effectiveIndent > 0 && !strings.HasPrefix(trimmed, "//") {
+			if row, ok := parseStructFieldRow(linePos, strings.Repeat("    ", effectiveIndent), fmtLine); ok {
+				pendingRows = append(pendingRows, row)
+			} else {
+				flushStructRows()
+			}
+		}
 
 		indent += braceDelta(trimmed)
 		if indent < 0 {
 			indent = 0
 		}
 	}
+
+	// Flush any remaining rows at EOF.
+	flushStructRows()
 
 	for len(formatted) > 0 && formatted[0] == "" {
 		formatted = formatted[1:]
@@ -97,6 +149,112 @@ func Format(filename, source string) (string, error) {
 	}
 
 	return strings.Join(formatted, "\n") + "\n", nil
+}
+
+// parseStructFieldRow attempts to parse a formatted struct field line into its
+// components. Returns false if the line doesn't look like a field declaration.
+func parseStructFieldRow(lineIdx int, indent, line string) (structFieldRow, bool) {
+	// Strip trailing comment.
+	comment := ""
+	if cIdx := strings.Index(line, "//"); cIdx != -1 {
+		comment = strings.TrimSpace(line[cIdx:])
+		line = strings.TrimSpace(line[:cIdx])
+	}
+
+	colonIdx := strings.Index(line, ":")
+	if colonIdx == -1 {
+		return structFieldRow{}, false
+	}
+
+	left := strings.TrimSpace(line[:colonIdx])
+	right := strings.TrimSpace(line[colonIdx+1:])
+
+	// Must look like an identifier (possibly prefixed with pub/mut).
+	prefix := ""
+	name := left
+	if strings.HasPrefix(left, "pub mut ") {
+		prefix = "pub mut "
+		name = strings.TrimSpace(left[8:])
+	} else if strings.HasPrefix(left, "pub ") {
+		prefix = "pub "
+		name = strings.TrimSpace(left[4:])
+	} else if strings.HasPrefix(left, "mut ") {
+		prefix = "mut "
+		name = strings.TrimSpace(left[4:])
+	}
+
+	// name must be a plain identifier.
+	if name == "" {
+		return structFieldRow{}, false
+	}
+	for _, r := range name {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
+			return structFieldRow{}, false
+		}
+	}
+
+	// Extract trailing raw-string tag if present.
+	tag := ""
+	if bIdx := strings.Index(right, "`"); bIdx != -1 {
+		tag = strings.TrimSpace(right[bIdx:])
+		right = strings.TrimSpace(right[:bIdx])
+	}
+
+	return structFieldRow{
+		lineIdx: lineIdx,
+		indent:  indent,
+		prefix:  prefix,
+		name:    name,
+		typ:     right,
+		tag:     tag,
+		comment: comment,
+	}, true
+}
+
+// alignStructFields rewrites the lines in `lines` referenced by `rows` so that
+// field names, types, and tags are column-aligned (gofmt tabwriter style).
+func alignStructFields(lines []string, rows []structFieldRow) {
+	if len(rows) == 0 {
+		return
+	}
+
+	maxHeader := 0 // len("prefix + name + :")
+	maxType := 0
+	for _, r := range rows {
+		hdr := len(r.prefix) + len(r.name) + 1 // +1 for ':'
+		if hdr > maxHeader {
+			maxHeader = hdr
+		}
+		if len(r.typ) > maxType {
+			maxType = len(r.typ)
+		}
+	}
+
+	for _, r := range rows {
+		hdr := r.prefix + r.name + ":"
+		padName := strings.Repeat(" ", maxHeader-len(hdr))
+
+		var sb strings.Builder
+		sb.WriteString(r.indent)
+		sb.WriteString(hdr)
+		sb.WriteString(padName)
+		sb.WriteString(" ")
+		sb.WriteString(r.typ)
+
+		if r.tag != "" {
+			padType := strings.Repeat(" ", maxType-len(r.typ))
+			sb.WriteString(padType)
+			sb.WriteString(" ")
+			sb.WriteString(r.tag)
+		}
+
+		if r.comment != "" {
+			sb.WriteString(" ")
+			sb.WriteString(r.comment)
+		}
+
+		lines[r.lineIdx] = sb.String()
+	}
 }
 
 func maxInt(a, b int) int {
@@ -154,6 +312,20 @@ func lexLine(line string) []formatToken {
 			end += i + 4
 			tokens = append(tokens, formatToken{kind: tokComment, text: line[i:end]})
 			i = end
+			continue
+		}
+
+		// Backtick raw strings (struct field tags).
+		if c == '`' {
+			start := i
+			i++ // opening backtick
+			for i < len(line) && line[i] != '`' {
+				i++
+			}
+			if i < len(line) {
+				i++ // closing backtick
+			}
+			tokens = append(tokens, formatToken{kind: tokRawString, text: line[start:i]})
 			continue
 		}
 
@@ -284,6 +456,17 @@ func formatLine(line string) string {
 			}
 			out.WriteString(normalizeComment(tok.text))
 			break
+		}
+
+		// Raw string tags: always preceded by a space.
+		if tok.kind == tokRawString {
+			if out.Len() > 0 && !strings.HasSuffix(out.String(), " ") {
+				out.WriteByte(' ')
+			}
+			out.WriteString(tok.text)
+			prev = tok.text
+			prevUnary = false
+			continue
 		}
 
 		text := tok.text

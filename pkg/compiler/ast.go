@@ -428,6 +428,7 @@ type FieldDecl struct {
 	IsMut     bool
 	IsPub     bool
 	Anonymous bool
+	Tag       string
 }
 
 func (d *StructDecl) Loc() SourceLocation { return d.At }

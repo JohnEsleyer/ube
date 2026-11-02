@@ -248,7 +248,11 @@ func (p *Parser) parseStructDecl() *StructDecl {
 			fType = CustomType{Name: fName}
 			anonymous = true
 		}
-		fields = append(fields, FieldDecl{Name: fName, Type: fType, IsMut: fMut, IsPub: fPub, Anonymous: anonymous})
+		tag := ""
+		if p.check(TokenRawString) {
+			tag = p.advance().Val
+		}
+		fields = append(fields, FieldDecl{Name: fName, Type: fType, IsMut: fMut, IsPub: fPub, Anonymous: anonymous, Tag: tag})
 		if p.check(TokenComma) {
 			p.advance()
 		}
