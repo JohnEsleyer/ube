@@ -30,8 +30,6 @@ func (p *Parser) parseStmt() Stmt {
 	case TokenArena:
 		p.advance()
 		return &ArenaStmt{At: tok.Loc, Body: p.parseBlock()}
-	case TokenUnsafe:
-		p.errorAt(tok.Loc, "'unsafe' is forbidden: Ube is 100% sandboxed WebAssembly")
 	case TokenSpawn:
 		p.advance()
 		call := p.parseExpr()
@@ -111,7 +109,23 @@ func (p *Parser) parseLetStmt() *LetStmt {
 		p.advance()
 		isMut = true
 	}
-	name := p.expect(TokenIdent, "Expected variable name").Val
+	var name string
+	var names []string
+	if p.check(TokenLParen) {
+		p.advance()
+		for !p.check(TokenRParen) && !p.check(TokenEOF) {
+			names = append(names, p.expect(TokenIdent, "Expected destructured variable name").Val)
+			if p.check(TokenComma) {
+				p.advance()
+			}
+		}
+		p.expect(TokenRParen, "Expected ')' after destructuring pattern")
+		if len(names) < 2 {
+			p.errorAt(loc, "destructuring requires at least two variables")
+		}
+	} else {
+		name = p.expect(TokenIdent, "Expected variable name").Val
+	}
 
 	var typeAnnot UbeType
 	if p.check(TokenColon) {
@@ -121,7 +135,7 @@ func (p *Parser) parseLetStmt() *LetStmt {
 
 	p.expect(TokenAssign, "Expected '=' in variable declaration")
 	init := p.parseExpr()
-	return &LetStmt{At: loc, Name: name, Mut: isMut, Type: typeAnnot, Value: init}
+	return &LetStmt{At: loc, Name: name, Names: names, Mut: isMut, Type: typeAnnot, Value: init}
 }
 
 func (p *Parser) parseReturnStmt() *ReturnStmt {

@@ -13,7 +13,7 @@ import (
 )
 
 func build(args []string) error {
-	file, output, emitC, html, forbidUnsafe, err := parseBuildArgs(args)
+	file, output, emitC, html, err := parseBuildArgs(args)
 	if err != nil {
 		return err
 	}
@@ -29,9 +29,6 @@ func build(args []string) error {
 	ast, report, err := loadAndCheck(file)
 	if err != nil {
 		return err
-	}
-	if forbidUnsafe && unsafePresent(report) {
-		return fmt.Errorf("build rejected by --forbid-unsafe: unsafe constructs are forbidden by the language")
 	}
 
 	cPath := filepath.Join(os.TempDir(), fmt.Sprintf("ube-%d.c", time.Now().UnixNano()))
@@ -57,44 +54,39 @@ func build(args []string) error {
 	return nil
 }
 
-func parseBuildArgs(args []string) (string, string, bool, bool, bool, error) {
+func parseBuildArgs(args []string) (string, string, bool, bool, error) {
 	if len(args) == 0 {
-		return "", "", false, false, false, fmt.Errorf("usage: ube build <file.ube> [-o app.wasm] [--html] [--emit-c]")
+		return "", "", false, false, fmt.Errorf("usage: ube build <file.ube> [-o app.wasm] [--html] [--emit-c]")
 	}
-	file, output, emitC, html, forbidUnsafe := "", "", false, false, false
+	file, output, emitC, html := "", "", false, false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "-o":
 			if i+1 >= len(args) {
-				return "", "", false, false, false, fmt.Errorf("-o requires an output path")
+				return "", "", false, false, fmt.Errorf("-o requires an output path")
 			}
 			output = args[i+1]
 			i++
 		case "--emit-c":
 			emitC = true
-		case "--forbid-unsafe":
-			// Compatibility flag: the parser always forbids unsafe already.
-			forbidUnsafe = true
 		case "--html":
 			html = true
 		case "--wasm":
 			// Wasm is the default target; accepted as an explicit alias.
-		case "--freestanding":
-			// Kept as a compatibility no-op: the runtime is always freestanding.
 		default:
 			if strings.HasPrefix(args[i], "-") {
-				return "", "", false, false, false, fmt.Errorf("unknown build option %s", args[i])
+				return "", "", false, false, fmt.Errorf("unknown build option %s", args[i])
 			}
 			if file != "" {
-				return "", "", false, false, false, fmt.Errorf("multiple source files are not supported")
+				return "", "", false, false, fmt.Errorf("multiple source files are not supported")
 			}
 			file = args[i]
 		}
 	}
 	if file == "" {
-		return "", "", false, false, false, fmt.Errorf("specify a .ube source file")
+		return "", "", false, false, fmt.Errorf("specify a .ube source file")
 	}
-	return file, output, emitC, html, forbidUnsafe, nil
+	return file, output, emitC, html, nil
 }
 
 // compileWasm emits a WebAssembly module by default. HTML output is delegated to
@@ -163,7 +155,7 @@ func compileWasm(ast *compiler.Program, cPath, output string, html bool) (bool, 
 
 	// 4. Native C fallback keeps `ube build` and `ube run` usable without a
 	// Wasm SDK. The artifact is a normal host executable.
-	if err := compileNative(ast, cPath, output, true, false, false); err != nil {
+	if err := compileNative(ast, cPath, output, true, false); err != nil {
 		return false, err
 	}
 	return false, nil
@@ -176,7 +168,7 @@ func fileNonEmpty(path string) bool {
 
 // compileNative retains the original native pipeline for the test runner and
 // for direct callers that need a host executable.
-func compileNative(ast *compiler.Program, cPath, output string, optimize bool, freestanding bool, wasm bool) error {
+func compileNative(ast *compiler.Program, cPath, output string, optimize bool, wasm bool) error {
 	if wasm {
 		_, err := compileWasm(ast, cPath, output, false)
 		return err
@@ -188,7 +180,6 @@ func compileNative(ast *compiler.Program, cPath, output string, optimize bool, f
 	if err != nil {
 		return fmt.Errorf("initialize runtime header: %w", err)
 	}
-	_ = freestanding // The runtime is always freestanding/Wasm-portable now.
 
 	cc := ""
 	for _, candidate := range []string{"clang", "gcc", "cc"} {

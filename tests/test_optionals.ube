@@ -1,7 +1,7 @@
 // Focused null-safety tests: optional values, fallbacks, and unwrapping.
 fn main() {
     let present: i32? = 41
-    let missing: i32? = null
+    let missing: i32? = none
 
     let a = present or_else 0
     let b = missing or_else 7
@@ -13,7 +13,7 @@ fn main() {
         println_str(n)
     }
 
-    let nobody: string? = null
+    let nobody: string? = none
     if let n = nobody {
         println_str("never")
     }

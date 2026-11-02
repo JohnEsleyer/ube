@@ -21,7 +21,7 @@ fn find_even(num: i32) -> i32? {
     if num % 2 == 0 {
         return num
     } else {
-        return null
+        return none
     }
 }
 

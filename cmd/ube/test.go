@@ -183,7 +183,7 @@ func runCompiledTest(file, testName string) (bool, time.Duration, string) {
 
 	cPath := filepath.Join(dir, "test.c")
 	binPath := filepath.Join(dir, "test-bin")
-	if err := compileNative(ast, cPath, binPath, false, false, false); err != nil {
+	if err := compileNative(ast, cPath, binPath, false, false); err != nil {
 		return false, 0, err.Error()
 	}
 

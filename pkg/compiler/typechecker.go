@@ -131,6 +131,7 @@ func NewTypechecker() *Typechecker {
 	tc.Global.Funcs["println_str"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}}, RetType: void}
 	tc.Global.Funcs["print"] = FuncSignature{RetType: void}
 	tc.Global.Funcs["time_now_ms"] = FuncSignature{RetType: i64}
+	tc.Global.Funcs["time_now_ns"] = FuncSignature{RetType: i64}
 	tc.Global.Funcs["sleep_ms"] = FuncSignature{Params: []FieldDecl{{Name: "ms", Type: i32}}, RetType: void}
 	tc.Global.Funcs["yield"] = FuncSignature{RetType: void}
 	tc.Global.Funcs["exit_process"] = FuncSignature{Params: []FieldDecl{{Name: "code", Type: i32}}, RetType: void}
@@ -197,8 +198,12 @@ func (tc *Typechecker) resolveType(t UbeType) UbeType {
 		return ChanType{Elem: tc.resolveType(v.Elem)}
 	case PoolType:
 		return PoolType{Elem: tc.resolveType(v.Elem)}
-	case PointerType:
-		return PointerType{Base: tc.resolveType(v.Base)}
+	case TupleType:
+		elems := make([]UbeType, len(v.Elems))
+		for i, e := range v.Elems {
+			elems[i] = tc.resolveType(e)
+		}
+		return TupleType{Elems: elems}
 	default:
 		return t
 	}

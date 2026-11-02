@@ -20,7 +20,7 @@ func (tc *Typechecker) isCopyType(t UbeType) bool {
 		return true
 	}
 	switch typ := t.(type) {
-	case PrimitiveType, RangeType, ChanType, SliceType:
+	case PrimitiveType, RangeType, ChanType:
 		return true
 	case ArrayType:
 		return tc.isCopyType(typ.Elem)
@@ -33,44 +33,18 @@ func (tc *Typechecker) isCopyType(t UbeType) bool {
 	}
 }
 
-// isMoveOnAssignmentType reports whether a value of this type is linearly
-// consumed by `let b = a` / `b = a`. Slices and builders are owned resources
-// even though they are passed to ordinary functions as borrowed views for
-// backwards compatibility with Ube's existing slice helpers.
-func (tc *Typechecker) isMoveOnAssignmentType(t UbeType) bool {
-	if t == nil {
-		return false
-	}
-	if !tc.isCopyType(t) {
-		return true
-	}
-	switch t.(type) {
-	case SliceType, StringBuilderType:
-		return true
-	default:
-		return false
-	}
-}
-
 func movedValueError(loc SourceLocation, name string) error {
 	return fmt.Errorf("[%s] use of moved value '%s' (use of moved variable '%s')", loc, name, name)
 }
 
-// markMovedIfAffine marks an affine resource as consumed by a call, channel
-// send, or pool free. It also enforces the loop boundary invariant: a value
-// declared outside a loop cannot be moved on one iteration and then be
+// markMovedIfAffine marks an affine resource as consumed by a call, assignment,
+// channel send, or pool despawn. It also enforces the loop boundary invariant:
+// a value declared outside a loop cannot be moved on one iteration and then be
 // missing on the next.
 func (tc *Typechecker) markMovedIfAffine(expr Expr, env *TypeEnvironment) error {
 	return tc.markMovedIfType(expr, env, func(t UbeType) bool {
 		return !tc.isCopyType(t)
 	})
-}
-
-// markMovedOnAssignment applies move-on-assignment semantics. Slices and
-// StringBuilder values are additionally treated as owned resources here, so
-// `let b = a` makes `a` statically dead.
-func (tc *Typechecker) markMovedOnAssignment(expr Expr, env *TypeEnvironment) error {
-	return tc.markMovedIfType(expr, env, tc.isMoveOnAssignmentType)
 }
 
 func (tc *Typechecker) markMovedIfType(expr Expr, env *TypeEnvironment, shouldMove func(UbeType) bool) error {
@@ -94,14 +68,36 @@ func (tc *Typechecker) markMovedIfType(expr Expr, env *TypeEnvironment, shouldMo
 func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 	switch s := stmt.(type) {
 	case *LetStmt:
-		if _, exists := env.Vars[s.Name]; exists {
-			return fmt.Errorf("[%s] variable '%s' already declared in this scope", s.At, s.Name)
-		}
 		valT, err := tc.inferExpr(s.Value, env)
 		if err != nil {
 			return err
 		}
 		s.ValueType = valT
+
+		if len(s.Names) > 0 {
+			tupleT, ok := tc.resolveType(valT).(TupleType)
+			if !ok {
+				return fmt.Errorf("[%s] destructuring requires a tuple value, got '%s'", s.At, valT)
+			}
+			if len(tupleT.Elems) != len(s.Names) {
+				return fmt.Errorf("[%s] destructuring expects %d values, got %d", s.At, len(tupleT.Elems), len(s.Names))
+			}
+			if s.Type != nil {
+				return fmt.Errorf("[%s] destructured variables cannot have a type annotation", s.At)
+			}
+			for i, name := range s.Names {
+				if _, exists := env.Vars[name]; exists {
+					return fmt.Errorf("[%s] variable '%s' already declared in this scope", s.At, name)
+				}
+				elemT := tupleT.Elems[i].WithRegion(env.ScopeDepth)
+				env.Vars[name] = VarInfo{Type: elemT, IsMut: s.Mut, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Value, env), LoopDepth: env.LoopDepth, Moved: false}
+			}
+			return nil
+		}
+
+		if _, exists := env.Vars[s.Name]; exists {
+			return fmt.Errorf("[%s] variable '%s' already declared in this scope", s.At, s.Name)
+		}
 		if s.Type != nil {
 			s.Type = tc.resolveType(s.Type)
 			if err := tc.validateType(s.Type, s.At); err != nil {
@@ -113,9 +109,9 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 					valT = s.Type
 				}
 			}
-			if targetSlice, isSlice := s.Type.(SliceType); isSlice {
-				if arrT, isArr := valT.(ArrayType); isArr && arrT.Elem.String() == targetSlice.Elem.String() {
-					s.Value = &ArrayToSliceExpr{At: s.Value.Loc(), ArrayExpr: s.Value, ElemType: arrT.Elem, Size: arrT.Size}
+			if sl, isSlice := s.Type.(SliceType); isSlice {
+				if arr, isArr := valT.(ArrayType); isArr && tc.assertCompat(sl.Elem, arr.Elem, s.Value.Loc()) == nil {
+					s.Value = &ArrayToSliceExpr{At: s.Value.Loc(), Value: s.Value, ArrayType: arr}
 					valT = s.Type
 				}
 			}
@@ -125,11 +121,11 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			valT = s.Type
 		} else {
 			if opt, ok := valT.(OptionalType); ok && opt.Inner.String() == "void" {
-				return fmt.Errorf("[%s] variable '%s' requires a type annotation when initialized with null", s.At, s.Name)
+				return fmt.Errorf("[%s] variable '%s' requires a type annotation when initialized with none", s.At, s.Name)
 			}
 		}
 		valT = valT.WithRegion(env.ScopeDepth)
-		if err := tc.markMovedOnAssignment(s.Value, env); err != nil {
+		if err := tc.markMovedIfAffine(s.Value, env); err != nil {
 			return err
 		}
 		if tc.hasLifetime(valT) && tc.exprDepth(s.Value, env) > env.ScopeDepth {
@@ -191,8 +187,8 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			}
 		}
 		if sl, isSlice := lhsT.(SliceType); isSlice {
-			if arrT, isArr := rhsT.(ArrayType); isArr && arrT.Elem.String() == sl.Elem.String() {
-				s.RHS = &ArrayToSliceExpr{At: s.RHS.Loc(), ArrayExpr: s.RHS, ElemType: arrT.Elem, Size: arrT.Size}
+			if arr, isArr := rhsT.(ArrayType); isArr && tc.assertCompat(sl.Elem, arr.Elem, s.RHS.Loc()) == nil {
+				s.RHS = &ArrayToSliceExpr{At: s.RHS.Loc(), Value: s.RHS, ArrayType: arr}
 				rhsT = sl
 			}
 		}
@@ -215,11 +211,11 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 				})
 			}
 		}
-		if err := tc.markMovedOnAssignment(s.RHS, env); err != nil {
+		if err := tc.markMovedIfAffine(s.RHS, env); err != nil {
 			return err
 		}
 		if opt, ok := lhsT.(OptionalType); ok {
-			if lit, isNull := s.RHS.(*LiteralExpr); isNull && lit.Val == "null" {
+			if lit, isNone := s.RHS.(*LiteralExpr); isNone && lit.Val == "none" {
 				return nil
 			}
 			if err := tc.assertCompat(opt.Inner, rhsT, s.At); err == nil {
@@ -248,9 +244,10 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			if tc.hasLifetime(valT) && tc.exprDepth(s.Value, env) > 0 {
 				return fmt.Errorf("[%s] Safety Error: cannot return a reference rooted in this function's local scope", s.At)
 			}
-			if targetSlice, isSlice := expected.(SliceType); isSlice {
-				if arrT, isArr := valT.(ArrayType); isArr && arrT.Elem.String() == targetSlice.Elem.String() {
-					s.Value = &ArrayToSliceExpr{At: s.Value.Loc(), ArrayExpr: s.Value, ElemType: arrT.Elem, Size: arrT.Size}
+			if sl, isSlice := expected.(SliceType); isSlice {
+				if arr, isArr := valT.(ArrayType); isArr && tc.assertCompat(sl.Elem, arr.Elem, s.Value.Loc()) == nil {
+					s.Value = &ArrayToSliceExpr{At: s.Value.Loc(), Value: s.Value, ArrayType: arr}
+					s.ValueType = expected
 					valT = expected
 				}
 			}
@@ -264,7 +261,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 				return tc.assertCompat(resT.Ok, valT, s.At)
 			} else if optT, ok := expected.(OptionalType); ok {
 				if optT.Inner.String() != "void" {
-					if _, isNull := s.Value.(*LiteralExpr); !isNull {
+					if lit, isNone := s.Value.(*LiteralExpr); !isNone || lit.Val != "none" {
 						if _, alreadyOptional := valT.(OptionalType); alreadyOptional {
 							return tc.assertCompat(expected, valT, s.At)
 						}
@@ -407,9 +404,6 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		scopeEnv := childTypeEnvironment(env)
 		scopeEnv.ScopeDepth = env.ScopeDepth + 1
 		return tc.checkBlock(s.Body, scopeEnv)
-
-	case *UnsafeStmt:
-		return fmt.Errorf("[%s] 'unsafe' is forbidden: Ube is 100%% sandboxed WebAssembly", s.At)
 
 	case *LoopControlStmt:
 		if env.LoopDepth == 0 {

@@ -35,10 +35,6 @@ func (tc *Typechecker) checkCallArgsWithReceiver(receiver Expr, receiverMut bool
 		if err != nil {
 			return err
 		}
-		if _, rawPointer := actual.(PointerType); rawPointer {
-			return fmt.Errorf("[%s] raw pointers are forbidden: Ube is 100%% sandboxed WebAssembly", arg.Loc())
-		}
-
 		paramMut := params[i].IsMut
 		if explicitMut && !paramMut {
 			return fmt.Errorf("[%s] argument is marked 'mut' but parameter '%s' is not mutable", arg.Loc(), params[i].Name)
@@ -80,10 +76,12 @@ func (tc *Typechecker) checkCallArgsWithReceiver(receiver Expr, receiverMut bool
 				actual = tr
 			}
 		}
-		if targetSlice, isSlice := paramType.(SliceType); isSlice {
-			if arrT, isArr := actual.(ArrayType); isArr && arrT.Elem.String() == targetSlice.Elem.String() {
-				args[i] = &ArrayToSliceExpr{At: arg.Loc(), ArrayExpr: arg, ElemType: arrT.Elem, Size: arrT.Size}
-				actual = targetSlice
+		if expSlice, isSlice := paramType.(SliceType); isSlice {
+			if actArr, isArr := actual.(ArrayType); isArr {
+				if tc.assertCompat(expSlice.Elem, actArr.Elem, arg.Loc()) == nil {
+					args[i] = &ArrayToSliceExpr{At: arg.Loc(), Value: arg, ArrayType: actArr}
+					actual = expSlice
+				}
 			}
 		}
 		if err := tc.assertCompat(paramType, actual, arg.Loc()); err != nil {
@@ -159,6 +157,13 @@ func (tc *Typechecker) assertCompat(expected, actual UbeType, loc SourceLocation
 			return fmt.Errorf("[%s] type '%s' does not implement trait '%s'", loc, c.Name, tr.Name)
 		}
 	}
+	if expSlice, ok := expected.(SliceType); ok {
+		if actArr, ok := actual.(ArrayType); ok {
+			if err := tc.assertCompat(expSlice.Elem, actArr.Elem, loc); err == nil {
+				return nil
+			}
+		}
+	}
 	if integerType(expected) && integerType(actual) {
 		return nil
 	}
@@ -191,8 +196,13 @@ func (tc *Typechecker) assertCompat(expected, actual UbeType, loc SourceLocation
 			return nil
 		}
 	}
-	if expected.String() == "*void" {
-		if _, ok := actual.(PointerType); ok {
+	if expTuple, ok := expected.(TupleType); ok {
+		if actTuple, ok := actual.(TupleType); ok && len(expTuple.Elems) == len(actTuple.Elems) {
+			for i := range expTuple.Elems {
+				if err := tc.assertCompat(expTuple.Elems[i], actTuple.Elems[i], loc); err != nil {
+					return err
+				}
+			}
 			return nil
 		}
 	}
@@ -213,8 +223,13 @@ func (tc *Typechecker) validateType(t UbeType, loc SourceLocation) error {
 			return fmt.Errorf("[%s] unknown trait '%s'", loc, v.Name)
 		}
 		return nil
-	case PointerType:
-		return fmt.Errorf("[%s] raw pointer types are forbidden: Ube is 100%% sandboxed WebAssembly", loc)
+	case TupleType:
+		for _, e := range v.Elems {
+			if err := tc.validateType(e, loc); err != nil {
+				return err
+			}
+		}
+		return nil
 	case SliceType:
 		return tc.validateType(v.Elem, loc)
 	case ArrayType:

@@ -89,7 +89,7 @@
       "patterns": [
         {
           "name": "constant.language.ube",
-          "match": "\\b(true|false|null)\\b"
+          "match": "\\b(true|false|none)\\b"
         },
         {
           "name": "constant.numeric.float.ube",

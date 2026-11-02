@@ -239,7 +239,7 @@ func TestStandalonePrograms(t *testing.T) {
 }
 
 func TestLexer(t *testing.T) {
-	code := "fn let mut struct enum match if while spawn arena break continue Chan 42 \"hello\" true null"
+	code := "fn let mut struct enum match if while spawn arena break continue Chan 42 \"hello\" true none"
 	lexer := compiler.NewLexer("test.ube", code)
 	toks, err := lexer.Tokenize()
 	if err != nil {
@@ -251,7 +251,7 @@ func TestLexer(t *testing.T) {
 		compiler.TokenIf, compiler.TokenWhile, compiler.TokenSpawn,
 		compiler.TokenArena, compiler.TokenBreak, compiler.TokenContinue,
 		compiler.TokenIdent, compiler.TokenInt,
-		compiler.TokenString, compiler.TokenBool, compiler.TokenNull,
+		compiler.TokenString, compiler.TokenBool, compiler.TokenNone,
 		compiler.TokenEOF,
 	}
 
@@ -445,12 +445,13 @@ func TestGenerationalPoolHandleValidation(t *testing.T) {
 	src := `struct Item { id: i32 }
 	fn main() {
 		let mut pool = Pool[Item].new(4)
-		let h1 = pool.spawn(Item{ id: 101 })
-		if let it = pool.get(h1) { println(it.id) }
-		pool.despawn(h1)
-		if let stale = pool.get(h1) { println(-1) } else { println(0) }
+		let mut handles = []UbeHandle{}
+		handles.push(pool.spawn(Item{ id: 101 }))
+		if let it = pool.get(handles[0]) { println(it.id) }
+		pool.despawn(handles[0])
+		if let stale = pool.get(handles[0]) { println(-1) } else { println(0) }
 		let h2 = pool.spawn(Item{ id: 202 })
-		if let stale2 = pool.get(h1) { println(-2) } else { println(1) }
+		if let stale2 = pool.get(handles[0]) { println(-2) } else { println(1) }
 		if let current = pool.get(h2) { println(current.id) }
 	}`
 	expected := "101\n0\n1\n202"

@@ -72,14 +72,18 @@ func (g *Generator) exprMutatesName(expr Expr, name string) bool {
 		return g.exprMutatesName(e.Primary, name) || g.exprMutatesName(e.Fallback, name)
 	case *ErrorExpr:
 		return g.exprMutatesName(e.Arg, name)
-	case *UnsafeExpr:
-		return g.exprMutatesName(e.Value, name)
 	case *RangeExpr:
 		return g.exprMutatesName(e.Start, name) || g.exprMutatesName(e.End, name)
 	case *TraitCoerceExpr:
 		return g.exprMutatesName(e.Value, name)
 	case *ArrayToSliceExpr:
-		return g.exprMutatesName(e.ArrayExpr, name)
+		return g.exprMutatesName(e.Value, name)
+	case *TupleExpr:
+		for _, elem := range e.Elems {
+			if g.exprMutatesName(elem, name) {
+				return true
+			}
+		}
 	case *InterpolatedStringExpr:
 		for _, part := range e.Parts {
 			if g.exprMutatesName(part, name) {
@@ -124,8 +128,6 @@ func (g *Generator) stmtMutatesName(stmt Stmt, name string) bool {
 	case *ForStmt:
 		return g.exprMutatesName(s.Iter, name) || g.stmtMutatesName(s.Body, name)
 	case *ArenaStmt:
-		return g.stmtMutatesName(s.Body, name)
-	case *UnsafeStmt:
 		return g.stmtMutatesName(s.Body, name)
 	case *SpawnStmt:
 		return g.exprMutatesName(s.Call, name)

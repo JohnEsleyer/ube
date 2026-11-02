@@ -66,6 +66,7 @@ type MemberExpr struct {
 	Target     Expr
 	Member     string
 	TargetType UbeType
+	EmbedPath  []string
 }
 
 func (e *MemberExpr) Loc() SourceLocation { return e.At }
@@ -159,14 +160,6 @@ type ErrorExpr struct {
 func (e *ErrorExpr) Loc() SourceLocation { return e.At }
 func (e *ErrorExpr) exprNode()           {}
 
-type UnsafeExpr struct {
-	At    SourceLocation
-	Value Expr
-}
-
-func (e *UnsafeExpr) Loc() SourceLocation { return e.At }
-func (e *UnsafeExpr) exprNode()           {}
-
 type PromoteExpr struct {
 	At    SourceLocation
 	Value Expr
@@ -213,13 +206,21 @@ func (e *TraitCoerceExpr) exprNode()           {}
 
 type ArrayToSliceExpr struct {
 	At        SourceLocation
-	ArrayExpr Expr
-	ElemType  UbeType
-	Size      int
+	Value     Expr
+	ArrayType ArrayType
 }
 
 func (e *ArrayToSliceExpr) Loc() SourceLocation { return e.At }
 func (e *ArrayToSliceExpr) exprNode()           {}
+
+type TupleExpr struct {
+	At    SourceLocation
+	Elems []Expr
+	Types []UbeType
+}
+
+func (e *TupleExpr) Loc() SourceLocation { return e.At }
+func (e *TupleExpr) exprNode()           {}
 
 // Statements
 type Stmt interface {
@@ -238,6 +239,7 @@ func (s *BlockStmt) stmtNode()           {}
 type LetStmt struct {
 	At        SourceLocation
 	Name      string
+	Names     []string
 	Mut       bool
 	Type      UbeType
 	Value     Expr
@@ -326,14 +328,6 @@ type ArenaStmt struct {
 
 func (s *ArenaStmt) Loc() SourceLocation { return s.At }
 func (s *ArenaStmt) stmtNode()           {}
-
-type UnsafeStmt struct {
-	At   SourceLocation
-	Body *BlockStmt
-}
-
-func (s *UnsafeStmt) Loc() SourceLocation { return s.At }
-func (s *UnsafeStmt) stmtNode()           {}
 
 type LoopControlStmt struct {
 	At       SourceLocation
@@ -429,10 +423,11 @@ type StructDecl struct {
 }
 
 type FieldDecl struct {
-	Name  string
-	Type  UbeType
-	IsMut bool
-	IsPub bool
+	Name      string
+	Type      UbeType
+	IsMut     bool
+	IsPub     bool
+	Anonymous bool
 }
 
 func (d *StructDecl) Loc() SourceLocation { return d.At }
@@ -454,10 +449,11 @@ func (d *EnumDecl) Loc() SourceLocation { return d.At }
 func (d *EnumDecl) declNode()           {}
 
 type TraitDecl struct {
-	At      SourceLocation
-	Name    string
-	IsPub   bool
-	Methods []TraitMethodDecl
+	At          SourceLocation
+	Name        string
+	IsPub       bool
+	Supertraits []string
+	Methods     []TraitMethodDecl
 }
 
 type TraitMethodDecl struct {
@@ -487,6 +483,7 @@ func (d *FnDecl) declNode()           {}
 type ExternFnDecl struct {
 	At      SourceLocation
 	Name    string
+	Module  string
 	IsPub   bool
 	Params  []FieldDecl
 	RetType UbeType

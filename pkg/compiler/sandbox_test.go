@@ -21,7 +21,7 @@ func TestSandbox_ForbiddenLowLevelConstructs(t *testing.T) {
 		{
 			name: "unsafe expression",
 			src:  "fn main() {\n\tlet x = unsafe { 1 }\n}",
-			want: "'unsafe' expressions are forbidden",
+			want: "'unsafe' is forbidden",
 		},
 		{
 			name: "raw pointer type",

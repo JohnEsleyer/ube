@@ -12,11 +12,13 @@ type Generator struct {
 	results         map[string]string
 	pools           map[string]string
 	arrays          map[string]string
+	tuples          map[string][]string
 	sliceKeys       []string
 	optionKeys      []string
 	resultKeys      []string
 	poolKeys        []string
 	arrayKeys       []string
+	tupleKeys       []string
 	sliceVars       map[string]string
 	includes        []string
 	buf             strings.Builder
@@ -55,6 +57,7 @@ func NewGenerator(prog *Program) *Generator {
 		results:        make(map[string]string),
 		pools:          make(map[string]string),
 		arrays:         make(map[string]string),
+		tuples:         make(map[string][]string),
 		sliceVars:      make(map[string]string),
 		sliceParamVars: make(map[string]bool),
 		sliceMutParams:    make(map[string]map[int]bool),
@@ -110,6 +113,13 @@ func (g *Generator) registerArray(m, spec string) {
 		g.arrayKeys = append(g.arrayKeys, m)
 	}
 	g.arrays[m] = spec
+}
+
+func (g *Generator) registerTuple(m string, fields []string) {
+	if _, exists := g.tuples[m]; !exists {
+		g.tupleKeys = append(g.tupleKeys, m)
+	}
+	g.tuples[m] = fields
 }
 
 func (g *Generator) registerTraitVtable(trait string, concrete UbeType) string {
@@ -179,8 +189,16 @@ func (g *Generator) toCType(t UbeType) string {
 		return v.Name
 	case GenericInstanceType:
 		return v.Base
-	case PointerType:
-		return g.toCType(v.Base) + "*"
+	case TupleType:
+		parts := make([]string, len(v.Elems))
+		fields := make([]string, len(v.Elems))
+		for i, elem := range v.Elems {
+			parts[i] = elem.String()
+			fields[i] = g.toCType(elem)
+		}
+		m := mangleTypeName(strings.Join(parts, "_"))
+		g.registerTuple(m, fields)
+		return fmt.Sprintf("UbeTuple_%s", m)
 	case SliceType:
 		m := mangleTypeName(v.Elem.String())
 		ct := g.toCType(v.Elem)
@@ -406,6 +424,16 @@ func (g *Generator) Generate() string {
 		parts := strings.SplitN(spec, "|", 2)
 		g.emit(fmt.Sprintf("#ifndef UbeArray_%s_DEFINED\n#define UbeArray_%s_DEFINED", m, m))
 		g.emit(fmt.Sprintf("typedef struct { %s data[%s]; } UbeArray_%s;", parts[0], parts[1], m))
+		g.emit("#endif")
+	}
+	for _, m := range g.tupleKeys {
+		fields := g.tuples[m]
+		g.emit(fmt.Sprintf("#ifndef UbeTuple_%s_DEFINED\n#define UbeTuple_%s_DEFINED", m, m))
+		var decls []string
+		for i, ct := range fields {
+			decls = append(decls, fmt.Sprintf("%s _%d;", ct, i))
+		}
+		g.emit(fmt.Sprintf("typedef struct { %s } UbeTuple_%s;", strings.Join(decls, " "), m))
 		g.emit("#endif")
 	}
 	for _, m := range g.optionKeys {

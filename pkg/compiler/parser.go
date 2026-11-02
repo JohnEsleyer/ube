@@ -152,6 +152,15 @@ func (p *Parser) parseDecl() Decl {
 func (p *Parser) parseTraitDecl() *TraitDecl {
 	loc := p.expect(TokenTrait, "Expected 'trait'").Loc
 	name := p.expect(TokenIdent, "Expected trait name").Val
+	var supertraits []string
+	if p.check(TokenColon) {
+		p.advance()
+		supertraits = append(supertraits, p.expect(TokenIdent, "Expected supertrait name").Val)
+		for p.check(TokenPlus) {
+			p.advance()
+			supertraits = append(supertraits, p.expect(TokenIdent, "Expected supertrait name after '+'").Val)
+		}
+	}
 	p.expect(TokenLBrace, "Expected '{' after trait name")
 
 	var methods []TraitMethodDecl
@@ -186,7 +195,7 @@ func (p *Parser) parseTraitDecl() *TraitDecl {
 		}
 	}
 	p.expect(TokenRBrace, "Expected '}' closing trait")
-	return &TraitDecl{At: loc, Name: name, Methods: methods}
+	return &TraitDecl{At: loc, Name: name, Supertraits: supertraits, Methods: methods}
 }
 
 func (p *Parser) parseStructDecl() *StructDecl {
@@ -201,6 +210,10 @@ func (p *Parser) parseStructDecl() *StructDecl {
 			if p.check(TokenColon) {
 				p.advance()
 				constraint = p.expect(TokenIdent, "Expected trait constraint").Val
+				for p.check(TokenPlus) {
+					p.advance()
+					constraint += "+" + p.expect(TokenIdent, "Expected trait constraint after '+'").Val
+				}
 			}
 			typeParams = append(typeParams, TypeParam{Name: tName, Constraint: constraint})
 			if p.check(TokenComma) {
@@ -226,9 +239,16 @@ func (p *Parser) parseStructDecl() *StructDecl {
 			}
 		}
 		fName := p.expect(TokenIdent, "Expected field name").Val
-		p.expect(TokenColon, "Expected ':' after field name")
-		fType := p.parseType()
-		fields = append(fields, FieldDecl{Name: fName, Type: fType, IsMut: fMut, IsPub: fPub})
+		var fType UbeType
+		anonymous := false
+		if p.check(TokenColon) {
+			p.advance()
+			fType = p.parseType()
+		} else {
+			fType = CustomType{Name: fName}
+			anonymous = true
+		}
+		fields = append(fields, FieldDecl{Name: fName, Type: fType, IsMut: fMut, IsPub: fPub, Anonymous: anonymous})
 		if p.check(TokenComma) {
 			p.advance()
 		}
@@ -267,6 +287,10 @@ func (p *Parser) parseEnumDecl() *EnumDecl {
 
 func (p *Parser) parseExternDecl() *ExternFnDecl {
 	loc := p.expect(TokenExtern, "Expected 'extern'").Loc
+	module := ""
+	if p.check(TokenString) {
+		module = p.advance().Val
+	}
 	p.expect(TokenFn, "Expected 'fn' after extern")
 	name := p.expect(TokenIdent, "Expected extern function name").Val
 	p.expect(TokenLParen, "Expected '(' for parameter list")
@@ -293,7 +317,7 @@ func (p *Parser) parseExternDecl() *ExternFnDecl {
 		p.advance()
 		retType = p.parseType()
 	}
-	return &ExternFnDecl{At: loc, Name: name, Params: params, RetType: retType}
+	return &ExternFnDecl{At: loc, Name: name, Module: module, Params: params, RetType: retType}
 }
 
 func (p *Parser) parseFnDecl() *FnDecl {
@@ -322,6 +346,10 @@ func (p *Parser) parseFnDecl() *FnDecl {
 			if p.check(TokenColon) {
 				p.advance()
 				constraint = p.expect(TokenIdent, "Expected trait constraint").Val
+				for p.check(TokenPlus) {
+					p.advance()
+					constraint += "+" + p.expect(TokenIdent, "Expected trait constraint after '+'").Val
+				}
 			}
 			typeParams = append(typeParams, TypeParam{Name: tName, Constraint: constraint})
 			if p.check(TokenComma) {
@@ -375,6 +403,22 @@ func (p *Parser) parseType() UbeType {
 	if tok.Type == TokenStar {
 		p.advance()
 		p.errorAt(tok.Loc, "raw pointers '*T' are forbidden: Ube is 100% sandboxed WebAssembly")
+	} else if tok.Type == TokenLParen {
+		p.advance()
+		var elems []UbeType
+		elems = append(elems, p.parseType())
+		for p.check(TokenComma) {
+			p.advance()
+			if p.check(TokenRParen) {
+				break
+			}
+			elems = append(elems, p.parseType())
+		}
+		p.expect(TokenRParen, "Expected ')' after tuple type")
+		if len(elems) < 2 {
+			p.errorAt(tok.Loc, "tuple types must contain at least two elements")
+		}
+		t = TupleType{Elems: elems}
 	} else if tok.Type == TokenLBracket && p.peek(1).Type == TokenRBracket {
 		p.advance()
 		p.advance()

@@ -8,8 +8,8 @@ fn worker(jobs: Chan[i32], done: Chan[bool]){
 }
 
 fn main(){
-    let jobs = Chan[i32](5)
-    let done = Chan[bool](1)
+    let jobs = Chan[i32].new(5)
+    let done = Chan[bool].new(1)
 
     spawn worker(jobs, done)
 

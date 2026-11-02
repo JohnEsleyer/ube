@@ -31,11 +31,10 @@ var keywords = map[string]TokenType{
 	"or_else":  TokenOrElse,
 	"import":   TokenImport,
 	"defer":    TokenDefer,
-	"unsafe":   TokenUnsafe,
 	"trait":    TokenTrait,
 	"true":     TokenBool,
 	"false":    TokenBool,
-	"null":     TokenNull,
+	"none":     TokenNone,
 }
 
 type Lexer struct {
@@ -415,6 +414,12 @@ func (l *Lexer) Tokenize() ([]Token, error) {
 				buf.WriteRune(l.advance())
 			}
 			id := buf.String()
+			switch id {
+			case "unsafe":
+				return nil, fmt.Errorf("[%s] 'unsafe' is forbidden: 'unsafe' expressions are forbidden in 100%% sandboxed WebAssembly", loc)
+			case "null":
+				return nil, fmt.Errorf("[%s] 'null' is not a Ube literal; use 'none' for optional values", loc)
+			}
 			tokType, ok := keywords[id]
 			if !ok {
 				tokType = TokenIdent

@@ -48,7 +48,7 @@ func TestStaticSafety_ChannelSendMovesVariable(t *testing.T) {
 		val: i32
 	}
 	fn main() {
-		let ch = Chan[Packet](1)
+		let ch = Chan[Packet].new(1)
 		let p = Packet{val: 100}
 		ch.send(p)
 		let x = p.val
@@ -69,15 +69,15 @@ func TestStaticSafety_PoolFreeMovesHandle(t *testing.T) {
 		x: f32
 	}
 	fn main() {
-		let mut bullets = Pool[Bullet](16)
-		let h = bullets.alloc(Bullet{x: 10.0})
-		bullets.free(h)
+		let mut bullets = Pool[Bullet].new(16)
+		let h = bullets.spawn(Bullet{x: 10.0})
+		bullets.despawn(h)
 		let b = bullets.get(h)
 	}
 	`
 	err := typecheckSource(t, src)
 	if err == nil {
-		t.Fatalf("expected compile error when using handle after pool.free, got nil")
+		t.Fatalf("expected compile error when using handle after pool.despawn, got nil")
 	}
 	if !strings.Contains(err.Error(), "use of moved variable 'h'") {
 		t.Fatalf("expected use of moved variable error, got: %v", err)
@@ -90,15 +90,15 @@ func TestStaticSafety_PoolDoubleFreeRejected(t *testing.T) {
 		x: f32
 	}
 	fn main() {
-		let mut bullets = Pool[Bullet](16)
-		let h = bullets.alloc(Bullet{x: 10.0})
-		bullets.free(h)
-		bullets.free(h)
+		let mut bullets = Pool[Bullet].new(16)
+		let h = bullets.spawn(Bullet{x: 10.0})
+		bullets.despawn(h)
+		bullets.despawn(h)
 	}
 	`
 	err := typecheckSource(t, src)
 	if err == nil {
-		t.Fatalf("expected compile error on double free, got nil")
+		t.Fatalf("expected compile error on double despawn, got nil")
 	}
 	if !strings.Contains(err.Error(), "use of moved variable 'h'") {
 		t.Fatalf("expected use of moved variable error, got: %v", err)

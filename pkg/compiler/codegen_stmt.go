@@ -129,7 +129,7 @@ func (g *Generator) genStmt(st Stmt) {
 			}
 
 			if _, isOptional := s.Type.(OptionalType); isOptional {
-				if lit, isNull := s.Value.(*LiteralExpr); isNull && lit.Val == "null" {
+				if lit, isNone := s.Value.(*LiteralExpr); isNone && lit.Val == "none" {
 					g.emit(fmt.Sprintf("%s %s = (%s){ .has_val = false };", cType, s.Name, cType))
 					return
 				}
@@ -178,7 +178,7 @@ func (g *Generator) genStmt(st Stmt) {
 
 		if optT, isOpt := s.LHSType.(OptionalType); isOpt {
 			cType := g.toCType(optT)
-			if lit, isNull := s.RHS.(*LiteralExpr); isNull && lit.Val == "null" {
+			if lit, isNone := s.RHS.(*LiteralExpr); isNone && lit.Val == "none" {
 				g.emit(fmt.Sprintf("%s = (%s){ .has_val = false };", lhsExpr, cType))
 				return
 			}
@@ -222,7 +222,7 @@ func (g *Generator) genStmt(st Stmt) {
 	case *ReturnStmt:
 		if s.Value != nil {
 			if optT, isOptional := g.curFnRet.(OptionalType); isOptional {
-				if lit, isNull := s.Value.(*LiteralExpr); isNull && lit.Val == "null" {
+				if lit, isNone := s.Value.(*LiteralExpr); isNone && lit.Val == "none" {
 					g.emitDefersFrom(0)
 					g.emitReturnArenaCleanup()
 					g.emit(fmt.Sprintf("return (%s){ .has_val = false };", g.toCType(optT)))
@@ -430,13 +430,6 @@ func (g *Generator) genStmt(st Stmt) {
 		g.genBlock(s.Body)
 		g.emit(fmt.Sprintf("ube_arena_exit(&%s);", frameTmp))
 		g.scopeMarks = g.scopeMarks[:len(g.scopeMarks)-1]
-		g.indent--
-		g.emit("}")
-
-	case *UnsafeStmt:
-		g.emit("{")
-		g.indent++
-		g.genBlock(s.Body)
 		g.indent--
 		g.emit("}")
 

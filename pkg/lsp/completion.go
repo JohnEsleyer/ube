@@ -33,6 +33,11 @@ func CompletionItems(source string, p lspPosition) []map[string]any {
 			map[string]any{"label": "spawn", "kind": 2, "detail": "pool.spawn(val) -> UbeHandle"},
 			map[string]any{"label": "get", "kind": 2, "detail": "pool.get(handle) -> T?"},
 			map[string]any{"label": "despawn", "kind": 2, "detail": "pool.despawn(handle) -> bool"},
+			map[string]any{"label": "trim", "kind": 2, "detail": "trim() -> string"},
+			map[string]any{"label": "starts_with", "kind": 2, "detail": "starts_with(prefix) -> bool"},
+			map[string]any{"label": "ends_with", "kind": 2, "detail": "ends_with(suffix) -> bool"},
+			map[string]any{"label": "index_of", "kind": 2, "detail": "index_of(substr) -> i32"},
+			map[string]any{"label": "split", "kind": 2, "detail": "split(delim) -> []string"},
 		)
 		return items
 	}
@@ -47,6 +52,7 @@ func CompletionItems(source string, p lspPosition) []map[string]any {
 		{"println", "println(x, ...)"},
 		{"print", "print(x, ...)"},
 		{"time_now_ms", "time_now_ms() -> i64"},
+		{"time_now_ns", "time_now_ns() -> i64"},
 		{"sleep_ms", "sleep_ms(ms: i32)"},
 		{"yield", "yield()"},
 		{"exit_process", "exit_process(code: i32)"},

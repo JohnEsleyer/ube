@@ -12,7 +12,7 @@ func printableType(t UbeType) bool {
 		case "i32", "u32", "u8", "i64", "u64", "f32", "f64", "bool":
 			return true
 		}
-	case StringType, PointerType:
+	case StringType, StringBuilderType:
 		return true
 	}
 	return false
@@ -76,6 +76,13 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		}
 		return TraitType{Name: e.Trait}, nil
 
+	case *ArrayToSliceExpr:
+		_, err := tc.inferExpr(e.Value, env)
+		if err != nil {
+			return nil, err
+		}
+		return SliceType{Elem: e.ArrayType.Elem}, nil
+
 	case *RangeExpr:
 		startT, err := tc.inferExpr(e.Start, env)
 		if err != nil {
@@ -93,12 +100,17 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		}
 		return RangeType{Elem: startT}, nil
 
-	case *ArrayToSliceExpr:
-		_, err := tc.inferExpr(e.ArrayExpr, env)
-		if err != nil {
-			return nil, err
+	case *TupleExpr:
+		elems := make([]UbeType, len(e.Elems))
+		for i, elem := range e.Elems {
+			t, err := tc.inferExpr(elem, env)
+			if err != nil {
+				return nil, err
+			}
+			elems[i] = t
 		}
-		return SliceType{Elem: e.ElemType}, nil
+		e.Types = elems
+		return TupleType{Elems: elems}, nil
 
 	case *InterpolatedStringExpr:
 		for _, part := range e.Parts {
@@ -112,9 +124,6 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		}
 		return StringType{}, nil
 
-	case *UnsafeExpr:
-		return nil, fmt.Errorf("[%s] 'unsafe' expressions are forbidden: Ube is 100%% sandboxed WebAssembly", e.At)
-
 	case *LiteralExpr:
 		return e.Type, nil
 
@@ -125,9 +134,6 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		if v, ok := env.LookupVar(e.Name); ok {
 			if v.Moved {
 				return nil, movedValueError(e.At, e.Name)
-			}
-			if err := requireUnsafePointerUse(v.Type, e.At); err != nil {
-				return nil, err
 			}
 			return v.Type, nil
 		}
@@ -261,44 +267,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 	case *CallExpr:
 		// Wasm host imports declared with 'extern fn' are safe, sandboxed calls.
 		// No unsafe wrapper is required or permitted anywhere in the language.
-		// Direct generic constructors: Chan[T](cap) and Pool[T](cap).
-		if gen, ok := e.Callee.(*GenericTypeExpr); ok && (gen.BaseType == "Chan" || gen.BaseType == "Pool") {
-			if len(e.Args) != 1 {
-				return nil, fmt.Errorf("[%s] %s constructor expects a capacity", e.At, gen.BaseType)
-			}
-			capT, err := tc.inferExpr(e.Args[0], env)
-			if err != nil {
-				return nil, err
-			}
-			if !integerType(capT) {
-				return nil, fmt.Errorf("[%s] %s capacity must be an integer, got '%s'", e.At, gen.BaseType, capT)
-			}
-			if gen.BaseType == "Chan" {
-				ch := ChanType{Elem: gen.ElemType}
-				return ch, tc.validateType(ch, e.At)
-			}
-			p := PoolType{Elem: gen.ElemType}
-			return p, tc.validateType(p, e.At)
-		}
-		if id, ok := e.Callee.(*IdentExpr); ok && (id.Name == "Chan" || id.Name == "Pool") && len(e.TypeArgs) == 1 {
-			if len(e.Args) != 1 {
-				return nil, fmt.Errorf("[%s] %s constructor expects a capacity", e.At, id.Name)
-			}
-			capT, err := tc.inferExpr(e.Args[0], env)
-			if err != nil {
-				return nil, err
-			}
-			if !integerType(capT) {
-				return nil, fmt.Errorf("[%s] %s capacity must be an integer, got '%s'", e.At, id.Name, capT)
-			}
-			elemT := tc.resolveType(e.TypeArgs[0])
-			if id.Name == "Chan" {
-				ch := ChanType{Elem: elemT}
-				return ch, tc.validateType(ch, e.At)
-			}
-			p := PoolType{Elem: elemT}
-			return p, tc.validateType(p, e.At)
-		}
+
 		if id, ok := e.Callee.(*IdentExpr); ok && id.Name == "format" {
 			if len(e.Args) == 0 {
 				return nil, fmt.Errorf("[%s] format expects at least a format string", e.At)
@@ -320,6 +289,12 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				}
 			}
 			return StringType{}, nil
+		}
+		if id, ok := e.Callee.(*IdentExpr); ok && (id.Name == "time_now_ms" || id.Name == "time_now_ns") {
+			if len(e.Args) != 0 {
+				return nil, fmt.Errorf("[%s] %s expects 0 arguments", e.At, id.Name)
+			}
+			return PrimitiveType{Name: "i64"}, nil
 		}
 		if id, ok := e.Callee.(*IdentExpr); ok && (id.Name == "println" || id.Name == "print") {
 			for _, arg := range e.Args {
@@ -399,6 +374,66 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				return nil, err
 			}
 			mem.TargetType = tgtT
+
+			// String built-in instance methods
+			if _, isStr := tgtT.(StringType); isStr {
+				e.ReceiverType = tgtT
+				switch mem.Member {
+				case "trim":
+					if len(e.Args) != 0 {
+						return nil, fmt.Errorf("[%s] trim expects 0 arguments", e.At)
+					}
+					return StringType{}, nil
+				case "starts_with":
+					if len(e.Args) != 1 {
+						return nil, fmt.Errorf("[%s] starts_with expects 1 argument", e.At)
+					}
+					aT, err := tc.inferExpr(e.Args[0], env)
+					if err != nil {
+						return nil, err
+					}
+					if err := tc.assertCompat(StringType{}, aT, e.Args[0].Loc()); err != nil {
+						return nil, err
+					}
+					return PrimitiveType{Name: "bool"}, nil
+				case "ends_with":
+					if len(e.Args) != 1 {
+						return nil, fmt.Errorf("[%s] ends_with expects 1 argument", e.At)
+					}
+					aT, err := tc.inferExpr(e.Args[0], env)
+					if err != nil {
+						return nil, err
+					}
+					if err := tc.assertCompat(StringType{}, aT, e.Args[0].Loc()); err != nil {
+						return nil, err
+					}
+					return PrimitiveType{Name: "bool"}, nil
+				case "index_of":
+					if len(e.Args) != 1 {
+						return nil, fmt.Errorf("[%s] index_of expects 1 argument", e.At)
+					}
+					aT, err := tc.inferExpr(e.Args[0], env)
+					if err != nil {
+						return nil, err
+					}
+					if err := tc.assertCompat(StringType{}, aT, e.Args[0].Loc()); err != nil {
+						return nil, err
+					}
+					return PrimitiveType{Name: "i32"}, nil
+				case "split":
+					if len(e.Args) != 1 {
+						return nil, fmt.Errorf("[%s] split expects 1 delimiter argument", e.At)
+					}
+					aT, err := tc.inferExpr(e.Args[0], env)
+					if err != nil {
+						return nil, err
+					}
+					if err := tc.assertCompat(StringType{}, aT, e.Args[0].Loc()); err != nil {
+						return nil, err
+					}
+					return SliceType{Elem: StringType{}}, nil
+				}
+			}
 
 			// StringBuilder instance methods
 			if _, isSB := tgtT.(StringBuilderType); isSB {
@@ -597,9 +632,9 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					}
 					return p, nil
 				}
-				if mem.Member == "spawn" || mem.Member == "alloc" {
+				if mem.Member == "spawn" {
 					if len(e.Args) != 1 {
-						return nil, fmt.Errorf("[%s] Pool.%s expects one value", e.At, mem.Member)
+						return nil, fmt.Errorf("[%s] Pool.spawn expects one value", e.At)
 					}
 					valueType, err := tc.inferExpr(e.Args[0], env)
 					if err != nil {
@@ -626,9 +661,9 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					}
 					return OptionalType{Inner: p.Elem}, nil
 				}
-				if mem.Member == "despawn" || mem.Member == "free" {
+				if mem.Member == "despawn" {
 					if len(e.Args) != 1 {
-						return nil, fmt.Errorf("[%s] Pool.%s expects a handle", e.At, mem.Member)
+						return nil, fmt.Errorf("[%s] Pool.despawn expects a handle", e.At)
 					}
 					handleType, err := tc.inferExpr(e.Args[0], env)
 					if err != nil {
@@ -637,10 +672,8 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					if err := tc.assertCompat(CustomType{Name: "UbeHandle"}, handleType, e.At); err != nil {
 						return nil, err
 					}
-					// free() linearly consumes the handle, making any later
-					// get()/free() on it a compile-time error.
-					if mem.Member == "free" {
-						if err := tc.markMovedIfAffine(e.Args[0], env); err != nil {
+					if id, ok := e.Args[0].(*IdentExpr); ok {
+						if err := tc.markMovedIfAffine(id, env); err != nil {
 							return nil, err
 						}
 					}
@@ -663,9 +696,6 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				if err := tc.checkCallArgsWithReceiver(mem.Target, sig.ReceiverMut, e.Args, sig.Params, sig.Escaping, env, e.At); err != nil {
 					return nil, err
 				}
-				if err := requireUnsafePointerUse(sig.RetType, e.At); err != nil {
-					return nil, err
-				}
 				return sig.RetType, nil
 			}
 		}
@@ -675,9 +705,6 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					return nil, fmt.Errorf("[%s] cannot access private function '%s' from another file", e.At, id.Name)
 				}
 				if err := tc.checkCallArgs(e.Args, sig.Params, sig.Escaping, env, e.At); err != nil {
-					return nil, err
-				}
-				if err := requireUnsafePointerUse(sig.RetType, e.At); err != nil {
 					return nil, err
 				}
 				return sig.RetType, nil
@@ -725,27 +752,23 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			return nil, fmt.Errorf("[%s] '%s' is not available on '%s'", e.At, e.Member, tgtT)
 		}
 		if custom, ok := tgtT.(CustomType); ok {
-			if meta, ok := tc.Global.StructMeta[custom.Name]; ok {
-				for _, f := range meta.Fields {
-					if f.Name == e.Member {
-						if env.CurFile != "" && meta.File != "" && env.CurFile != meta.File && !f.IsPub {
-							return nil, fmt.Errorf("[%s] cannot access private field '%s' on struct '%s'", e.At, e.Member, custom.Name)
-						}
-						if err := requireUnsafePointerUse(f.Type, e.At); err != nil {
-							return nil, err
-						}
-						return f.Type, nil
+			matches := tc.findFieldMatches(custom.Name, e.Member, nil, map[string]bool{})
+			if len(matches) == 1 {
+				match := matches[0]
+				if meta, ok := tc.Global.StructMeta[match.Owner]; ok {
+					if env.CurFile != "" && meta.File != "" && env.CurFile != meta.File && !match.Field.IsPub {
+						return nil, fmt.Errorf("[%s] cannot access private field '%s' on struct '%s'", e.At, e.Member, match.Owner)
 					}
 				}
-			} else if fields, ok := tc.Global.Structs[custom.Name]; ok {
-				for _, f := range fields {
-					if f.Name == e.Member {
-						if err := requireUnsafePointerUse(f.Type, e.At); err != nil {
-							return nil, err
-						}
-						return f.Type, nil
-					}
+				e.EmbedPath = match.Path
+				return match.Field.Type, nil
+			}
+			if len(matches) > 1 {
+				var where []string
+				for _, match := range matches {
+					where = append(where, match.Owner)
 				}
+				return nil, fmt.Errorf("[%s] ambiguous embedded field '%s' on '%s' (found in %s); qualify the access explicitly", e.At, e.Member, custom.Name, strings.Join(where, ", "))
 			}
 		}
 		return nil, fmt.Errorf("[%s] Cannot access '%s' on '%s'", e.At, e.Member, tgtT)
@@ -764,16 +787,10 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		}
 		if sl, ok := tgtT.(SliceType); ok {
 			e.TargetType = tgtT
-			if err := requireUnsafePointerUse(sl.Elem, e.At); err != nil {
-				return nil, err
-			}
 			return sl.Elem, nil
 		}
 		if arr, ok := tgtT.(ArrayType); ok {
 			e.TargetType = tgtT
-			if err := requireUnsafePointerUse(arr.Elem, e.At); err != nil {
-				return nil, err
-			}
 			return arr.Elem, nil
 		}
 		if _, ok := tgtT.(StringType); ok {
@@ -874,7 +891,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			fieldPubMap[f.Name] = f.IsPub
 		}
 		provided := make(map[string]bool)
-		for _, init := range e.Fields {
+		for i, init := range e.Fields {
 			expectedType, exists := fieldMap[init.Name]
 			if !exists {
 				return nil, fmt.Errorf("[%s] struct '%s' has no field '%s'", init.Val.Loc(), e.Name, init.Name)
@@ -889,6 +906,12 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			valT, err := tc.inferExpr(init.Val, env)
 			if err != nil {
 				return nil, err
+			}
+			if expSlice, isSlice := expectedType.(SliceType); isSlice {
+				if actArr, isArr := valT.(ArrayType); isArr && tc.assertCompat(expSlice.Elem, actArr.Elem, init.Val.Loc()) == nil {
+					e.Fields[i].Val = &ArrayToSliceExpr{At: init.Val.Loc(), Value: init.Val, ArrayType: actArr}
+					valT = expSlice
+				}
 			}
 			if err := tc.assertCompat(expectedType, valT, init.Val.Loc()); err != nil {
 				return nil, fmt.Errorf("[%s] field '%s' type mismatch: expected '%s', got '%s'", init.Val.Loc(), init.Name, expectedType, valT)

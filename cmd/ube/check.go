@@ -188,12 +188,6 @@ func printPurity(report purityReport) {
 	fmt.Println("  Security: Fully Sandboxed — No raw pointers, no unsafe blocks")
 }
 
-func unsafePresent(report purityReport) bool {
-	// The parser rejects `unsafe` and raw pointers, so the purity audit can
-	// never observe an unsafe escape hatch.
-	return false
-}
-
 func policyName(strict bool) string {
 	if strict {
 		return "strict"

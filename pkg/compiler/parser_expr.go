@@ -163,10 +163,10 @@ func (p *Parser) parsePostfix() Expr {
 		} else if p.check(TokenLBracket) {
 			loc := p.advance().Loc
 			var idx Expr
-			if !p.check(TokenColon) {
+			if !p.check(TokenColon) && !p.check(TokenDotDot) {
 				idx = p.parseExpr()
 			}
-			if p.check(TokenColon) {
+			if p.check(TokenColon) || p.check(TokenDotDot) {
 				p.advance()
 				var end Expr
 				if !p.check(TokenRBracket) {
@@ -288,9 +288,6 @@ func (p *Parser) parsePrimary() Expr {
 		return &PromoteExpr{At: loc, Value: val}
 	}
 	tok := p.peek(0)
-	if tok.Type == TokenUnsafe {
-		p.errorAt(tok.Loc, "'unsafe' expressions are forbidden: Ube is 100% sandboxed WebAssembly")
-	}
 
 	switch tok.Type {
 	case TokenFormatString:
@@ -312,9 +309,9 @@ func (p *Parser) parsePrimary() Expr {
 	case TokenBool:
 		p.advance()
 		return &LiteralExpr{At: tok.Loc, Val: tok.Val, Type: PrimitiveType{Name: "bool"}}
-	case TokenNull:
+	case TokenNone:
 		p.advance()
-		return &LiteralExpr{At: tok.Loc, Val: "null", Type: OptionalType{Inner: PrimitiveType{Name: "void"}}}
+		return &LiteralExpr{At: tok.Loc, Val: "none", Type: OptionalType{Inner: PrimitiveType{Name: "void"}}}
 	}
 
 	if tok.Type == TokenLBracket && p.peek(1).Type == TokenRBracket {
@@ -493,9 +490,21 @@ func (p *Parser) parsePrimary() Expr {
 
 	if tok.Type == TokenLParen {
 		p.advance()
-		e := p.parseExpr()
+		first := p.parseExpr()
+		if p.check(TokenComma) {
+			elems := []Expr{first}
+			for p.check(TokenComma) {
+				p.advance()
+				if p.check(TokenRParen) {
+					break
+				}
+				elems = append(elems, p.parseExpr())
+			}
+			p.expect(TokenRParen, "Expected ')' after tuple expression")
+			return &TupleExpr{At: tok.Loc, Elems: elems}
+		}
 		p.expect(TokenRParen, "Expected ')'")
-		return e
+		return first
 	}
 
 	p.errorAt(tok.Loc, fmt.Sprintf("Unexpected token in expression: %s (%s)", tok.Type, tok.Val))

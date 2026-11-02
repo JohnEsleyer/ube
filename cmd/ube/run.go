@@ -55,7 +55,7 @@ func run(args []string) error {
 		if err != nil {
 			// A Wasm toolchain produced a module, but no compatible Wasm runtime
 			// is installed. Fall back to native so `ube run` still works locally.
-			if e := compileNative(ast, cPath, base, false, false, false); e != nil {
+			if e := compileNative(ast, cPath, base, false, false); e != nil {
 				return err
 			}
 			label = "✓ Compiled native fallback"

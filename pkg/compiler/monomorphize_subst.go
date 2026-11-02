@@ -28,8 +28,12 @@ func substituteType(t UbeType, subMap map[string]UbeType) UbeType {
 		return ChanType{Elem: substituteType(v.Elem, subMap)}
 	case PoolType:
 		return PoolType{Elem: substituteType(v.Elem, subMap)}
-	case PointerType:
-		return PointerType{Base: substituteType(v.Base, subMap)}
+	case TupleType:
+		elems := make([]UbeType, len(v.Elems))
+		for i, elem := range v.Elems {
+			elems[i] = substituteType(elem, subMap)
+		}
+		return TupleType{Elems: elems}
 	default:
 		return t
 	}
@@ -55,6 +59,7 @@ func substituteStmt(stmt Stmt, subMap map[string]UbeType) Stmt {
 		return &LetStmt{
 			At:        s.At,
 			Name:      s.Name,
+			Names:     s.Names,
 			Mut:       s.Mut,
 			Type:      substituteType(s.Type, subMap),
 			Value:     substituteExpr(s.Value, subMap),
@@ -115,8 +120,6 @@ func substituteStmt(stmt Stmt, subMap map[string]UbeType) Stmt {
 		return substituteBlock(s, subMap)
 	case *ArenaStmt:
 		return &ArenaStmt{At: s.At, Body: substituteBlock(s.Body, subMap)}
-	case *UnsafeStmt:
-		return &UnsafeStmt{At: s.At, Body: substituteBlock(s.Body, subMap)}
 	case *LoopControlStmt:
 		return &LoopControlStmt{At: s.At, Continue: s.Continue}
 	case *SpawnStmt:
@@ -173,7 +176,16 @@ func substituteExpr(expr Expr, subMap map[string]UbeType) Expr {
 	case *TraitCoerceExpr:
 		return &TraitCoerceExpr{At: e.At, Value: substituteExpr(e.Value, subMap), Trait: e.Trait, Concrete: substituteType(e.Concrete, subMap)}
 	case *ArrayToSliceExpr:
-		return &ArrayToSliceExpr{At: e.At, ArrayExpr: substituteExpr(e.ArrayExpr, subMap), ElemType: substituteType(e.ElemType, subMap), Size: e.Size}
+		return &ArrayToSliceExpr{At: e.At, Value: substituteExpr(e.Value, subMap), ArrayType: substituteType(e.ArrayType, subMap).(ArrayType)}
+	case *TupleExpr:
+		out := &TupleExpr{At: e.At}
+		for _, elem := range e.Elems {
+			out.Elems = append(out.Elems, substituteExpr(elem, subMap))
+		}
+		for _, elemType := range e.Types {
+			out.Types = append(out.Types, substituteType(elemType, subMap))
+		}
+		return out
 	case *IdentExpr:
 		return &IdentExpr{At: e.At, Name: e.Name}
 	case *StructInitExpr:
@@ -221,6 +233,7 @@ func substituteExpr(expr Expr, subMap map[string]UbeType) Expr {
 			Target:     substituteExpr(e.Target, subMap),
 			Member:     e.Member,
 			TargetType: substituteType(e.TargetType, subMap),
+			EmbedPath:  e.EmbedPath,
 		}
 	case *IndexExpr:
 		return &IndexExpr{
@@ -262,8 +275,6 @@ func substituteExpr(expr Expr, subMap map[string]UbeType) Expr {
 		return &TryExpr{At: e.At, Operand: substituteExpr(e.Operand, subMap)}
 	case *ErrorExpr:
 		return &ErrorExpr{At: e.At, Arg: substituteExpr(e.Arg, subMap)}
-	case *UnsafeExpr:
-		return &UnsafeExpr{At: e.At, Value: substituteExpr(e.Value, subMap)}
 	case *PromoteExpr:
 		return &PromoteExpr{
 			At:    e.At,

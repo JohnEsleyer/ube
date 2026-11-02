@@ -5,13 +5,6 @@ import (
 	"strings"
 )
 
-func requireUnsafePointerUse(t UbeType, loc SourceLocation) error {
-	if _, isPointer := t.(PointerType); isPointer {
-		return fmt.Errorf("[%s] raw pointers are forbidden: Ube is 100%% sandboxed WebAssembly", loc)
-	}
-	return nil
-}
-
 func assignmentRoot(expr Expr) string {
 	switch e := expr.(type) {
 	case *IdentExpr:
@@ -27,7 +20,7 @@ func assignmentRoot(expr Expr) string {
 	case *TraitCoerceExpr:
 		return assignmentRoot(e.Value)
 	case *ArrayToSliceExpr:
-		return assignmentRoot(e.ArrayExpr)
+		return assignmentRoot(e.Value)
 	}
 	return ""
 }
@@ -46,8 +39,15 @@ func (tc *Typechecker) hasLifetime(t UbeType) bool {
 
 func (tc *Typechecker) hasLifetimeSeen(t UbeType, seen map[string]bool) bool {
 	switch v := t.(type) {
-	case PointerType, SliceType, StringType, StringBuilderType, TraitType:
+	case SliceType, StringType, StringBuilderType, TraitType:
 		return true
+	case TupleType:
+		for _, elem := range v.Elems {
+			if tc.hasLifetimeSeen(elem, seen) {
+				return true
+			}
+		}
+		return false
 	case ArrayType:
 		return tc.hasLifetimeSeen(v.Elem, seen)
 	case OptionalType:
@@ -106,7 +106,15 @@ func (tc *Typechecker) exprDepth(expr Expr, env *TypeEnvironment) int {
 	case *TraitCoerceExpr:
 		return env.ScopeDepth
 	case *ArrayToSliceExpr:
-		return tc.exprDepth(e.ArrayExpr, env)
+		return tc.exprDepth(e.Value, env)
+	case *TupleExpr:
+		depth := 0
+		for _, elem := range e.Elems {
+			if d := tc.exprDepth(elem, env); d > depth {
+				depth = d
+			}
+		}
+		return depth
 	case *ArrayInitExpr:
 		depth := 0
 		for _, item := range e.Elements {
@@ -250,8 +258,6 @@ func (tc *Typechecker) exprEscapesParam(expr Expr, name string) bool {
 		return tc.exprEscapesParam(e.Primary, name) || tc.exprEscapesParam(e.Fallback, name)
 	case *ErrorExpr:
 		return tc.exprEscapesParam(e.Arg, name)
-	case *UnsafeExpr:
-		return tc.exprEscapesParam(e.Value, name)
 	case *RangeExpr:
 		return tc.exprEscapesParam(e.Start, name) || tc.exprEscapesParam(e.End, name)
 	case *PromoteExpr:
@@ -261,7 +267,13 @@ func (tc *Typechecker) exprEscapesParam(expr Expr, name string) bool {
 	case *TraitCoerceExpr:
 		return tc.exprEscapesParam(e.Value, name)
 	case *ArrayToSliceExpr:
-		return tc.exprEscapesParam(e.ArrayExpr, name)
+		return tc.exprEscapesParam(e.Value, name)
+	case *TupleExpr:
+		for _, elem := range e.Elems {
+			if exprRefRootAt(elem, name) || tc.exprEscapesParam(elem, name) {
+				return true
+			}
+		}
 	case *InterpolatedStringExpr:
 		for _, part := range e.Parts {
 			if tc.exprEscapesParam(part, name) {
@@ -307,8 +319,6 @@ func (tc *Typechecker) stmtEscapesParam(stmt Stmt, name string) bool {
 	case *ForStmt:
 		return tc.exprEscapesParam(s.Iter, name) || tc.stmtEscapesParam(s.Body, name)
 	case *ArenaStmt:
-		return tc.stmtEscapesParam(s.Body, name)
-	case *UnsafeStmt:
 		return tc.stmtEscapesParam(s.Body, name)
 	case *SpawnStmt:
 		return tc.exprEscapesParam(s.Call, name)

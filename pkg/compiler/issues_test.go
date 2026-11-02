@@ -90,7 +90,7 @@ func typecheckSource(t *testing.T, source string) error {
 // ----------------------------------------------------------------------------
 func TestIssue_OrElseOnOptional(t *testing.T) {
 	src := `fn main() {
-		let opt: i32? = null
+		let opt: i32? = none
 		let val = opt or_else 42
 		println(val)
 
@@ -434,7 +434,7 @@ func TestIssue_OptionAndResultPassthrough(t *testing.T) {
 	}
 
 	fn main() {
-		let mut a: i32? = null
+		let mut a: i32? = none
 		let b = get_opt()
 		a = b
 		println(a or_else 0)

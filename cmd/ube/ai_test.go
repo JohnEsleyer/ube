@@ -33,22 +33,6 @@ func TestAI_GuideCommand(t *testing.T) {
 	}
 }
 
-func TestAI_PrimerAlias(t *testing.T) {
-	tmpDir := t.TempDir()
-	outFile := filepath.Join(tmpDir, "primer.md")
-
-	if err := execute([]string{"primer", "-o=" + outFile}); err != nil {
-		t.Fatalf("execute primer failed: %v", err)
-	}
-	content, err := os.ReadFile(outFile)
-	if err != nil {
-		t.Fatalf("reading primer file: %v", err)
-	}
-	if !strings.Contains(string(content), "The Ube Programming Language") {
-		t.Errorf("primer does not look like the Ube guide")
-	}
-}
-
 func TestAI_ContextCommand(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcFile := filepath.Join(tmpDir, "sample.ube")

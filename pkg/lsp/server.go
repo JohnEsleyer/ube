@@ -49,7 +49,7 @@ var sendMu sync.Mutex
 
 // openDocs holds the latest text for every open file.
 var (
-	docsMu  sync.RWMutex
+	docsMu   sync.RWMutex
 	openDocs = map[string]string{}
 )
 
@@ -108,6 +108,9 @@ func Run() {
 					"definitionProvider":         true,
 					"documentSymbolProvider":     true,
 					"documentFormattingProvider": true,
+					"signatureHelpProvider": map[string]any{
+						"triggerCharacters": []string{"(", ","},
+					},
 				},
 			}
 		case "initialized":
@@ -179,6 +182,16 @@ func Run() {
 			src := openDocs[p.TextDocument.URI]
 			docsMu.RUnlock()
 			result = Hover(p.TextDocument.URI, src, p.Position)
+		case "textDocument/signatureHelp":
+			var p struct {
+				TextDocument textDoc     `json:"textDocument"`
+				Position     lspPosition `json:"position"`
+			}
+			_ = json.Unmarshal(m.Params, &p)
+			docsMu.RLock()
+			src := openDocs[p.TextDocument.URI]
+			docsMu.RUnlock()
+			result = SignatureHelp(src, p.Position)
 		case "textDocument/definition":
 			var p struct {
 				TextDocument textDoc     `json:"textDocument"`

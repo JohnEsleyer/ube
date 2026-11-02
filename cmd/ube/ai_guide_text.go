@@ -90,7 +90,7 @@ fn main() {
 
 - Slices: @@[]T@@ (dynamic, arena allocated)
 - Arrays: @@[N]T@@ (fixed size, value type)
-- Optionals: @@T?@@ (value or @@null@@)
+- Optionals: @@T?@@ (value or @@none@@)
 - Results: @@T ! E@@ (success value or error value)
 - Channels: @@Chan[T]@@
 - Pools: @@Pool[T]@@
@@ -244,14 +244,14 @@ fn fallback_port() -> i32 {
 }
 @@@
 
-Optionals are written @@T?@@ and use @@null@@:
+Optionals are written @@T?@@ and use @@none@@:
 
 @@@ube
 fn find_user(id: i32) -> string? {
     if id == 1 {
         return "Alice"
     }
-    return null
+    return none
 }
 
 fn main() {

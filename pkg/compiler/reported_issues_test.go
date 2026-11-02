@@ -109,16 +109,16 @@ func TestIssue_SliceSubExprOnSliceEmitsStringSlice(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// TEST 5: Untyped 'let x = null' is rejected by the typechecker.
+// TEST 5: Untyped 'let x = none' is rejected by the typechecker.
 // ----------------------------------------------------------------------------
 func TestIssue_UntypedNullLiteralFailsInC(t *testing.T) {
 	src := `fn main() {
-		let x = null
+		let x = none
 	}`
 
 	err := typecheckSource(t, src)
 	if err == nil {
-		t.Fatal("expected typechecker to reject untyped null initialization")
+		t.Fatal("expected typechecker to reject untyped none initialization")
 	}
 	if !strings.Contains(err.Error(), "requires a type annotation") {
 		t.Fatalf("expected diagnostic requiring type annotation, got: %v", err)
@@ -126,14 +126,14 @@ func TestIssue_UntypedNullLiteralFailsInC(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// TEST 6: Assigning a primitive value or null to an optional variable succeeds.
+// TEST 6: Assigning a primitive value or none to an optional variable succeeds.
 // ----------------------------------------------------------------------------
 func TestIssue_AssignValueToOptionalFailsInC(t *testing.T) {
 	src := `fn main() {
-		let mut opt: i32? = null
+		let mut opt: i32? = none
 		opt = 42
 		println(opt or_else 0)
-		opt = null
+		opt = none
 		println(opt or_else 99)
 	}`
 
@@ -236,7 +236,7 @@ func TestIssue_InvalidUnaryAndBinaryOperatorOperands(t *testing.T) {
 // ----------------------------------------------------------------------------
 func TestIssue_WhileLetDoesNotUnwrapOptional(t *testing.T) {
 	src := `fn get_next() -> i32? {
-		return null
+		return none
 	}
 
 	fn main() {

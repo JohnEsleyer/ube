@@ -174,8 +174,10 @@ func (v *flowVisitor) walkExpr(ex compiler.Expr) {
 		v.walkExpr(e.End)
 	case *compiler.TraitCoerceExpr:
 		v.walkExpr(e.Value)
-	case *compiler.ArrayToSliceExpr:
-		v.walkExpr(e.ArrayExpr)
+	case *compiler.TupleExpr:
+		for _, elem := range e.Elems {
+			v.walkExpr(elem)
+		}
 	}
 }
 

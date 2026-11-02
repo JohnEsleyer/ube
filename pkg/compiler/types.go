@@ -40,16 +40,6 @@ func (t StringBuilderType) IsFlat(env *TypeEnvironment) bool { return false }
 func (t StringBuilderType) Region() int                      { return t.Reg }
 func (t StringBuilderType) WithRegion(r int) UbeType         { return StringBuilderType{Reg: r} }
 
-type PointerType struct {
-	Base UbeType
-	Reg  int
-}
-
-func (t PointerType) String() string                   { return "*" + t.Base.String() }
-func (t PointerType) IsFlat(env *TypeEnvironment) bool { return false }
-func (t PointerType) Region() int                      { return t.Reg }
-func (t PointerType) WithRegion(r int) UbeType         { return PointerType{Base: t.Base, Reg: r} }
-
 type SliceType struct {
 	Elem UbeType
 	Reg  int
@@ -97,6 +87,36 @@ func (t ResultType) IsFlat(env *TypeEnvironment) bool {
 }
 func (t ResultType) Region() int              { return t.Reg }
 func (t ResultType) WithRegion(r int) UbeType { return ResultType{Ok: t.Ok, Err: t.Err, Reg: r} }
+
+type TupleType struct {
+	Elems []UbeType
+	Reg   int
+}
+
+func (t TupleType) String() string {
+	parts := make([]string, len(t.Elems))
+	for i, e := range t.Elems {
+		parts[i] = e.String()
+	}
+	return "(" + strings.Join(parts, ", ") + ")"
+}
+func (t TupleType) IsFlat(env *TypeEnvironment) bool {
+	seen := map[string]bool{}
+	for _, e := range t.Elems {
+		if !isFlatType(e, env, seen) {
+			return false
+		}
+	}
+	return true
+}
+func (t TupleType) Region() int { return t.Reg }
+func (t TupleType) WithRegion(r int) UbeType {
+	elems := make([]UbeType, len(t.Elems))
+	for i, e := range t.Elems {
+		elems[i] = e.WithRegion(r)
+	}
+	return TupleType{Elems: elems, Reg: r}
+}
 
 type ChanType struct {
 	Elem UbeType
@@ -215,6 +235,13 @@ func isFlatType(t UbeType, env *TypeEnvironment, seen map[string]bool) bool {
 		return isFlatType(v.Inner, env, seen)
 	case ResultType:
 		return isFlatType(v.Ok, env, seen) && isFlatType(v.Err, env, seen)
+	case TupleType:
+		for _, e := range v.Elems {
+			if !isFlatType(e, env, seen) {
+				return false
+			}
+		}
+		return true
 	case CustomType:
 		return v.isFlatSeen(env, seen)
 	default:

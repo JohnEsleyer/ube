@@ -5,12 +5,12 @@ struct Enemy{
 
 fn main(){
     // Initializes a generational pool with capacity for 64 entities
-    let mut pool = Pool[Enemy](64)
+    let mut pool = Pool[Enemy].new(64)
 
     // Allocate an entity into the pool
-    // alloc() returns a generational Handle[Enemy]
-    let h1 = pool.alloc(Enemy{id: 1, hp: 100})
-    let h2 = pool.alloc(Enemy{id: 2, hp: 250})
+    // spawn() returns a generational Handle[Enemy]
+    let h1 = pool.spawn(Enemy{id: 1, hp: 100})
+    let h2 = pool.spawn(Enemy{id: 2, hp: 250})
 
     // Access entities by unwrapping the optional (Enemy?)
     // Using `if let` (idiomatic)
@@ -27,11 +27,11 @@ fn main(){
     let e_val = pool.get(h2) or_else default_enemy
     println(e_val.id) // 2
 
-    // Linearly free a handle
-    // free() consumes the handle variable, invalidating it statically
-    pool.free(h1)
-    pool.free(h2)
+    // Linearly despawn a handle
+    // despawn() consumes the handle variable, invalidating it statically
+    pool.despawn(h1)
+    pool.despawn(h2)
 
-    // Calling pool.get(h1) or pool.free(h1) here is rejected
+    // Calling pool.get(h1) or pool.despawn(h1) here is rejected
     // at compile time: "use of moved variable 'h1'"
 }

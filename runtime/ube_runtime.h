@@ -823,8 +823,36 @@ static inline double ube_floor(double n) { return floor(n); }
 static inline double ube_ceil(double n) { return ceil(n); }
 static inline int64_t ube_time_now_ms(void) {
     struct timespec ts;
-    timespec_get(&ts, TIME_UTC);
-    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+#if defined(CLOCK_MONOTONIC)
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+        return ((int64_t)ts.tv_sec * 1000LL) + ((int64_t)ts.tv_nsec / 1000000LL);
+    }
+#elif defined(CLOCK_REALTIME)
+    if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
+        return ((int64_t)ts.tv_sec * 1000LL) + ((int64_t)ts.tv_nsec / 1000000LL);
+    }
+#endif
+    if (timespec_get(&ts, TIME_UTC) == TIME_UTC) {
+        return ((int64_t)ts.tv_sec * 1000LL) + ((int64_t)ts.tv_nsec / 1000000LL);
+    }
+    return (int64_t)time(NULL) * 1000LL;
+}
+
+static inline int64_t ube_time_now_ns(void) {
+    struct timespec ts;
+#if defined(CLOCK_MONOTONIC)
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+        return ((int64_t)ts.tv_sec * 1000000000LL) + (int64_t)ts.tv_nsec;
+    }
+#elif defined(CLOCK_REALTIME)
+    if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
+        return ((int64_t)ts.tv_sec * 1000000000LL) + (int64_t)ts.tv_nsec;
+    }
+#endif
+    if (timespec_get(&ts, TIME_UTC) == TIME_UTC) {
+        return ((int64_t)ts.tv_sec * 1000000000LL) + (int64_t)ts.tv_nsec;
+    }
+    return (int64_t)time(NULL) * 1000000000LL;
 }
 static inline void ube_sleep_ms(int32_t ms) { (void)ms; ube_run_pending(); }
 static inline void ube_exit_process(int32_t code) { exit(code); }

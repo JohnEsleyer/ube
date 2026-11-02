@@ -6,9 +6,17 @@ import (
 	"strings"
 )
 
+func (g *Generator) genMemberTarget(target Expr, path []string) string {
+	s := g.genExpr(target)
+	for _, field := range path {
+		s = fmt.Sprintf("(%s).%s", s, field)
+	}
+	return s
+}
+
 func isRValue(expr Expr) bool {
 	switch expr.(type) {
-	case *CallExpr, *ArrayInitExpr, *SliceInitExpr, *StructInitExpr, *BinaryExpr, *UnaryExpr, *TryExpr, *OrElseExpr, *InterpolatedStringExpr, *TraitCoerceExpr, *ArrayToSliceExpr, *ArenaExpr:
+	case *CallExpr, *ArrayInitExpr, *SliceInitExpr, *StructInitExpr, *BinaryExpr, *UnaryExpr, *TryExpr, *OrElseExpr, *InterpolatedStringExpr, *TraitCoerceExpr, *ArrayToSliceExpr, *TupleExpr, *ArenaExpr:
 		return true
 	}
 	return false
@@ -30,11 +38,20 @@ func (g *Generator) genExpr(expr Expr) string {
 		return fmt.Sprintf("({ %s* __b = (%s*)ube_bump_alloc(sizeof(%s)); *__b = %s; (%s){ .self = (void*)__b, .vtable = &%s }; })", concCT, concCT, concCT, val, e.Trait, vtable)
 
 	case *ArrayToSliceExpr:
-		m := g.sliceElemMangle(e.ElemType)
-		ct := g.toCType(e.ElemType)
-		val := g.genExpr(e.ArrayExpr)
-		return fmt.Sprintf("({ __auto_type _src_arr = %s; %s* _dst = (%s*)ube_bump_alloc(%d * sizeof(%s)); memcpy(_dst, _src_arr.data, %d * sizeof(%s)); (UbeSlice_%s){ .data = _dst, .len = %d, .cap = %d }; })",
-			val, ct, ct, e.Size, ct, e.Size, ct, m, e.Size, e.Size)
+		m := g.sliceElemMangle(e.ArrayType.Elem)
+		ct := g.toCType(e.ArrayType.Elem)
+		g.registerSlice(m, ct)
+		val := g.genExpr(e.Value)
+		return fmt.Sprintf("({ __auto_type _arr = %s; UbeSlice_%s _s = { .len = %d, .cap = %d, .data = (%s*)ube_bump_alloc(%d * sizeof(%s)) }; memcpy(_s.data, _arr.data, %d * sizeof(%s)); _s; })",
+			val, m, e.ArrayType.Size, e.ArrayType.Size, ct, e.ArrayType.Size, ct, e.ArrayType.Size, ct)
+
+	case *TupleExpr:
+		ct := g.toCType(TupleType{Elems: e.Types})
+		var inits []string
+		for i, elem := range e.Elems {
+			inits = append(inits, fmt.Sprintf("._%d = %s", i, g.genExpr(elem)))
+		}
+		return fmt.Sprintf("(%s){ %s }", ct, strings.Join(inits, ", "))
 
 	case *InterpolatedStringExpr:
 		sbTmp := g.newTmp()
@@ -46,9 +63,6 @@ func (g *Generator) genExpr(expr Expr) string {
 		}
 		stmts = append(stmts, fmt.Sprintf("ube_string_builder_to_str(&%s)", sbTmp))
 		return fmt.Sprintf("({ %s; })", strings.Join(stmts, "; "))
-
-	case *UnsafeExpr:
-		return fmt.Sprintf("({ __auto_type __ube_unsafe_value = %s; __ube_unsafe_value; })", g.genExpr(e.Value))
 
 	case *LiteralExpr:
 		if e.Type.String() == "string" {
@@ -104,14 +118,7 @@ func (g *Generator) genExpr(expr Expr) string {
 				return fmt.Sprintf("({ %s %s = {0}; (void)ube_raw_chan_recv(%s, &%s); %s; })", ct, tmp, g.genExpr(mem.Target), tmp, tmp)
 			}
 		}
-		if gen, ok := e.Callee.(*GenericTypeExpr); ok && len(e.Args) == 1 && (gen.BaseType == "Chan" || gen.BaseType == "Pool") {
-			if gen.BaseType == "Chan" {
-				return fmt.Sprintf("ube_raw_chan_new(%s, sizeof(%s))", g.genExpr(e.Args[0]), g.toCType(gen.ElemType))
-			}
-			m := mangleTypeName(gen.ElemType.String())
-			g.toCType(PoolType{Elem: gen.ElemType})
-			return fmt.Sprintf("Pool_%s_new(%s)", m, g.genExpr(e.Args[0]))
-		}
+
 		if id, ok := e.Callee.(*IdentExpr); ok && id.Name == "format" {
 			if len(e.Args) == 0 {
 				return `ube_str_lit("")`
@@ -166,7 +173,8 @@ func (g *Generator) genExpr(expr Expr) string {
 		}
 		if id, ok := e.Callee.(*IdentExpr); ok {
 			builtins := map[string]string{
-				"time_now_ms": "ube_time_now_ms", "sleep_ms": "ube_sleep_ms", "yield": "ube_yield",
+				"time_now_ms": "ube_time_now_ms", "time_now_ns": "ube_time_now_ns",
+				"sleep_ms": "ube_sleep_ms", "yield": "ube_yield",
 				"exit_process": "ube_exit_process", "int_to_str": "ube_int_to_str", "str_to_int": "ube_str_to_int",
 				"read_file": "ube_read_file", "write_file": "ube_write_file", "os_args": "ube_os_args",
 				"str_contains": "ube_str_contains", "str_starts_with": "ube_str_starts_with", "str_ends_with": "ube_str_ends_with",
@@ -210,6 +218,22 @@ func (g *Generator) genExpr(expr Expr) string {
 				}
 			}
 
+			if _, isStr := mem.TargetType.(StringType); isStr {
+				target := g.genExpr(mem.Target)
+				switch mem.Member {
+				case "trim":
+					return fmt.Sprintf("ube_str_trim(%s)", target)
+				case "starts_with":
+					return fmt.Sprintf("ube_str_starts_with(%s, %s)", target, g.genExpr(e.Args[0]))
+				case "ends_with":
+					return fmt.Sprintf("ube_str_ends_with(%s, %s)", target, g.genExpr(e.Args[0]))
+				case "index_of":
+					return fmt.Sprintf("ube_str_index_of(%s, %s)", target, g.genExpr(e.Args[0]))
+				case "split":
+					return fmt.Sprintf("ube_str_split(%s, %s)", target, g.genExpr(e.Args[0]))
+				}
+			}
+
 			if _, isTrait := mem.TargetType.(TraitType); isTrait {
 				var callArgs []string
 				targetExpr := g.genExpr(mem.Target)
@@ -242,7 +266,7 @@ func (g *Generator) genExpr(expr Expr) string {
 			}
 			if e.ReceiverType != nil {
 				fnName := fmt.Sprintf("%s_%s", e.ReceiverType.String(), mem.Member)
-				targetExpr := g.genExpr(mem.Target)
+				targetExpr := g.genMemberTarget(mem.Target, mem.EmbedPath)
 				if g.receiverMutParams[fnName] {
 					targetExpr = "&(" + targetExpr + ")"
 				}
@@ -314,7 +338,7 @@ func (g *Generator) genExpr(expr Expr) string {
 			if isTargetChan && mem.Member == "close" {
 				return fmt.Sprintf("ube_raw_chan_close(%s)", g.genExpr(mem.Target))
 			}
-			if (isTargetPool || e.PoolElem != nil) && (mem.Member == "spawn" || mem.Member == "alloc") {
+			if (isTargetPool || e.PoolElem != nil) && mem.Member == "spawn" {
 				pName := mangleTypeName(e.PoolElem.String())
 				return fmt.Sprintf("Pool_%s_spawn(%s, %s)", pName, g.genExpr(mem.Target), g.genExpr(e.Args[0]))
 			}
@@ -322,7 +346,7 @@ func (g *Generator) genExpr(expr Expr) string {
 				pName := mangleTypeName(e.PoolElem.String())
 				return fmt.Sprintf("Pool_%s_get(%s, %s)", pName, g.genExpr(mem.Target), g.genExpr(e.Args[0]))
 			}
-			if (isTargetPool || e.PoolElem != nil) && (mem.Member == "despawn" || mem.Member == "free") {
+			if (isTargetPool || e.PoolElem != nil) && mem.Member == "despawn" {
 				pName := mangleTypeName(e.PoolElem.String())
 				return fmt.Sprintf("Pool_%s_despawn(%s, %s)", pName, g.genExpr(mem.Target), g.genExpr(e.Args[0]))
 			}
@@ -364,7 +388,7 @@ func (g *Generator) genExpr(expr Expr) string {
 				return fmt.Sprintf("((int32_t)(%s).cap)", g.genExpr(e.Target))
 			}
 		}
-		return fmt.Sprintf("(%s).%s", g.genExpr(e.Target), e.Member)
+		return fmt.Sprintf("(%s).%s", g.genMemberTarget(e.Target, e.EmbedPath), e.Member)
 
 	case *IndexExpr:
 		file := strconv.Quote(e.At.File)

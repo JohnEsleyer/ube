@@ -22,10 +22,19 @@ func (g *Generator) typeNeedsDeepPromoteSeen(t UbeType, seen map[string]bool) bo
 		return false
 	}
 	switch v := t.(type) {
-	case SliceType, StringType, PointerType:
+	case SliceType, StringType:
 		return true
+	case TupleType:
+		for _, elem := range v.Elems {
+			if g.typeNeedsDeepPromoteSeen(elem, seen) {
+				return true
+			}
+		}
+		return false
 	case OptionalType:
 		return g.typeNeedsDeepPromoteSeen(v.Inner, seen)
+	case ResultType:
+		return g.typeNeedsDeepPromoteSeen(v.Ok, seen) || g.typeNeedsDeepPromoteSeen(v.Err, seen)
 	case ArrayType:
 		return g.typeNeedsDeepPromoteSeen(v.Elem, seen)
 	case CustomType:
@@ -74,13 +83,6 @@ func (g *Generator) genPromoteValue(t UbeType, valCode string) string {
 	case StringType:
 		return fmt.Sprintf("ube_str_promote(%s)", valCode)
 
-	case PointerType:
-		ct := g.toCType(v.Base)
-		src := g.newTmp()
-		dst := g.newTmp()
-		return fmt.Sprintf("({ %s* %s = %s; %s* %s = (%s*)ube_bump_alloc_parent(sizeof(%s)); if (%s) { *%s = *%s; } %s; })",
-			ct, src, valCode, ct, dst, ct, ct, src, dst, src, dst)
-
 	case CustomType:
 		sDecl := g.findStruct(v.Name)
 		if sDecl == nil {
@@ -108,6 +110,17 @@ func (g *Generator) genPromoteValue(t UbeType, valCode string) string {
 			promotedVal := g.genPromoteValue(v.Inner, fmt.Sprintf("%s.val", opt))
 			return fmt.Sprintf("({ %s %s = %s; if (%s.has_val) { %s.val = %s; } %s; })",
 				optCT, opt, valCode, opt, opt, promotedVal, opt)
+		}
+		return valCode
+
+	case ResultType:
+		if g.typeNeedsDeepPromote(v.Ok) || g.typeNeedsDeepPromote(v.Err) {
+			resCT := g.toCType(v)
+			res := g.newTmp()
+			promotedOk := g.genPromoteValue(v.Ok, fmt.Sprintf("%s.val", res))
+			promotedErr := g.genPromoteValue(v.Err, fmt.Sprintf("%s.err", res))
+			return fmt.Sprintf("({ %s %s = %s; if (%s.ok) { %s.val = %s; } else { %s.err = %s; } %s; })",
+				resCT, res, valCode, res, res, promotedOk, res, promotedErr, res)
 		}
 		return valCode
 

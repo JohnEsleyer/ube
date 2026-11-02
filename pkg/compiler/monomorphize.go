@@ -177,12 +177,16 @@ func (m *Monomorphizer) Process(prog *Program) error {
 					return nil, err
 				}
 				return PoolType{Elem: el}, nil
-			case PointerType:
-				base, err := scanType(v.Base)
-				if err != nil {
-					return nil, err
+			case TupleType:
+				elems := make([]UbeType, len(v.Elems))
+				for i, elem := range v.Elems {
+					ct, err := scanType(elem)
+					if err != nil {
+						return nil, err
+					}
+					elems[i] = ct
 				}
-				return PointerType{Base: base}, nil
+				return TupleType{Elems: elems}, nil
 			}
 			return t, nil
 		}
@@ -291,12 +295,18 @@ func (m *Monomorphizer) Process(prog *Program) error {
 				e.Concrete = ct
 				return scanExpr(e.Value)
 			case *ArrayToSliceExpr:
-				ct, err := scanType(e.ElemType)
+				at, err := scanType(e.ArrayType)
 				if err != nil {
 					return err
 				}
-				e.ElemType = ct
-				return scanExpr(e.ArrayExpr)
+				e.ArrayType = at.(ArrayType)
+				return scanExpr(e.Value)
+			case *TupleExpr:
+				for _, elem := range e.Elems {
+					if err := scanExpr(elem); err != nil {
+						return err
+					}
+				}
 			case *GenericTypeExpr:
 				elem, err := scanType(e.ElemType)
 				if err != nil {
@@ -312,8 +322,6 @@ func (m *Monomorphizer) Process(prog *Program) error {
 				return scanExpr(e.Operand)
 			case *ErrorExpr:
 				return scanExpr(e.Arg)
-			case *UnsafeExpr:
-				return scanExpr(e.Value)
 			}
 			return nil
 		}
@@ -387,8 +395,6 @@ func (m *Monomorphizer) Process(prog *Program) error {
 				}
 				return scanStmt(s.Body)
 			case *ArenaStmt:
-				return scanStmt(s.Body)
-			case *UnsafeStmt:
 				return scanStmt(s.Body)
 			case *SpawnStmt:
 				return scanExpr(s.Call)
@@ -534,6 +540,19 @@ func (m *Monomorphizer) specializeStruct(base string, args []UbeType, pending *[
 	if len(tmpl.TypeParams) != len(args) {
 		return "", false, fmt.Errorf("generic struct '%s' expects %d type arguments, got %d", base, len(tmpl.TypeParams), len(args))
 	}
+	for i, p := range tmpl.TypeParams {
+		if p.Constraint == "" {
+			continue
+		}
+		for _, tr := range strings.Split(p.Constraint, "+") {
+			tr = strings.TrimSpace(tr)
+			if tr != "" {
+				if err := m.checkTraitConstraint(args[i], tr, tmpl.At); err != nil {
+					return "", false, err
+				}
+			}
+		}
+	}
 
 	specName := specializeName(base, args)
 	if m.instantiated[specName] {
@@ -584,8 +603,13 @@ func (m *Monomorphizer) specializeFunc(name string, args []UbeType, pending *[]D
 
 	for i, p := range tmpl.TypeParams {
 		if p.Constraint != "" {
-			if err := m.checkTraitConstraint(args[i], p.Constraint, tmpl.At); err != nil {
-				return "", false, err
+			for _, tr := range strings.Split(p.Constraint, "+") {
+				tr = strings.TrimSpace(tr)
+				if tr != "" {
+					if err := m.checkTraitConstraint(args[i], tr, tmpl.At); err != nil {
+						return "", false, err
+					}
+				}
 			}
 		}
 	}
