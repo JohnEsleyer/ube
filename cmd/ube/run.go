@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/JohnEsleyer/ube/pkg/compiler"
 	"github.com/bytecodealliance/wasmtime-go/v29"
 )
 
@@ -28,9 +29,21 @@ func run(args []string) error {
 	defer os.Remove(wasmPath)
 	defer os.Remove(base)
 
-	wasmOutput, err := compileWasm(ast, cPath, wasmPath, false)
-	if err != nil {
-		return err
+	var wasmOutput bool
+	// Try direct in-memory Wasm bytecode emission first (sub-millisecond compile)
+	if wasmBytes, emitErr := compiler.EmitWasm(ast); emitErr == nil {
+		if writeErr := os.WriteFile(wasmPath, wasmBytes, 0755); writeErr == nil {
+			wasmOutput = true
+		}
+	}
+
+	// Fallback to C compilation pipeline if direct wasm hit unsupported constructs
+	if !wasmOutput {
+		var err error
+		wasmOutput, err = compileWasm(ast, cPath, wasmPath, false)
+		if err != nil {
+			return err
+		}
 	}
 
 	label := "✓ Compiled Wasm"

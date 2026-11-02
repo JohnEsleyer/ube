@@ -13,7 +13,7 @@ import (
 )
 
 func build(args []string) error {
-	file, output, emitC, html, err := parseBuildArgs(args)
+	file, output, backend, emitC, html, err := parseBuildArgs(args)
 	if err != nil {
 		return err
 	}
@@ -31,6 +31,19 @@ func build(args []string) error {
 		return err
 	}
 
+	// 1. Direct WebAssembly Binary Emission (Instant, Zero C SDK dependency)
+	if backend != "c" && !html && !emitC {
+		if wasmBytes, emitErr := compiler.EmitWasm(ast); emitErr == nil {
+			if writeErr := os.WriteFile(output, wasmBytes, 0755); writeErr == nil {
+				label := "✓ Built Wasm module (direct)"
+				fmt.Printf("%s %s (%s)\n", paint(label, colorGreen), output, paint(time.Since(start).Round(time.Millisecond).String(), colorDim))
+				printPurity(report)
+				return nil
+			}
+		}
+	}
+
+	// 2. Fallback to C compilation pipeline (for HTML or complex runtime features)
 	cPath := filepath.Join(os.TempDir(), fmt.Sprintf("ube-%d.c", time.Now().UnixNano()))
 	if emitC {
 		cPath = strings.TrimSuffix(output, filepath.Ext(output)) + ".c"
@@ -54,39 +67,45 @@ func build(args []string) error {
 	return nil
 }
 
-func parseBuildArgs(args []string) (string, string, bool, bool, error) {
+func parseBuildArgs(args []string) (string, string, string, bool, bool, error) {
 	if len(args) == 0 {
-		return "", "", false, false, fmt.Errorf("usage: ube build <file.ube> [-o app.wasm] [--html] [--emit-c]")
+		return "", "", "", false, false, fmt.Errorf("usage: ube build <file.ube> [-o app.wasm] [--backend=wasm|c] [--html] [--emit-c]")
 	}
-	file, output, emitC, html := "", "", false, false
+	file, output, backend, emitC, html := "", "", "wasm", false, false
 	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "-o":
+		switch {
+		case args[i] == "-o":
 			if i+1 >= len(args) {
-				return "", "", false, false, fmt.Errorf("-o requires an output path")
+				return "", "", "", false, false, fmt.Errorf("-o requires an output path")
 			}
 			output = args[i+1]
 			i++
-		case "--emit-c":
+		case args[i] == "--emit-c":
 			emitC = true
-		case "--html":
+		case args[i] == "--html":
 			html = true
-		case "--wasm":
-			// Wasm is the default target; accepted as an explicit alias.
+		case args[i] == "--wasm":
+			backend = "wasm"
+		case args[i] == "--backend=wasm" || (args[i] == "--backend" && i+1 < len(args) && args[i+1] == "wasm"):
+			backend = "wasm"
+			if args[i] == "--backend" { i++ }
+		case args[i] == "--backend=c" || (args[i] == "--backend" && i+1 < len(args) && args[i+1] == "c"):
+			backend = "c"
+			if args[i] == "--backend" { i++ }
 		default:
 			if strings.HasPrefix(args[i], "-") {
-				return "", "", false, false, fmt.Errorf("unknown build option %s", args[i])
+				return "", "", "", false, false, fmt.Errorf("unknown build option %s", args[i])
 			}
 			if file != "" {
-				return "", "", false, false, fmt.Errorf("multiple source files are not supported")
+				return "", "", "", false, false, fmt.Errorf("multiple source files are not supported")
 			}
 			file = args[i]
 		}
 	}
 	if file == "" {
-		return "", "", false, false, fmt.Errorf("specify a .ube source file")
+		return "", "", "", false, false, fmt.Errorf("specify a .ube source file")
 	}
-	return file, output, emitC, html, nil
+	return file, output, backend, emitC, html, nil
 }
 
 // compileWasm emits a WebAssembly module by default. HTML output is delegated to

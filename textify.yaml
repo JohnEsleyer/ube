@@ -68,3 +68,12 @@ dirs:
         extensions:
           - md
           - txt
+    site:
+        enabled: true
+        extensions:
+          - html
+          - js
+          - css
+    site/node_modules:
+        enabled: false
+        extensions:

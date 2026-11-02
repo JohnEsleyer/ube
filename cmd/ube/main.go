@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const version = "0.7.3"
+const version = "0.8.0"
 
 const (
 	colorReset  = "\x1b[0m"
