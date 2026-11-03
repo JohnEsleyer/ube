@@ -29,3 +29,16 @@ The command writes `editors/vscode/ube-<version>.vsix`, using the extension vers
   1. Open the Extensions view (`Ctrl+Shift+X` or `Cmd+Shift+X`).
   2. Click the `...` menu in the upper corner of the Extensions pane.
   3. Select **Install from VSIX...** and choose `editors/vscode/ube-<version>.vsix`.
+
+## Direct Local Install
+
+Copy the extension directly into your VS Code extensions folder (installs instantly without needing any build tools):
+
+```sh
+# Standard VS Code
+mkdir -p ~/.vscode/extensions/ube-lang
+cp -r * ~/.vscode/extensions/ube-lang/
+
+# Snap VS Code (if installed via Snap on Ubuntu/Pop!_OS)
+mkdir -p ~/snap/code/current/.vscode/extensions/ube-lang 2>/dev/null || true
+cp -r * ~/snap/code/current/.vscode/extensions/ube-lang/ 2>/dev/null || true

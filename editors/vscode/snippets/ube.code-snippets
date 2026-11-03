@@ -3,73 +3,122 @@
     "prefix": "main",
     "body": [
       "fn main() {",
-      "\t${1:println(\"Kamusta, Ube! 🍠\")}",
+      "\t$0",
       "}"
     ],
-    "description": "Standard main entry point"
+    "description": "Program entry point"
   },
   "Function": {
     "prefix": "fn",
     "body": [
-      "fn ${1:name}(${2:params}) -> ${3:i32} {",
-      "\t${0}",
+      "fn ${1:name}(${2:params}) ${3:-> ${4:i32} }{",
+      "\t$0",
       "}"
     ],
-    "description": "Standard function"
+    "description": "Function definition"
   },
-  "Receiver Method": {
+  "Method (Receiver)": {
     "prefix": "fnrecv",
     "body": [
-      "fn (${1:self} ${2:Type}) ${3:method_name}(${4:params}) -> ${5:void} {",
-      "\t${0}",
+      "fn (${1:mut }${2:self}: ${3:Type}) ${4:name}(${5:params}) ${6:-> ${7:void} }{",
+      "\t$0",
       "}"
     ],
-    "description": "Go-style struct receiver method"
+    "description": "Receiver method definition"
   },
   "Struct": {
     "prefix": "struct",
     "body": [
       "struct ${1:Name} {",
-      "\t${2:field}: ${3:i32},",
+      "\t${2:field}: ${3:i32}",
       "}"
     ],
-    "description": "Struct declaration"
+    "description": "Struct definition"
   },
-  "Tagged Enum": {
+  "Enum": {
     "prefix": "enum",
     "body": [
       "enum ${1:Name} {",
-      "\t${2:Variant}(${3:i32}),",
-      "\t${4:Other}",
+      "\t${2:Variant}",
       "}"
     ],
-    "description": "Tagged union / sum type"
+    "description": "Tagged enum definition"
   },
-  "Pattern Match": {
+  "Match": {
     "prefix": "match",
     "body": [
-      "match ${1:variable} {",
-      "\t${2:Variant}(${3:x}) => {",
-      "\t\t${0}",
-      "\t},",
+      "match ${1:expr} {",
+      "\t${2:Variant} => ${3:println(\"matched\")},",
+      "\t$0",
       "}"
     ],
-    "description": "Pattern matching on enums"
+    "description": "Pattern match statement"
   },
-  "Arena Scratchpad": {
+  "Regional Arena": {
     "prefix": "arena",
     "body": [
       "arena {",
-      "\t${0}",
-      "} // Wiped in 1 instruction!"
+      "\t$0",
+      "}"
     ],
-    "description": "Regional memory arena reset block"
+    "description": "Scratch bump arena block"
   },
-  "Spawn Vine": {
+  "Promote": {
+    "prefix": "promote",
+    "body": [
+      "promote(${1:value})"
+    ],
+    "description": "Promote allocation to parent region"
+  },
+  "Spawn Task": {
     "prefix": "spawn",
     "body": [
-      "spawn ${1:vine_function}(${2:channel})"
+      "spawn ${1:worker}(${2:ch});"
     ],
-    "description": "Spawn a concurrent task"
+    "description": "Spawn background task"
+  },
+  "Channel Init": {
+    "prefix": "chan",
+    "body": [
+      "let ${1:ch} = Chan[${2:i32}].new(${3:8})"
+    ],
+    "description": "Create typed channel"
+  },
+  "Entity Pool": {
+    "prefix": "pool",
+    "body": [
+      "let mut ${1:pool} = Pool[${2:Entity}].new(${3:64})"
+    ],
+    "description": "Create generational entity pool"
+  },
+  "Select": {
+    "prefix": "select",
+    "body": [
+      "select {",
+      "\t${1:msg} = ${2:ch} => {",
+      "\t\t$0",
+      "\t},",
+      "\tdefault => {}",
+      "}"
+    ],
+    "description": "Select channel multiplexing"
+  },
+  "If Let": {
+    "prefix": "iflet",
+    "body": [
+      "if let ${1:val} = ${2:expr} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Unwrap optional or result"
+  },
+  "While Let": {
+    "prefix": "whilelet",
+    "body": [
+      "while let ${1:item} = ${2:ch}.recv() {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Iterate optional/channel stream"
   }
 }

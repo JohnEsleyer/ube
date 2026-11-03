@@ -3,30 +3,19 @@
   "name": "Ube",
   "scopeName": "source.ube",
   "patterns": [
-    {
-      "include": "#comments"
-    },
-    {
-      "include": "#strings"
-    },
-    {
-      "include": "#constants"
-    },
-    {
-      "include": "#keywords"
-    },
-    {
-      "include": "#types"
-    },
-    {
-      "include": "#constants"
-    },
-    {
-      "include": "#functions"
-    },
-    {
-      "include": "#operators"
-    }
+    { "include": "#comments" },
+    { "include": "#raw_strings" },
+    { "include": "#format_strings" },
+    { "include": "#strings" },
+    { "include": "#keywords" },
+    { "include": "#constants" },
+    { "include": "#builtin_types" },
+    { "include": "#generic_types" },
+    { "include": "#builtin_functions" },
+    { "include": "#function_declaration" },
+    { "include": "#numbers" },
+    { "include": "#operators" },
+    { "include": "#delimiters" }
   ],
   "repository": {
     "comments": {
@@ -42,18 +31,38 @@
         }
       ]
     },
-    "strings": {
+    "raw_strings": {
+      "name": "string.quoted.raw.ube",
+      "begin": "`",
+      "end": "`"
+    },
+    "format_strings": {
+      "name": "string.quoted.format.ube",
+      "begin": "f\"",
+      "end": "\"",
       "patterns": [
         {
-          "name": "string.quoted.double.ube",
-          "begin": "\"",
-          "end": "\"",
+          "name": "constant.character.escape.ube",
+          "match": "\\\\."
+        },
+        {
+          "name": "meta.embedded.interpolation.ube",
+          "begin": "\\{",
+          "end": "\\}",
           "patterns": [
-            {
-              "name": "constant.character.escape.ube",
-              "match": "\\\\."
-            }
+            { "include": "source.ube" }
           ]
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.ube",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.ube",
+          "match": "\\\\([nrt\\\\\"0]|x[0-9a-fA-F]{2})"
         }
       ]
     },
@@ -61,27 +70,15 @@
       "patterns": [
         {
           "name": "keyword.control.ube",
-          "match": "\\b(if|else|while|for|in|return|break|continue|match|select|spawn|arena|defer|or_else)\\b"
+          "match": "\\b(if|else|while|for|in|match|return|break|continue|select|spawn|defer)\\b"
+        },
+        {
+          "name": "keyword.declaration.ube",
+          "match": "\\b(let|mut|fn|struct|enum|trait|extern|import)\\b"
         },
         {
           "name": "keyword.other.ube",
-          "match": "\\b(let|mut|fn|struct|enum|trait|extern|import)\\b"
-        }
-      ]
-    },
-    "types": {
-      "patterns": [
-        {
-          "name": "support.type.primitive.ube",
-          "match": "\\b(i32|u32|i64|u64|u8|f32|f64|bool|string|void)\\b"
-        },
-        {
-          "name": "support.type.collection.ube",
-          "match": "\\b(Chan|Pool|UbeHandle|StringBuilder)\\b"
-        },
-        {
-          "name": "entity.name.type.ube",
-          "match": "\\b[A-Z][a-zA-Z0-9_]*\\b"
+          "match": "\\b(pub|arena|promote|or_else)\\b"
         }
       ]
     },
@@ -90,42 +87,63 @@
         {
           "name": "constant.language.ube",
           "match": "\\b(true|false|none)\\b"
+        }
+      ]
+    },
+    "builtin_types": {
+      "patterns": [
+        {
+          "name": "entity.name.type.primitive.ube",
+          "match": "\\b(i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|bool|string|StringBuilder|void)\\b"
+        }
+      ]
+    },
+    "generic_types": {
+      "patterns": [
+        {
+          "name": "entity.name.type.class.ube",
+          "match": "\\b(Chan|Pool|Handle|Option|Result)\\b"
+        }
+      ]
+    },
+    "builtin_functions": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.ube",
+          "match": "\\b(print|println|eprint|eprintln|promote|panic|assert|clock_ms|clock_ns|env_get)\\b"
+        }
+      ]
+    },
+    "function_declaration": {
+      "patterns": [
+        {
+          "match": "\\b(fn)\\s+(?:\\((?:mut\\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\)\\s+)?([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.ube" },
+            "2": { "name": "variable.parameter.receiver.ube" },
+            "3": { "name": "entity.name.type.ube" },
+            "4": { "name": "entity.name.function.ube" }
+          }
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.ube",
+          "match": "\\b0x[0-9a-fA-F]+\\b"
+        },
+        {
+          "name": "constant.numeric.bin.ube",
+          "match": "\\b0b[01]+\\b"
         },
         {
           "name": "constant.numeric.float.ube",
           "match": "\\b[0-9]+\\.[0-9]+([eE][+-]?[0-9]+)?\\b"
         },
         {
-          "name": "constant.numeric.integer.hexadecimal.ube",
-          "match": "\\b0x[0-9a-fA-F]+\\b"
-        },
-        {
-          "name": "constant.numeric.integer.binary.ube",
-          "match": "\\b0b[01]+\\b"
-        },
-        {
-          "name": "constant.numeric.integer.ube",
+          "name": "constant.numeric.decimal.ube",
           "match": "\\b[0-9]+\\b"
-        }
-      ]
-    },
-    "functions": {
-      "patterns": [
-        {
-          "match": "\\bfn\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\b",
-          "captures": {
-            "1": {
-              "name": "entity.name.function.ube"
-            }
-          }
-        },
-        {
-          "match": "\\bfn\\s*\\(.*?\\)\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\b",
-          "captures": {
-            "1": {
-              "name": "entity.name.function.receiver.ube"
-            }
-          }
         }
       ]
     },
@@ -133,7 +151,19 @@
       "patterns": [
         {
           "name": "keyword.operator.ube",
-          "match": "(\\?|!|->|=>|\\+|-|\\*|/|==|!=|<=|>=|<|>|=|&)"
+          "match": "->|=>|\\.\\.|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|<<=|>>=|==|!=|<=|>=|<<|>>|&&|\\|\\||\\+|-|\\*|/|%|&|\\||\\^|~|=|!|\\?|<|>"
+        }
+      ]
+    },
+    "delimiters": {
+      "patterns": [
+        {
+          "name": "punctuation.separator.ube",
+          "match": "[,:;]"
+        },
+        {
+          "name": "punctuation.accessor.ube",
+          "match": "\\."
         }
       ]
     }

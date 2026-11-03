@@ -1,25 +1,31 @@
 {
   "name": "ube",
-  "displayName": "Ube Language",
-  "description": "Syntax highlighting, language configuration, and snippets for the Ube programming language 🍠",
-  "version": "0.6.0",
-  "publisher": "ube-lang",
+  "displayName": "Ube Language Support",
+  "description": "Official VS Code extension for Ube: syntax highlighting, snippets, formatting, and language server.",
+  "version": "0.8.2",
+  "publisher": "johnesleyer",
+  "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ube-lang/ube"
+    "url": "https://github.com/JohnEsleyer/ube"
   },
-  "icon": "icon.png",
-  "main": "./client/out/extension.js",
-  "activationEvents": ["onLanguage:ube"],
   "engines": {
-    "vscode": "^1.70.0"
+    "vscode": "^1.75.0"
   },
   "categories": [
     "Programming Languages",
-    "Snippets"
+    "Snippets",
+    "Linters",
+    "Formatters"
+  ],
+  "keywords": [
+    "ube",
+    "webassembly",
+    "wasm",
+    "zero-gc",
+    "arena"
   ],
   "contributes": {
-    "configuration": {"title":"Ube","properties":{"ube.serverPath":{"type":"string","default":"ubec","description":"Path to the ubec compiler executable"}}},
     "languages": [
       {
         "id": "ube",
@@ -52,13 +58,73 @@
     ],
     "iconThemes": [
       {
-        "id": "ube-file-icons",
-        "label": "Ube",
+        "id": "ube-icons",
+        "label": "Ube File Icons",
         "path": "./icons/ube-icon-theme.json"
       }
-    ]
+    ],
+    "commands": [
+      {
+        "command": "ube.restartServer",
+        "title": "Ube: Restart Language Server",
+        "category": "Ube"
+      },
+      {
+        "command": "ube.runFile",
+        "title": "Ube: Run Current File (ube run)",
+        "category": "Ube"
+      },
+      {
+        "command": "ube.checkFile",
+        "title": "Ube: Check Safety & Types (ube check)",
+        "category": "Ube"
+      },
+      {
+        "command": "ube.formatFile",
+        "title": "Ube: Format Document (ube fmt)",
+        "category": "Ube"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Ube Configuration",
+      "properties": {
+        "ube.compilerPath": {
+          "type": "string",
+          "default": "ube",
+          "description": "Path to the ube compiler executable."
+        },
+        "ube.lsp.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Language Server Protocol integration via 'ube lsp'."
+        },
+        "ube.lsp.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the Ube language server."
+        }
+      }
+    }
   },
-  "scripts": {"vscode:prepublish":"npm run compile","compile":"tsc -b client","watch":"tsc -b client -w"},
-  "dependencies": {"vscode-languageclient":"^9.0.1"},
-  "devDependencies": {"@types/node":"^18.19.0","@types/vscode":"^1.70.0","typescript":"^5.0.0"}
+  "scripts": {
+    "compile": "npx esbuild src/extension.ts --bundle --outfile=extension.js --external:vscode --format=cjs --platform=node",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.75.0",
+    "@vscode/vsce": "^2.24.0",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^8.1.0"
+  },
+  "icon": "icons/ube.png"
 }

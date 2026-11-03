@@ -3,6 +3,7 @@ enum Event {
     Stop
 }
 
+
 fn parse_number(code: i32) -> i32 ! string {
     if code == 0 {
         return error("invalid zero code")
