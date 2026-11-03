@@ -34,6 +34,8 @@ func (g *Generator) genDecl(decl Decl) {
 				g.sliceParamVars[d.Receiver.Name] = true
 			}
 			params = append(params, fmt.Sprintf("%s %s", recCT, d.Receiver.Name))
+		} else {
+			fnName = cFuncName(fnName)
 		}
 		mutName := d.Name
 		if d.Receiver != nil {
@@ -467,7 +469,7 @@ func (g *Generator) genStmt(st Stmt) {
 		invalidSpawn := false
 		switch callee := s.Call.Callee.(type) {
 		case *IdentExpr:
-			calleeName = callee.Name
+			calleeName = cFuncName(callee.Name)
 		case *MemberExpr:
 			if s.Call.ReceiverType == nil {
 				invalidSpawn = true

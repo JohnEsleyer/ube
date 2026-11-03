@@ -6,40 +6,41 @@ import (
 )
 
 type Generator struct {
-	Program         *Program
-	slices          map[string]string
-	options         map[string]string
-	results         map[string]string
-	pools           map[string]string
-	arrays          map[string]string
-	tuples          map[string][]string
-	sliceKeys       []string
-	optionKeys      []string
-	resultKeys      []string
-	poolKeys        []string
-	arrayKeys       []string
-	tupleKeys       []string
-	sliceVars       map[string]string
-	includes        []string
-	buf             strings.Builder
-	indent          int
-	curFnRet        UbeType
-	curFnName       string
-	tmpCounter      int
-	deferScopes     [][]string
-	scopeMarks      []string
-	loopDeferDepth  []int
-	loopScopeDepth  []int
-	sliceParamVars  map[string]bool
+	Program           *Program
+	slices            map[string]string
+	options           map[string]string
+	results           map[string]string
+	pools             map[string]string
+	arrays            map[string]string
+	tuples            map[string][]string
+	sliceKeys         []string
+	optionKeys        []string
+	resultKeys        []string
+	poolKeys          []string
+	arrayKeys         []string
+	tupleKeys         []string
+	sliceVars         map[string]string
+	includes          []string
+	buf               strings.Builder
+	indent            int
+	curFnRet          UbeType
+	curFnName         string
+	tmpCounter        int
+	deferScopes       [][]string
+	scopeMarks        []string
+	loopDeferDepth    []int
+	loopScopeDepth    []int
+	sliceParamVars    map[string]bool
 	sliceMutParams    map[string]map[int]bool
 	receiverMutParams map[string]bool
 	loopLabels        []loopLabel
-	loopSelectDepth []int
-	selectGroups    []string
-	spawnWrappers   []string
-	traitDecls      map[string]*TraitDecl
-	traitVtables    map[string]traitVtableInfo
-	traitVtableKeys []string
+	loopSelectDepth   []int
+	selectGroups      []string
+	spawnWrappers     []string
+	traitDecls        map[string]*TraitDecl
+	traitVtables      map[string]traitVtableInfo
+	traitVtableKeys   []string
+	userFuncs         map[string]bool
 }
 
 type traitVtableInfo struct {
@@ -51,24 +52,30 @@ type loopLabel struct{ breakTo, continueTo string }
 
 func NewGenerator(prog *Program) *Generator {
 	g := &Generator{
-		Program:        prog,
-		slices:         make(map[string]string),
-		options:        make(map[string]string),
-		results:        make(map[string]string),
-		pools:          make(map[string]string),
-		arrays:         make(map[string]string),
-		tuples:         make(map[string][]string),
-		sliceVars:      make(map[string]string),
-		sliceParamVars: make(map[string]bool),
+		Program:           prog,
+		slices:            make(map[string]string),
+		options:           make(map[string]string),
+		results:           make(map[string]string),
+		pools:             make(map[string]string),
+		arrays:            make(map[string]string),
+		tuples:            make(map[string][]string),
+		sliceVars:         make(map[string]string),
+		sliceParamVars:    make(map[string]bool),
 		sliceMutParams:    make(map[string]map[int]bool),
 		receiverMutParams: make(map[string]bool),
 		traitDecls:        make(map[string]*TraitDecl),
-		traitVtables:   make(map[string]traitVtableInfo),
+		traitVtables:      make(map[string]traitVtableInfo),
+		userFuncs:         make(map[string]bool),
 	}
 	if prog != nil {
 		for _, decl := range prog.Decls {
-			if tr, ok := decl.(*TraitDecl); ok {
-				g.traitDecls[tr.Name] = tr
+			switch d := decl.(type) {
+			case *TraitDecl:
+				g.traitDecls[d.Name] = d
+			case *FnDecl:
+				if d.Receiver == nil {
+					g.userFuncs[d.Name] = true
+				}
 			}
 		}
 	}
@@ -129,6 +136,24 @@ func (g *Generator) registerTraitVtable(trait string, concrete UbeType) string {
 		g.traitVtableKeys = append(g.traitVtableKeys, key)
 	}
 	return key + "_vtable"
+}
+
+// cRuntimeFunctionNames lists names that already exist in the C standard
+// library or the Ube runtime. User functions with these names are emitted
+// under a `ube_user_` prefix so generated C can be compiled with math.h and
+// friends without conflicting prototypes.
+var cRuntimeFunctionNames = map[string]bool{
+	"abs": true, "ceil": true, "cos": true, "exp": true,
+	"fabs": true, "floor": true, "fmod": true, "log": true,
+	"pow": true, "round": true, "sin": true, "sqrt": true,
+	"tan": true, "trunc": true,
+}
+
+func cFuncName(name string) string {
+	if cRuntimeFunctionNames[name] {
+		return "ube_user_" + name
+	}
+	return name
 }
 
 func mangleTypeName(s string) string {
@@ -481,6 +506,8 @@ func (g *Generator) Generate() string {
 					g.receiverMutParams[name] = true
 				}
 				params = append(params, recCT)
+			} else {
+				name = cFuncName(name)
 			}
 			mutName := name
 			for i, p := range fn.Params {

@@ -186,7 +186,7 @@ func (g *Generator) genExpr(expr Expr) string {
 				"abs": "ube_abs", "min": "ube_min", "max": "ube_max",
 				"sqrt": "ube_sqrt", "pow": "ube_pow", "floor": "ube_floor", "ceil": "ube_ceil",
 			}
-			if fn, ok := builtins[id.Name]; ok {
+			if fn, ok := builtins[id.Name]; ok && !g.userFuncs[id.Name] {
 				args := make([]string, len(e.Args))
 				for i, arg := range e.Args {
 					args[i] = g.genExpr(arg)
@@ -353,8 +353,10 @@ func (g *Generator) genExpr(expr Expr) string {
 		}
 		var args []string
 		calleeName := ""
+		calleeCode := ""
 		if id, ok := e.Callee.(*IdentExpr); ok {
 			calleeName = id.Name
+			calleeCode = cFuncName(id.Name)
 		}
 		for i, a := range e.Args {
 			arg := g.genExpr(a)
@@ -363,7 +365,10 @@ func (g *Generator) genExpr(expr Expr) string {
 			}
 			args = append(args, arg)
 		}
-		return fmt.Sprintf("%s(%s)", g.genExpr(e.Callee), strings.Join(args, ", "))
+		if calleeCode == "" {
+			calleeCode = g.genExpr(e.Callee)
+		}
+		return fmt.Sprintf("%s(%s)", calleeCode, strings.Join(args, ", "))
 
 	case *MemberExpr:
 		if id, ok := e.Target.(*IdentExpr); ok && g.isUnitEnumVariant(id.Name, e.Member) {

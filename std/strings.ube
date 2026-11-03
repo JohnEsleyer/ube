@@ -1,0 +1,64 @@
+// Ube standard library: string helpers.
+//
+// A number of these names are also available as compiler built-ins. Defining
+// them here keeps `import "std/strings"` self-describing and gives the
+// standard library a single home for the behaviour.
+
+pub fn str_contains(haystack: string, needle: string) -> bool {
+    return haystack.index_of(needle) >= 0
+}
+
+pub fn str_starts_with(s: string, prefix: string) -> bool {
+    if prefix.len > s.len { return false }
+    return s[0:prefix.len] == prefix
+}
+
+pub fn str_ends_with(s: string, suffix: string) -> bool {
+    if suffix.len > s.len { return false }
+    return s[s.len - suffix.len:s.len] == suffix
+}
+
+pub fn str_trim(s: string) -> string {
+    return s.trim()
+}
+
+pub fn str_split(s: string, delim: string) -> []string {
+    return s.split(delim)
+}
+
+pub fn str_repeat(s: string, count: i32) -> string {
+    if count <= 0 { return "" }
+    let mut sb = StringBuilder.new(s.len * count)
+    let mut i = 0
+    while i < count {
+        sb.append(s)
+        i += 1
+    }
+    return sb.to_string()
+}
+
+pub fn str_pad_left(s: string, total_len: i32, pad_char: string) -> string {
+    if s.len >= total_len { return s }
+    let needed = total_len - s.len
+    let mut sb = StringBuilder.new(total_len)
+    let mut i = 0
+    while i < needed {
+        sb.append(pad_char)
+        i += 1
+    }
+    sb.append(s)
+    return sb.to_string()
+}
+
+pub fn str_pad_right(s: string, total_len: i32, pad_char: string) -> string {
+    if s.len >= total_len { return s }
+    let needed = total_len - s.len
+    let mut sb = StringBuilder.new(total_len)
+    sb.append(s)
+    let mut i = 0
+    while i < needed {
+        sb.append(pad_char)
+        i += 1
+    }
+    return sb.to_string()
+}

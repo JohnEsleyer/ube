@@ -270,12 +270,26 @@ func (m *Monomorphizer) Process(prog *Program) error {
 				}
 				return scanExpr(e.End)
 			case *ArrayInitExpr:
+				if e.Elem != nil {
+					t, err := scanType(e.Elem)
+					if err != nil {
+						return err
+					}
+					e.Elem = t
+				}
 				for _, el := range e.Elements {
 					if err := scanExpr(el); err != nil {
 						return err
 					}
 				}
 			case *SliceInitExpr:
+				if e.Elem != nil {
+					t, err := scanType(e.Elem)
+					if err != nil {
+						return err
+					}
+					e.Elem = t
+				}
 				for _, el := range e.Elements {
 					if err := scanExpr(el); err != nil {
 						return err
