@@ -27,24 +27,31 @@ func build(args []string) error {
 		output = base + ".wasm"
 	}
 
+	fileName := filepath.Base(file)
+	stopAnim := startSpinner("compiling " + fileName + "...")
 	start := time.Now()
-	ast, report, err := loadAndCheck(file)
+
+	ast, _, err := loadAndCheck(file)
 	if err != nil {
+		stopAnim()
 		return err
 	}
 
 	wasmBytes, err := compiler.EmitWasm(ast)
 	if err != nil {
+		stopAnim()
 		return fmt.Errorf("failed to compile to WebAssembly: %w", err)
 	}
 
 	if writeErr := os.WriteFile(output, wasmBytes, 0755); writeErr != nil {
+		stopAnim()
 		return fmt.Errorf("failed to write output file %s: %w", output, writeErr)
 	}
 
-	label := "✓ Built Wasm module"
-	fmt.Printf("%s %s (%s)\n", paint(label, colorGreen), output, paint(time.Since(start).Round(time.Millisecond).String(), colorDim))
-	printPurity(report)
+	elapsed := time.Since(start).Round(time.Millisecond)
+	stopAnim()
+
+	fmt.Printf("%s %s %s\n", paint("◆", colorPurpleBold), paint("Compiled", colorPurple), paint(fmt.Sprintf("%s -> %s (%s)", fileName, output, elapsed), colorDim))
 	return nil
 }
 

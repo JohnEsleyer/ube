@@ -14,9 +14,13 @@ func run(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: ube run <file.ube> [program args...]")
 	}
+	fileName := filepath.Base(args[0])
+	stopAnim := startSpinner("compiling " + fileName + "...")
 	start := time.Now()
-	ast, report, err := loadAndCheck(args[0])
+
+	ast, _, err := loadAndCheck(args[0])
 	if err != nil {
+		stopAnim()
 		return err
 	}
 
@@ -26,16 +30,19 @@ func run(args []string) error {
 
 	wasmBytes, err := compiler.EmitWasm(ast)
 	if err != nil {
+		stopAnim()
 		return fmt.Errorf("failed to compile to WebAssembly: %w", err)
 	}
 
 	if writeErr := os.WriteFile(wasmPath, wasmBytes, 0755); writeErr != nil {
+		stopAnim()
 		return fmt.Errorf("failed to write wasm module to temp file: %w", writeErr)
 	}
 
-	label := "✓ Compiled Wasm"
-	fmt.Printf("%s %s (%s)\n", paint(label, colorPurple), filepath.Base(args[0]), paint(time.Since(start).Round(time.Millisecond).String(), colorDim))
-	printPurity(report)
+	elapsed := time.Since(start).Round(time.Millisecond)
+	stopAnim()
+
+	fmt.Printf("%s %s %s\n", paint("◆", colorPurpleBold), paint("Compiled", colorPurple), paint(fmt.Sprintf("%s (%s)", fileName, elapsed), colorDim))
 
 	// Run in-process via embedded Wasmtime (Cranelift JIT).
 	if runErr := runWasmtimeInProcess(wasmPath, args[1:]); runErr != nil {

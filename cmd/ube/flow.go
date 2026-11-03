@@ -33,7 +33,7 @@ func runFlow(args []string) error {
 		return fmt.Errorf("no 'fn main()' entry point found in %s", filepath.Base(file))
 	}
 
-	fmt.Printf("%s Execution Flow Tree for %s\n", paint("🍠", colorPurple), filepath.Base(file))
+	fmt.Printf("%s Execution Flow Tree for %s\n", paint("◆", colorPurple), filepath.Base(file))
 	fmt.Println("main() [entry]")
 
 	visited := make(map[string]bool)
