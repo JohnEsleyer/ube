@@ -241,3 +241,50 @@ fn main() {
 		t.Fatalf("binary too small: %d", len(wasmData))
 	}
 }
+
+func TestDirectWasm_BitwiseAndLogicalOps(t *testing.T) {
+	src := `
+fn main() {
+	let a = 12 & 10
+	let b = 12 | 10
+	let c = 12 ^ 10
+	let d = 2 << 3
+	let e = 16 >> 2
+	let f = 17 % 5
+	let g = true && false
+	let h = true || false
+	println(a)
+	println(b)
+	println(c)
+	println(d)
+	println(e)
+	println(f)
+	println(g)
+	println(h)
+}
+`
+	lexer := compiler.NewLexer("bitwise.ube", src)
+	tokens, err := lexer.Tokenize()
+	if err != nil {
+		t.Fatalf("tokenize error: %v", err)
+	}
+
+	parser := compiler.NewParser(tokens)
+	prog, err := parser.ParseProgram()
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	tc := compiler.NewTypechecker()
+	if err := tc.Check(prog); err != nil {
+		t.Fatalf("typecheck error: %v", err)
+	}
+
+	wasmData, err := compiler.EmitWasm(prog)
+	if err != nil {
+		t.Fatalf("EmitWasm error: %v", err)
+	}
+	if len(wasmData) < 8 {
+		t.Fatalf("binary too small: %d", len(wasmData))
+	}
+}

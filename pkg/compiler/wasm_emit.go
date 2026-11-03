@@ -616,6 +616,9 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			} else {
 				writeSleb128(buf, 0)
 			}
+		case "none":
+			buf.WriteByte(0x41) // i32.const 0
+			writeSleb128(buf, 0)
 		case "string":
 			// Intern string literal in linear data section and return pointer
 			off, _ := ctx.emitter.internString(e.Val)
