@@ -2,7 +2,9 @@ package compiler
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
+	"math"
 )
 
 // EmitWasm compiles an AST program directly into WebAssembly binary bytecode (.wasm)
@@ -51,14 +53,22 @@ type structMeta struct {
 	totalSize    int
 }
 
+type importMeta struct {
+	module  string
+	name    string
+	typeIdx uint32
+}
+
 type wasmEmitter struct {
 	types         [][]byte
 	typeMap       map[string]uint32
+	imports       []importMeta
 	funcs         []uint32 // type index for each defined func
 	codeBodies    [][]byte
 	data          []byte
 	dataOffset    uint32
 	fnIndices     map[string]uint32
+	methodIndices map[string]uint32 // "Type.method" -> func index
 	fdWriteIdx    uint32
 	hasFdWrite    bool
 	structs       map[string]structMeta
@@ -67,10 +77,11 @@ type wasmEmitter struct {
 
 func newWasmEmitter() *wasmEmitter {
 	return &wasmEmitter{
-		typeMap:    make(map[string]uint32),
-		fnIndices:  make(map[string]uint32),
-		structs:    make(map[string]structMeta),
-		dataOffset: staticDataOff,
+		typeMap:       make(map[string]uint32),
+		fnIndices:     make(map[string]uint32),
+		methodIndices: make(map[string]uint32),
+		structs:       make(map[string]structMeta),
+		dataOffset:    staticDataOff,
 	}
 }
 
@@ -109,10 +120,41 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 			e.moduleAliases[alias] = prefix
 		}
 	}
-	// Register WASI fd_write import type: (i32, i32, i32, i32) -> i32
+	// Register WASI fd_write import (import 0)
+	fdWriteType := e.registerType([]byte{valTypeI32, valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
 	e.fdWriteIdx = 0
 	e.hasFdWrite = true
-	e.registerType([]byte{valTypeI32, valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
+	e.imports = append(e.imports, importMeta{
+		module:  "wasi_snapshot_preview1",
+		name:    "fd_write",
+		typeIdx: fdWriteType,
+	})
+
+	// Register user host imports (extern fn)
+	for _, decl := range prog.Decls {
+		if ext, ok := decl.(*ExternFnDecl); ok {
+			var params []byte
+			for range ext.Params {
+				params = append(params, valTypeI32)
+			}
+			var results []byte
+			if ext.RetType != nil && ext.RetType.String() != "void" {
+				if ext.RetType.String() == "f32" {
+					results = append(results, valTypeF32)
+				} else {
+					results = append(results, valTypeI32)
+				}
+			}
+			tIdx := e.registerType(params, results)
+			extIdx := uint32(len(e.imports))
+			e.imports = append(e.imports, importMeta{
+				module:  ext.Module,
+				name:    ext.Name,
+				typeIdx: tIdx,
+			})
+			e.fnIndices[ext.Name] = extIdx
+		}
+	}
 
 	// Pre-scan structs to build memory field layouts
 	for _, decl := range prog.Decls {
@@ -134,8 +176,7 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 	}
 
 	// First pass: register function signatures and assign function indices
-	// Index 0 is reserved for WASI fd_write
-	funcOffset := uint32(1)
+	funcOffset := uint32(len(e.imports))
 
 	var fnDecls []*FnDecl
 	var mainFn *FnDecl
@@ -143,9 +184,15 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 	for _, decl := range prog.Decls {
 		if fn, ok := decl.(*FnDecl); ok {
 			fnDecls = append(fnDecls, fn)
-			e.fnIndices[fn.Name] = funcOffset + uint32(len(fnDecls)-1)
-			if fn.Name == "main" {
-				mainFn = fn
+			fnIdx := funcOffset + uint32(len(fnDecls)-1)
+			if fn.Receiver != nil {
+				key := fn.Receiver.Type.String() + "." + fn.Name
+				e.methodIndices[key] = fnIdx
+			} else {
+				e.fnIndices[fn.Name] = fnIdx
+				if fn.Name == "main" {
+					mainFn = fn
+				}
 			}
 		}
 	}
@@ -167,8 +214,15 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 	// Register types for defined functions
 	for _, fn := range fnDecls {
 		var params []byte
-		for range fn.Params {
-			params = append(params, valTypeI32)
+		if fn.Receiver != nil {
+			params = append(params, valTypeI32) // receiver is pointer/handle
+		}
+		for _, p := range fn.Params {
+			if p.Type != nil && p.Type.String() == "f32" {
+				params = append(params, valTypeF32)
+			} else {
+				params = append(params, valTypeI32)
+			}
 		}
 		var results []byte
 		if fn.RetType != nil {
@@ -223,10 +277,16 @@ func (e *wasmEmitter) compileFunction(fn *FnDecl) ([]byte, error) {
 		locals:  make(map[string]uint32),
 	}
 
-	for i, param := range fn.Params {
-		ctx.locals[param.Name] = uint32(i)
+	paramIdx := uint32(0)
+	if fn.Receiver != nil {
+		ctx.locals[fn.Receiver.Name] = paramIdx
+		paramIdx++
 	}
-	ctx.numParams = uint32(len(fn.Params))
+	for _, param := range fn.Params {
+		ctx.locals[param.Name] = paramIdx
+		paramIdx++
+	}
+	ctx.numParams = paramIdx
 
 	var bodyBuf bytes.Buffer
 	if err := ctx.compileBlock(&bodyBuf, fn.Body); err != nil {
@@ -282,8 +342,19 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			if !exists {
 				return fmt.Errorf("unknown variable %s in assignment", ident.Name)
 			}
-			if err := ctx.compileExpr(buf, s.RHS); err != nil {
-				return err
+			if s.Op != "=" {
+				buf.WriteByte(0x20) // local.get
+				writeUleb128(buf, localIdx)
+				if err := ctx.compileExpr(buf, s.RHS); err != nil {
+					return err
+				}
+				if err := emitCompoundOp(buf, s.Op); err != nil {
+					return err
+				}
+			} else {
+				if err := ctx.compileExpr(buf, s.RHS); err != nil {
+					return err
+				}
 			}
 			buf.WriteByte(0x21) // local.set
 			writeUleb128(buf, localIdx)
@@ -302,9 +373,31 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			if err := ctx.compileExpr(buf, mem.Target); err != nil {
 				return err
 			}
-			// Push value to store
-			if err := ctx.compileExpr(buf, s.RHS); err != nil {
-				return err
+			if s.Op != "=" {
+				// Duplicate target address to read existing value
+				targetLocal := ctx.allocLocal(valTypeI32)
+				buf.WriteByte(0x21) // local.set targetLocal
+				writeUleb128(buf, targetLocal)
+				buf.WriteByte(0x20) // local.get targetLocal
+				writeUleb128(buf, targetLocal)
+
+				// Load existing value
+				buf.WriteByte(0x20) // local.get targetLocal
+				writeUleb128(buf, targetLocal)
+				buf.WriteByte(0x28) // i32.load
+				writeUleb128(buf, 2)
+				writeUleb128(buf, uint32(offset))
+
+				if err := ctx.compileExpr(buf, s.RHS); err != nil {
+					return err
+				}
+				if err := emitCompoundOp(buf, s.Op); err != nil {
+					return err
+				}
+			} else {
+				if err := ctx.compileExpr(buf, s.RHS); err != nil {
+					return err
+				}
 			}
 			buf.WriteByte(0x36) // i32.store
 			writeUleb128(buf, 2)
@@ -402,6 +495,63 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		buf.WriteByte(0x24) // global.set $arena_ptr (global 0)
 		writeUleb128(buf, 0)
 
+	case *ForStmt:
+		// for item in start..end { ... }
+		if rng, ok := s.Iter.(*RangeExpr); ok {
+			itemLocal := ctx.allocLocal(valTypeI32)
+			ctx.locals[s.ItemName] = itemLocal
+			endLocal := ctx.allocLocal(valTypeI32)
+
+			// item = start
+			if err := ctx.compileExpr(buf, rng.Start); err != nil {
+				return err
+			}
+			buf.WriteByte(0x21) // local.set itemLocal
+			writeUleb128(buf, itemLocal)
+
+			// endVal = end
+			if err := ctx.compileExpr(buf, rng.End); err != nil {
+				return err
+			}
+			buf.WriteByte(0x21) // local.set endLocal
+			writeUleb128(buf, endLocal)
+
+			// Loop structure
+			buf.WriteByte(0x02)        // block
+			buf.WriteByte(valTypeVoid) // void
+			buf.WriteByte(0x03)        // loop
+			buf.WriteByte(valTypeVoid) // void
+
+			// if item >= endVal -> break
+			buf.WriteByte(0x20) // local.get itemLocal
+			writeUleb128(buf, itemLocal)
+			buf.WriteByte(0x20) // local.get endLocal
+			writeUleb128(buf, endLocal)
+			buf.WriteByte(0x4e) // i32.ge_s
+			buf.WriteByte(0x0d) // br_if 1 (break to outer block)
+			writeUleb128(buf, 1)
+
+			// Compile body
+			if err := ctx.compileBlock(buf, s.Body); err != nil {
+				return err
+			}
+
+			// item += 1
+			buf.WriteByte(0x20) // local.get itemLocal
+			writeUleb128(buf, itemLocal)
+			buf.WriteByte(0x41) // i32.const 1
+			writeSleb128(buf, 1)
+			buf.WriteByte(0x6a) // i32.add
+			buf.WriteByte(0x21) // local.set itemLocal
+			writeUleb128(buf, itemLocal)
+
+			buf.WriteByte(0x0c) // br 0 (repeat loop)
+			writeUleb128(buf, 0)
+
+			buf.WriteByte(0x0b) // end loop
+			buf.WriteByte(0x0b) // end block
+		}
+
 	case *LoopControlStmt:
 		if s.Continue {
 			buf.WriteByte(0x0c) // br (to loop start)
@@ -414,15 +564,51 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 	return nil
 }
 
+func emitCompoundOp(buf *bytes.Buffer, op string) error {
+	switch op {
+	case "+=":
+		buf.WriteByte(0x6a) // i32.add
+	case "-=":
+		buf.WriteByte(0x6b) // i32.sub
+	case "*=":
+		buf.WriteByte(0x6c) // i32.mul
+	case "/=":
+		buf.WriteByte(0x6d) // i32.div_s
+	case "%=":
+		buf.WriteByte(0x6f) // i32.rem_s
+	case "&=":
+		buf.WriteByte(0x71) // i32.and
+	case "|=":
+		buf.WriteByte(0x72) // i32.or
+	case "^=":
+		buf.WriteByte(0x73) // i32.xor
+	case "<<=":
+		buf.WriteByte(0x74) // i32.shl
+	case ">>=":
+		buf.WriteByte(0x75) // i32.shr_s
+	default:
+		return fmt.Errorf("unsupported assignment operator: %s", op)
+	}
+	return nil
+}
+
 func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 	switch e := expr.(type) {
 	case *LiteralExpr:
 		switch e.Type.String() {
-		case "i32":
+		case "i32", "u8":
 			var val int32
 			fmt.Sscanf(e.Val, "%d", &val)
 			buf.WriteByte(0x41) // i32.const
 			writeSleb128(buf, val)
+		case "f32":
+			var val float32
+			fmt.Sscanf(e.Val, "%f", &val)
+			buf.WriteByte(0x43) // f32.const
+			bits := math.Float32bits(val)
+			var b [4]byte
+			binary.LittleEndian.PutUint32(b[:], bits)
+			buf.Write(b[:])
 		case "bool":
 			buf.WriteByte(0x41) // i32.const
 			if e.Val == "true" {
@@ -440,6 +626,29 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			writeSleb128(buf, 0)
 		}
 
+	case *UnaryExpr:
+		if err := ctx.compileExpr(buf, e.Operand); err != nil {
+			return err
+		}
+		switch e.Op {
+		case "!":
+			buf.WriteByte(0x45) // i32.eqz
+		case "-":
+			buf.WriteByte(0x41) // i32.const 0
+			writeSleb128(buf, 0)
+			// swap order: 0 - val
+			// We can do: 0 - val with an extra local or i32.const -1 * val
+			buf.WriteByte(0x41) // i32.const -1
+			writeSleb128(buf, -1)
+			buf.WriteByte(0x6c) // i32.mul
+		case "~":
+			buf.WriteByte(0x41) // i32.const -1
+			writeSleb128(buf, -1)
+			buf.WriteByte(0x73) // i32.xor
+		default:
+			return fmt.Errorf("unsupported unary operator: %s", e.Op)
+		}
+
 	case *IdentExpr:
 		localIdx, exists := ctx.locals[e.Name]
 		if !exists {
@@ -455,36 +664,86 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		if err := ctx.compileExpr(buf, e.Right); err != nil {
 			return err
 		}
-		switch e.Op {
-		case "+":
-			buf.WriteByte(0x6a) // i32.add
-		case "-":
-			buf.WriteByte(0x6b) // i32.sub
-		case "*":
-			buf.WriteByte(0x6c) // i32.mul
-		case "/":
-			buf.WriteByte(0x6d) // i32.div_s
-		case "%":
-			buf.WriteByte(0x6f) // i32.rem_s
-		case "==":
-			buf.WriteByte(0x46) // i32.eq
-		case "!=":
-			buf.WriteByte(0x47) // i32.ne
-		case "<":
-			buf.WriteByte(0x48) // i32.lt_s
-		case "<=":
-			buf.WriteByte(0x4c) // i32.le_s
-		case ">":
-			buf.WriteByte(0x4a) // i32.gt_s
-		case ">=":
-			buf.WriteByte(0x4e) // i32.ge_s
-		case "&&":
-			buf.WriteByte(0x71) // i32.and
-		case "||":
-			buf.WriteByte(0x72) // i32.or
-		default:
-			return fmt.Errorf("unsupported operator %s in wasm emission", e.Op)
+		isF32 := (e.OperandType != nil && e.OperandType.String() == "f32") || (e.Type != nil && e.Type.String() == "f32")
+		if isF32 {
+			switch e.Op {
+			case "+":
+				buf.WriteByte(0x92) // f32.add
+			case "-":
+				buf.WriteByte(0x93) // f32.sub
+			case "*":
+				buf.WriteByte(0x94) // f32.mul
+			case "/":
+				buf.WriteByte(0x95) // f32.div
+			case "==":
+				buf.WriteByte(0x5b) // f32.eq
+			case "!=":
+				buf.WriteByte(0x5c) // f32.ne
+			case "<":
+				buf.WriteByte(0x5d) // f32.lt
+			case "<=":
+				buf.WriteByte(0x5f) // f32.le
+			case ">":
+				buf.WriteByte(0x5e) // f32.gt
+			case ">=":
+				buf.WriteByte(0x60) // f32.ge
+			default:
+				return fmt.Errorf("unsupported f32 operator %s", e.Op)
+			}
+		} else {
+			switch e.Op {
+			case "+":
+				buf.WriteByte(0x6a) // i32.add
+			case "-":
+				buf.WriteByte(0x6b) // i32.sub
+			case "*":
+				buf.WriteByte(0x6c) // i32.mul
+			case "/":
+				buf.WriteByte(0x6d) // i32.div_s
+			case "%":
+				buf.WriteByte(0x6f) // i32.rem_s
+			case "==":
+				buf.WriteByte(0x46) // i32.eq
+			case "!=":
+				buf.WriteByte(0x47) // i32.ne
+			case "<":
+				buf.WriteByte(0x48) // i32.lt_s
+			case "<=":
+				buf.WriteByte(0x4c) // i32.le_s
+			case ">":
+				buf.WriteByte(0x4a) // i32.gt_s
+			case ">=":
+				buf.WriteByte(0x4e) // i32.ge_s
+			case "&&", "&":
+				buf.WriteByte(0x71) // i32.and
+			case "||", "|":
+				buf.WriteByte(0x72) // i32.or
+			case "^":
+				buf.WriteByte(0x73) // i32.xor
+			case "<<":
+				buf.WriteByte(0x74) // i32.shl
+			case ">>":
+				buf.WriteByte(0x75) // i32.shr_s
+			default:
+				return fmt.Errorf("unsupported operator %s in wasm emission", e.Op)
+			}
 		}
+
+	case *IndexExpr:
+		// target[index] -> load from target + index*4
+		if err := ctx.compileExpr(buf, e.Target); err != nil {
+			return err
+		}
+		if err := ctx.compileExpr(buf, e.Index); err != nil {
+			return err
+		}
+		buf.WriteByte(0x41) // i32.const 4
+		writeSleb128(buf, 4)
+		buf.WriteByte(0x6c) // i32.mul
+		buf.WriteByte(0x6a) // i32.add
+		buf.WriteByte(0x28) // i32.load
+		writeUleb128(buf, 2)
+		writeUleb128(buf, 0)
 
 	case *MemberExpr:
 		// Qualified zero-argument module member: math.PI.
@@ -556,16 +815,49 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		writeUleb128(buf, structBase)
 
 	case *CallExpr:
-		name := ""
-		switch callee := e.Callee.(type) {
-		case *IdentExpr:
-			name = callee.Name
-		case *MemberExpr:
-			if target, ok := callee.Target.(*IdentExpr); ok {
+		// Check for method call: target.method(args...)
+		if mem, ok := e.Callee.(*MemberExpr); ok {
+			// Module alias call (e.g. math.min)
+			if target, isIdent := mem.Target.(*IdentExpr); isIdent {
 				if prefix, isModule := ctx.emitter.moduleAliases[target.Name]; isModule {
-					name = prefix + callee.Member
+					name := prefix + mem.Member
+					fnIdx, exists := ctx.emitter.fnIndices[name]
+					if !exists {
+						return fmt.Errorf("unknown function %s", name)
+					}
+					for _, arg := range e.Args {
+						if err := ctx.compileExpr(buf, arg); err != nil {
+							return err
+						}
+					}
+					buf.WriteByte(0x10) // call
+					writeUleb128(buf, fnIdx)
+					return nil
 				}
 			}
+
+			// Struct method call: target.method(args...)
+			methodKey := mem.TargetType.String() + "." + mem.Member
+			if methodIdx, exists := ctx.emitter.methodIndices[methodKey]; exists {
+				// Pass receiver as first parameter
+				if err := ctx.compileExpr(buf, mem.Target); err != nil {
+					return err
+				}
+				for _, arg := range e.Args {
+					if err := ctx.compileExpr(buf, arg); err != nil {
+						return err
+					}
+				}
+				buf.WriteByte(0x10) // call
+				writeUleb128(buf, methodIdx)
+				return nil
+			}
+		}
+
+		// Direct function call
+		name := ""
+		if ident, ok := e.Callee.(*IdentExpr); ok {
+			name = ident.Name
 		}
 		if name != "" {
 			if name == "print" || name == "println" {
@@ -926,14 +1218,18 @@ func (e *wasmEmitter) assembleBinary() ([]byte, error) {
 	}
 	writeSection(&out, secType, typeSec.Bytes())
 
-	// 3. Import section (WASI Preview 1 fd_write)
-	var importSec bytes.Buffer
-	writeUleb128(&importSec, 1) // 1 import
-	writeString(&importSec, "wasi_snapshot_preview1")
-	writeString(&importSec, "fd_write")
-	importSec.WriteByte(0x00)   // import kind: func
-	writeUleb128(&importSec, 0) // type index 0
-	writeSection(&out, secImport, importSec.Bytes())
+	// 3. Import section
+	if len(e.imports) > 0 {
+		var importSec bytes.Buffer
+		writeUleb128(&importSec, uint32(len(e.imports)))
+		for _, imp := range e.imports {
+			writeString(&importSec, imp.module)
+			writeString(&importSec, imp.name)
+			importSec.WriteByte(0x00) // import kind: func
+			writeUleb128(&importSec, imp.typeIdx)
+		}
+		writeSection(&out, secImport, importSec.Bytes())
+	}
 
 	// 4. Function section
 	var funcSec bytes.Buffer

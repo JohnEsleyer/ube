@@ -155,3 +155,89 @@ fn main() {
 		}
 	}
 }
+
+func TestDirectWasm_CompoundAssignAndUnary(t *testing.T) {
+	src := `
+fn main() {
+    let mut a = 10
+    a += 5
+    a -= 3
+    a *= 2
+    let b = -a
+    let c = !false
+    println(a)
+    println(b)
+    println(c)
+}
+`
+	lexer := compiler.NewLexer("compound.ube", src)
+	tokens, err := lexer.Tokenize()
+	if err != nil {
+		t.Fatalf("tokenize error: %v", err)
+	}
+
+	parser := compiler.NewParser(tokens)
+	prog, err := parser.ParseProgram()
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	tc := compiler.NewTypechecker()
+	if err := tc.Check(prog); err != nil {
+		t.Fatalf("typecheck error: %v", err)
+	}
+
+	wasmData, err := compiler.EmitWasm(prog)
+	if err != nil {
+		t.Fatalf("EmitWasm error: %v", err)
+	}
+	if len(wasmData) < 8 {
+		t.Fatalf("binary too small: %d", len(wasmData))
+	}
+}
+
+func TestDirectWasm_MethodsAndForLoop(t *testing.T) {
+	src := `
+struct Counter {
+    val: i32
+}
+
+fn (c Counter) double() -> i32 {
+    return c.val * 2
+}
+
+fn main() {
+    let mut total = 0
+    for i in 1..4 {
+        total += i
+    }
+    let c = Counter{ val: total }
+    let ans = c.double()
+    println(ans)
+}
+`
+	lexer := compiler.NewLexer("methods.ube", src)
+	tokens, err := lexer.Tokenize()
+	if err != nil {
+		t.Fatalf("tokenize error: %v", err)
+	}
+
+	parser := compiler.NewParser(tokens)
+	prog, err := parser.ParseProgram()
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	tc := compiler.NewTypechecker()
+	if err := tc.Check(prog); err != nil {
+		t.Fatalf("typecheck error: %v", err)
+	}
+
+	wasmData, err := compiler.EmitWasm(prog)
+	if err != nil {
+		t.Fatalf("EmitWasm error: %v", err)
+	}
+	if len(wasmData) < 8 {
+		t.Fatalf("binary too small: %d", len(wasmData))
+	}
+}
