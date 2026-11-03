@@ -1,14 +1,327 @@
 package compiler
 
+import "fmt"
+
+// SourceLocation tracks position in the original source code.
+type SourceLocation struct {
+	File string
+	Line int
+	Col  int
+}
+
+func (s SourceLocation) String() string {
+	if s.File == "" {
+		return fmt.Sprintf("%d:%d", s.Line, s.Col)
+	}
+	return fmt.Sprintf("%s:%d:%d", s.File, s.Line, s.Col)
+}
+
+// Node is the root interface for all AST nodes.
 type Node interface {
 	Loc() SourceLocation
 }
 
-// Expressions
+// Expr represents any AST node evaluating to a value.
 type Expr interface {
 	Node
 	exprNode()
 }
+
+// Stmt represents any statement or imperative instruction.
+type Stmt interface {
+	Node
+	stmtNode()
+}
+
+// Decl represents a top-level module declaration.
+type Decl interface {
+	Node
+	declNode()
+}
+
+// -------------------------------------------------------------
+// Declarations
+// -------------------------------------------------------------
+
+type Program struct {
+	At            SourceLocation
+	Decls         []Decl
+	ModuleAliases map[string]string
+}
+
+func (p *Program) Loc() SourceLocation { return p.At }
+
+type ImportDecl struct {
+	At    SourceLocation
+	Path  string
+	Alias string
+}
+
+func (d *ImportDecl) Loc() SourceLocation { return d.At }
+func (d *ImportDecl) declNode()           {}
+
+type TypeParam struct {
+	Name       string
+	Constraint string
+}
+
+type FieldDecl struct {
+	Name      string
+	Type      UbeType
+	IsMut     bool
+	IsPub     bool
+	Anonymous bool
+	Tag       string
+}
+
+type StructDecl struct {
+	At         SourceLocation
+	Name       string
+	IsPub      bool
+	TypeParams []TypeParam
+	Fields     []FieldDecl
+}
+
+func (d *StructDecl) Loc() SourceLocation { return d.At }
+func (d *StructDecl) declNode()           {}
+
+type VariantDecl struct {
+	Name  string
+	Types []UbeType
+}
+
+type EnumDecl struct {
+	At       SourceLocation
+	Name     string
+	IsPub    bool
+	Variants []VariantDecl
+}
+
+func (d *EnumDecl) Loc() SourceLocation { return d.At }
+func (d *EnumDecl) declNode()           {}
+
+type TraitMethodDecl struct {
+	At      SourceLocation
+	Name    string
+	Params  []FieldDecl
+	RetType UbeType
+}
+
+type TraitDecl struct {
+	At          SourceLocation
+	Name        string
+	IsPub       bool
+	Supertraits []string
+	Methods     []TraitMethodDecl
+}
+
+func (d *TraitDecl) Loc() SourceLocation { return d.At }
+func (d *TraitDecl) declNode()           {}
+
+type FnDecl struct {
+	At         SourceLocation
+	Name       string
+	IsPub      bool
+	TypeParams []TypeParam
+	Receiver   *FieldDecl
+	Params     []FieldDecl
+	RetType    UbeType
+	Body       *BlockStmt
+}
+
+func (d *FnDecl) Loc() SourceLocation { return d.At }
+func (d *FnDecl) declNode()           {}
+
+type ExternFnDecl struct {
+	At      SourceLocation
+	Name    string
+	Module  string
+	IsPub   bool
+	Params  []FieldDecl
+	RetType UbeType
+}
+
+func (d *ExternFnDecl) Loc() SourceLocation { return d.At }
+func (d *ExternFnDecl) declNode()           {}
+
+// -------------------------------------------------------------
+// Statements
+// -------------------------------------------------------------
+
+type BlockStmt struct {
+	At    SourceLocation
+	Stmts []Stmt
+}
+
+func (s *BlockStmt) Loc() SourceLocation { return s.At }
+func (s *BlockStmt) stmtNode()           {}
+
+type LetStmt struct {
+	At        SourceLocation
+	Name      string
+	Names     []string
+	Mut       bool
+	Type      UbeType
+	Value     Expr
+	ValueType UbeType
+}
+
+func (s *LetStmt) Loc() SourceLocation { return s.At }
+func (s *LetStmt) stmtNode()           {}
+
+type AssignStmt struct {
+	At      SourceLocation
+	LHS     Expr
+	Op      string
+	RHS     Expr
+	LHSType UbeType
+	RHSType UbeType
+}
+
+func (s *AssignStmt) Loc() SourceLocation { return s.At }
+func (s *AssignStmt) stmtNode()           {}
+
+type ReturnStmt struct {
+	At        SourceLocation
+	Value     Expr
+	ValueType UbeType
+}
+
+func (s *ReturnStmt) Loc() SourceLocation { return s.At }
+func (s *ReturnStmt) stmtNode()           {}
+
+type IfStmt struct {
+	At   SourceLocation
+	Cond Expr
+	Then *BlockStmt
+	Else Stmt
+}
+
+func (s *IfStmt) Loc() SourceLocation { return s.At }
+func (s *IfStmt) stmtNode()           {}
+
+type IfLetStmt struct {
+	At       SourceLocation
+	VarName  string
+	Expr     Expr
+	IsResult bool
+	Then     *BlockStmt
+	Else     Stmt
+}
+
+func (s *IfLetStmt) Loc() SourceLocation { return s.At }
+func (s *IfLetStmt) stmtNode()           {}
+
+type WhileStmt struct {
+	At   SourceLocation
+	Cond Expr
+	Body *BlockStmt
+}
+
+func (s *WhileStmt) Loc() SourceLocation { return s.At }
+func (s *WhileStmt) stmtNode()           {}
+
+type WhileLetStmt struct {
+	At      SourceLocation
+	VarName string
+	Call    Expr
+	Body    *BlockStmt
+}
+
+func (s *WhileLetStmt) Loc() SourceLocation { return s.At }
+func (s *WhileLetStmt) stmtNode()           {}
+
+type ForStmt struct {
+	At               SourceLocation
+	ItemName         string
+	Iter             Expr
+	IterType         UbeType
+	IsCustomIterator bool
+	NextMethod       string
+	ReceiverIsMut    bool
+	Body             *BlockStmt
+}
+
+func (s *ForStmt) Loc() SourceLocation { return s.At }
+func (s *ForStmt) stmtNode()           {}
+
+type LoopControlStmt struct {
+	At       SourceLocation
+	Continue bool
+}
+
+func (s *LoopControlStmt) Loc() SourceLocation { return s.At }
+func (s *LoopControlStmt) stmtNode()           {}
+
+type SpawnStmt struct {
+	At   SourceLocation
+	Call *CallExpr
+}
+
+func (s *SpawnStmt) Loc() SourceLocation { return s.At }
+func (s *SpawnStmt) stmtNode()           {}
+
+type ArenaStmt struct {
+	At   SourceLocation
+	Body *BlockStmt
+}
+
+func (s *ArenaStmt) Loc() SourceLocation { return s.At }
+func (s *ArenaStmt) stmtNode()           {}
+
+type DeferStmt struct {
+	At   SourceLocation
+	Call Expr
+}
+
+func (s *DeferStmt) Loc() SourceLocation { return s.At }
+func (s *DeferStmt) stmtNode()           {}
+
+type MatchArm struct {
+	At       SourceLocation
+	Variant  string
+	Bindings []string
+	Body     Stmt
+}
+
+type MatchStmt struct {
+	At       SourceLocation
+	Expr     Expr
+	Arms     []MatchArm
+	EnumName string
+}
+
+func (s *MatchStmt) Loc() SourceLocation { return s.At }
+func (s *MatchStmt) stmtNode()           {}
+
+type SelectCase struct {
+	At       SourceLocation
+	VarName  string
+	Chan     Expr
+	ChanElem UbeType
+	Body     *BlockStmt
+}
+
+type SelectStmt struct {
+	At      SourceLocation
+	Cases   []SelectCase
+	Default *BlockStmt
+}
+
+func (s *SelectStmt) Loc() SourceLocation { return s.At }
+func (s *SelectStmt) stmtNode()           {}
+
+type ExprStmt struct {
+	At   SourceLocation
+	Expr Expr
+}
+
+func (s *ExprStmt) Loc() SourceLocation { return s.At }
+func (s *ExprStmt) stmtNode()           {}
+
+// -------------------------------------------------------------
+// Expressions
+// -------------------------------------------------------------
 
 type LiteralExpr struct {
 	At   SourceLocation
@@ -91,16 +404,16 @@ type SliceSubExpr struct {
 func (e *SliceSubExpr) Loc() SourceLocation { return e.At }
 func (e *SliceSubExpr) exprNode()           {}
 
+type FieldInit struct {
+	Name string
+	Val  Expr
+}
+
 type StructInitExpr struct {
 	At       SourceLocation
 	Name     string
 	Fields   []FieldInit
 	TypeArgs []UbeType
-}
-
-type FieldInit struct {
-	Name string
-	Val  Expr
 }
 
 func (e *StructInitExpr) Loc() SourceLocation { return e.At }
@@ -221,293 +534,3 @@ type TupleExpr struct {
 
 func (e *TupleExpr) Loc() SourceLocation { return e.At }
 func (e *TupleExpr) exprNode()           {}
-
-// Statements
-type Stmt interface {
-	Node
-	stmtNode()
-}
-
-type BlockStmt struct {
-	At    SourceLocation
-	Stmts []Stmt
-}
-
-func (s *BlockStmt) Loc() SourceLocation { return s.At }
-func (s *BlockStmt) stmtNode()           {}
-
-type LetStmt struct {
-	At        SourceLocation
-	Name      string
-	Names     []string
-	Mut       bool
-	Type      UbeType
-	Value     Expr
-	ValueType UbeType
-}
-
-func (s *LetStmt) Loc() SourceLocation { return s.At }
-func (s *LetStmt) stmtNode()           {}
-
-type AssignStmt struct {
-	At      SourceLocation
-	LHS     Expr
-	Op      string
-	RHS     Expr
-	LHSType UbeType
-	RHSType UbeType
-}
-
-func (s *AssignStmt) Loc() SourceLocation { return s.At }
-func (s *AssignStmt) stmtNode()           {}
-
-type ReturnStmt struct {
-	At        SourceLocation
-	Value     Expr
-	ValueType UbeType
-}
-
-func (s *ReturnStmt) Loc() SourceLocation { return s.At }
-func (s *ReturnStmt) stmtNode()           {}
-
-type IfStmt struct {
-	At   SourceLocation
-	Cond Expr
-	Then *BlockStmt
-	Else Stmt
-}
-
-func (s *IfStmt) Loc() SourceLocation { return s.At }
-func (s *IfStmt) stmtNode()           {}
-
-type IfLetStmt struct {
-	At      SourceLocation
-	VarName string
-	Expr    Expr
-	// IsResult distinguishes `if let` over a result (`T ! E`) from an
-	// optional. Result values are tested with .ok instead of .has_val.
-	IsResult bool
-	Then     *BlockStmt
-	Else     Stmt
-}
-
-func (s *IfLetStmt) Loc() SourceLocation { return s.At }
-func (s *IfLetStmt) stmtNode()           {}
-
-type WhileStmt struct {
-	At   SourceLocation
-	Cond Expr
-	Body *BlockStmt
-}
-
-func (s *WhileStmt) Loc() SourceLocation { return s.At }
-func (s *WhileStmt) stmtNode()           {}
-
-type WhileLetStmt struct {
-	At      SourceLocation
-	VarName string
-	Call    Expr
-	Body    *BlockStmt
-}
-
-func (s *WhileLetStmt) Loc() SourceLocation { return s.At }
-func (s *WhileLetStmt) stmtNode()           {}
-
-type ForStmt struct {
-	At               SourceLocation
-	ItemName         string
-	Iter             Expr
-	IterType         UbeType
-	IsCustomIterator bool
-	NextMethod       string
-	ReceiverIsMut    bool
-	Body             *BlockStmt
-}
-
-func (s *ForStmt) Loc() SourceLocation { return s.At }
-func (s *ForStmt) stmtNode()           {}
-
-type ArenaStmt struct {
-	At   SourceLocation
-	Body *BlockStmt
-}
-
-func (s *ArenaStmt) Loc() SourceLocation { return s.At }
-func (s *ArenaStmt) stmtNode()           {}
-
-type LoopControlStmt struct {
-	At       SourceLocation
-	Continue bool
-}
-
-func (s *LoopControlStmt) Loc() SourceLocation { return s.At }
-func (s *LoopControlStmt) stmtNode()           {}
-
-type SpawnStmt struct {
-	At   SourceLocation
-	Call *CallExpr
-}
-
-func (s *SpawnStmt) Loc() SourceLocation { return s.At }
-func (s *SpawnStmt) stmtNode()           {}
-
-type MatchStmt struct {
-	At       SourceLocation
-	Expr     Expr
-	Arms     []MatchArm
-	EnumName string
-}
-
-type MatchArm struct {
-	At       SourceLocation
-	Variant  string
-	Bindings []string
-	Body     Stmt
-}
-
-func (s *MatchStmt) Loc() SourceLocation { return s.At }
-func (s *MatchStmt) stmtNode()           {}
-
-type SelectCase struct {
-	At       SourceLocation
-	VarName  string
-	Chan     Expr
-	ChanElem UbeType
-	Body     *BlockStmt
-}
-
-type SelectStmt struct {
-	At      SourceLocation
-	Cases   []SelectCase
-	Default *BlockStmt
-}
-
-func (s *SelectStmt) Loc() SourceLocation { return s.At }
-func (s *SelectStmt) stmtNode()           {}
-
-type ExprStmt struct {
-	At   SourceLocation
-	Expr Expr
-}
-
-func (s *ExprStmt) Loc() SourceLocation { return s.At }
-func (s *ExprStmt) stmtNode()           {}
-
-type DeferStmt struct {
-	At   SourceLocation
-	Call Expr
-}
-
-func (s *DeferStmt) Loc() SourceLocation { return s.At }
-func (s *DeferStmt) stmtNode()           {}
-
-// Top-Level Declarations
-type Decl interface {
-	Node
-	declNode()
-}
-
-type ImportDecl struct {
-	At    SourceLocation
-	Path  string
-	Alias string
-}
-
-func (d *ImportDecl) Loc() SourceLocation { return d.At }
-func (d *ImportDecl) declNode()           {}
-
-type TypeParam struct {
-	Name       string
-	Constraint string
-}
-
-type StructDecl struct {
-	At         SourceLocation
-	Name       string
-	IsPub      bool
-	TypeParams []TypeParam
-	Fields     []FieldDecl
-}
-
-type FieldDecl struct {
-	Name      string
-	Type      UbeType
-	IsMut     bool
-	IsPub     bool
-	Anonymous bool
-	Tag       string
-}
-
-func (d *StructDecl) Loc() SourceLocation { return d.At }
-func (d *StructDecl) declNode()           {}
-
-type EnumDecl struct {
-	At       SourceLocation
-	Name     string
-	IsPub    bool
-	Variants []VariantDecl
-}
-
-type VariantDecl struct {
-	Name  string
-	Types []UbeType
-}
-
-func (d *EnumDecl) Loc() SourceLocation { return d.At }
-func (d *EnumDecl) declNode()           {}
-
-type TraitDecl struct {
-	At          SourceLocation
-	Name        string
-	IsPub       bool
-	Supertraits []string
-	Methods     []TraitMethodDecl
-}
-
-type TraitMethodDecl struct {
-	At      SourceLocation
-	Name    string
-	Params  []FieldDecl
-	RetType UbeType
-}
-
-func (d *TraitDecl) Loc() SourceLocation { return d.At }
-func (d *TraitDecl) declNode()           {}
-
-type FnDecl struct {
-	At         SourceLocation
-	Name       string
-	IsPub      bool
-	TypeParams []TypeParam
-	Receiver   *FieldDecl
-	Params     []FieldDecl
-	RetType    UbeType
-	Body       *BlockStmt
-}
-
-func (d *FnDecl) Loc() SourceLocation { return d.At }
-func (d *FnDecl) declNode()           {}
-
-type ExternFnDecl struct {
-	At      SourceLocation
-	Name    string
-	Module  string
-	IsPub   bool
-	Params  []FieldDecl
-	RetType UbeType
-}
-
-func (d *ExternFnDecl) Loc() SourceLocation { return d.At }
-func (d *ExternFnDecl) declNode()           {}
-
-type Program struct {
-	At    SourceLocation
-	Decls []Decl
-	// ModuleAliases maps a source-level module qualifier (for example "math"
-	// in `import "std/math" as math`) to the internal name prefix used for
-	// that module's declarations. An unaliased import maps its module base
-	// name to "" so both `foo()` and `mod.foo()` remain usable.
-	ModuleAliases map[string]string
-}
-
-func (p *Program) Loc() SourceLocation { return p.At }

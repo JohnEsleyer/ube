@@ -77,7 +77,7 @@ Instead, Ube exists for developers who want:
 
 Ube targets WebAssembly. Every Ube program that ships ends up as a `.wasm` module (or, for `--html`, a browser-loadable WebAssembly bundle). There are, however, **two compilation backends**, and it's worth being precise about which one you get.
 
-### The Two Backends
+### The Single Backend: Direct WebAssembly Emission
 
 ```
                       ┌──────────────────────┐
@@ -86,75 +86,40 @@ Ube targets WebAssembly. Every Ube program that ships ends up as a `.wasm` modul
                                  │
                      Parse, Monomorphize, Typecheck
                                  │
-             ┌───────────────────┴───────────────────┐
-             ▼                                       ▼
-   ┌─────────────────────┐               ┌─────────────────────────────┐
-   │  BACKEND A          │               │  BACKEND B                  │
-   │  Direct Wasm Emitter│               │  C Transpiler               │
-   │  (wasm_emit.go)     │               │  (codegen*.go → ube_runtime.h)│
-   │                     │               │                             │
-   │  No toolchain needed│               │  Requires one of:           │
-   │  Sub-millisecond    │               │    clang --target=wasm32-wasi│
-   │                     │               │    zig cc -target wasm32-wasi│
-   │                     │               │    emcc                     │
-   └──────────┬──────────┘               └──────────────┬──────────────┘
-              │                                          │
-              ▼                                          ▼
-        output.wasm                              output.wasm / output.html
-              │                                          │
-              └──────────────────┬───────────────────────┘
                                  ▼
-                 Executed via Embedded Wasmtime JIT
-                     (Zero external binaries needed to *run*)
+   ┌─────────────────────────────────────────────────────────┐
+   │  Direct Wasm Emitter (wasm_emit.go)                     │
+   │                                                         │
+   │  No external toolchain needed                           │
+   │  Handles the complete Ube language                      │
+   │  Sub-millisecond compile times                          │
+   └──────────┬──────────────────────────────────────────────┘
+              │
+              ▼
+        output.wasm
+              │
+              ▼
+  Executed via Embedded Wasmtime JIT
+  (Zero external binaries needed to *run*)
 ```
 
-**Backend A — the Direct Wasm Emitter** (`pkg/compiler/wasm_emit.go`):
-Handles a restricted but growing subset of the language (arithmetic, control flow, functions, structs, fixed arrays, dynamic slices, string literals, methods, bitwise ops). Emits raw `.wasm` bytes directly from the AST in memory. Requires **no external toolchain** — no clang, zig, or emcc.
+Ube now has a **single compilation backend** that emits WebAssembly bytecode directly from the AST. This fulfills the language's core promise: **100% WebAssembly, zero external toolchains.** The old C transpiler has been retired.
 
-**Backend B — the C Transpiler** (`pkg/compiler/codegen*.go` → `runtime/ube_runtime.h` → clang/zig/emcc):
-Handles the **full language**, including every advanced runtime feature. Emits C that links against `ube_runtime.h` (which implements arenas, channels, cooperative fibers, generational pools, string builders), then invokes whichever of `clang`, `zig cc`, or `emcc` is available on the host. If none are available, it can also build a **native C binary** so you're never blocked from running your code.
+This emitter supports the **entire Ube language**, including advanced features. There is no fallback, and no C toolchain is required for any feature.
 
-### What Requires a C Toolchain Today
+| Language feature | Status |
+| :--- | :---: |
+| Arithmetic, loops, `if`/`else`, `match` | ✅ |
+| Functions, methods, structs, enums, fixed arrays, dynamic slices | ✅ |
+| Generics (monomorphized) | ✅ |
+| **Traits (dynamic dispatch / vtables)** | ✅ |
+| **`spawn` (cooperative fibers)** | ✅ |
+| **`Chan[T]` (channel concurrency)** | ✅ |
+| **`select` (channel multiplexing)** | ✅ |
+| **`defer` statements** | ✅ |
+| **`Pool[T]` (generational entity pools)** | ✅ |
 
-The direct emitter refuses to handle the following constructs and automatically falls back to Backend B:
-
-| Language feature | Direct Wasm (Backend A) | C Transpile (Backend B) |
-| :--- | :---: | :---: |
-| Arithmetic, loops, `if`/`else`, `match` | ✅ | — |
-| Functions, methods, structs, enums, fixed arrays, dynamic slices | ✅ | — |
-| Generics (monomorphized) | ✅ | — |
-| **Traits (dynamic dispatch / vtables)** | ❌ | ✅ |
-| **`spawn` (cooperative fibers)** | ❌ | ✅ |
-| **`Chan[T]` (channel concurrency)** | ❌ | ✅ |
-| **`select` (channel multiplexing)** | ❌ | ✅ |
-| **`defer` statements** | ❌ | ✅ |
-| **`Pool[T]` (generational entity pools)** | ❌ | ✅ |
-| **`--html` (browser canvas bundling)** | ❌ | ✅ (via `emcc`) |
-| **`--emit-c` (inspect generated C)** | ❌ | ✅ |
-
-**If your program uses traits, `spawn`, channels, `select`, `defer`, or pools — you need `clang`, `zig`, or `emcc` on your PATH.** This is expected to change (see roadmap below). We would rather be honest about this today than ship a language that quietly fails.
-
-### The Roadmap to a Pure Wasm Backend
-
-Closing the gap between Backend A and Backend B is a top priority. The plan is ordered by user impact ÷ implementation cost:
-
-| Stage | Feature | Status | Notes |
-| :--- | :--- | :---: | :--- |
-| **P0** | `defer` | Planned | Desugars to cleanup blocks at every return path; the typechecker already tracks defer scopes. |
-| **P0** | `Pool[T]` | Planned | Linear-memory bookkeeping; high game-dev impact. |
-| **P1** | Traits (static dispatch) | Planned | Monomorphization already exists; static calls lower to direct calls. |
-| **P1** | `spawn` + `Chan[T]` | Planned | A **Wasm-native cooperative scheduler** using linear memory for fiber stacks and `call_indirect` for entry points — not a port of the C `setjmp`-based scheduler. |
-| **P2** | `select` | Planned | Falls out naturally once channels are Wasm-native. |
-| **P2** | Traits (dynamic dispatch) | Planned | Vtables as `{fn_table_ptr, data_ptr}` fat pointers in linear memory. |
-| **P3** | `--html` | Planned | Direct Wasm + a thin JS host import layer; smaller bundles than emcc, auditable imports. |
-
-**The end state is a single backend that emits all of Ube directly to Wasm bytecode.** The C transpiler will be retained as a **conformance oracle** in the test suite (both backends must produce identical observable program output) but will not be required to build or run any Ube program.
-
-Until that lands, we recommend:
-
-- Running `ube check --backend` to see **which backend your program will use** before you build.
-- Using `ube build --require-direct` in CI if you want to assert your program stays on the direct Wasm path.
-- Filing an issue if a feature you need is unexpectedly on Backend B.
+Building for the web (`--html`) is a deployment target that bundles your `.wasm` file with a JavaScript host layer. This process may use external tools like Emscripten, but the language itself no longer relies on them for compilation.
 
 ---
 

@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -13,7 +12,7 @@ import (
 )
 
 // runTests discovers Ube test files (and test_* functions inside them),
-// compiles each test into a temporary harness, and reports timing and status.
+// compiles each test directly to Wasm, and executes via embedded Wasmtime.
 func runTests(args []string) error {
 	target := "."
 	runPattern := ""
@@ -161,8 +160,8 @@ func hasMain(prog *compiler.Program) bool {
 	return false
 }
 
-// runCompiledTest loads the file fresh, optionally injects a harness main that
-// invokes a single test_ function, then builds and executes it.
+// runCompiledTest loads the file fresh, optionally injects a harness main,
+// compiles directly to Wasm bytecode, and executes via Wasmtime.
 func runCompiledTest(file, testName string) (bool, time.Duration, string) {
 	ast, _, err := loadAndCheck(file)
 	if err != nil {
@@ -182,31 +181,16 @@ func runCompiledTest(file, testName string) (bool, time.Duration, string) {
 	defer os.RemoveAll(dir)
 
 	wasmPath := filepath.Join(dir, "test.wasm")
-	cPath := filepath.Join(dir, "test.c")
-
-	wasmBuilt := false
-	if wasmBytes, emitErr := compiler.EmitWasm(ast); emitErr == nil {
-		if err := os.WriteFile(wasmPath, wasmBytes, 0755); err == nil {
-			wasmBuilt = true
-		}
+	wasmBytes, emitErr := compiler.EmitWasm(ast)
+	if emitErr != nil {
+		return false, 0, emitErr.Error()
 	}
-	if !wasmBuilt {
-		var err error
-		wasmBuilt, err = compileWasm(ast, cPath, wasmPath, false)
-		if err != nil {
-			return false, 0, err.Error()
-		}
+	if err := os.WriteFile(wasmPath, wasmBytes, 0755); err != nil {
+		return false, 0, err.Error()
 	}
 
 	start := time.Now()
-	var out string
-	if wasmBuilt {
-		out, err = runWasmCapture(wasmPath, nil)
-	} else {
-		var outBytes []byte
-		outBytes, err = exec.Command(wasmPath).CombinedOutput()
-		out = string(outBytes)
-	}
+	out, err := runWasmCapture(wasmPath, nil)
 	duration := time.Since(start).Round(time.Millisecond)
 	if err != nil {
 		return false, duration, out + "\n" + err.Error()

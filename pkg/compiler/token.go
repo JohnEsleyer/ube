@@ -94,18 +94,12 @@ const (
 	TokenRBracket TokenType = "]"
 )
 
-type SourceLocation struct {
-	File string
-	Line int
-	Col  int
-}
-
-func (s SourceLocation) String() string {
-	return fmt.Sprintf("%s:%d:%d", s.File, s.Line, s.Col)
-}
-
 type Token struct {
 	Type TokenType
 	Val  string
 	Loc  SourceLocation
+}
+
+func (t Token) String() string {
+	return fmt.Sprintf("%s(%s) at %s", t.Type, t.Val, t.Loc)
 }
