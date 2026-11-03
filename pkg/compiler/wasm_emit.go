@@ -7,9 +7,256 @@ import (
 	"math"
 )
 
+// DirectWasmSupport audits whether prog can be compiled directly to WebAssembly
+// bytecode. If it uses complex runtime features not yet implemented in the direct
+// assembler (green fiber scheduler, channels, dynamic trait vtables, regional arenas),
+// it returns false and the specific feature name so the caller can trigger the transparent
+// C/wasm32 fallback.
+func DirectWasmSupport(prog *Program) (bool, string) {
+	for _, decl := range prog.Decls {
+		switch d := decl.(type) {
+		case *TraitDecl:
+			return false, "dynamic trait dispatch (vtables)"
+		case *FnDecl:
+			if reason := checkTypeSupport(d.RetType); reason != "" {
+				return false, reason
+			}
+			for _, p := range d.Params {
+				if reason := checkTypeSupport(p.Type); reason != "" {
+					return false, reason
+				}
+			}
+			if d.Body != nil {
+				if reason := checkBlockSupport(d.Body); reason != "" {
+					return false, reason
+				}
+			}
+		}
+	}
+	return true, ""
+}
+
+func checkTypeSupport(t UbeType) string {
+	if t == nil {
+		return ""
+	}
+	switch t := t.(type) {
+	case ChanType:
+		return "channel concurrency (Chan[T])"
+	case PoolType:
+		return "generational entity pool (Pool[T])"
+	case TraitType:
+		return "dynamic trait dispatch (vtables)"
+	case SliceType:
+		return checkTypeSupport(t.Elem)
+	case ArrayType:
+		return checkTypeSupport(t.Elem)
+	case OptionalType:
+		return checkTypeSupport(t.Inner)
+	case ResultType:
+		if r := checkTypeSupport(t.Ok); r != "" {
+			return r
+		}
+		return checkTypeSupport(t.Err)
+	}
+	return ""
+}
+
+func checkBlockSupport(b *BlockStmt) string {
+	if b == nil {
+		return ""
+	}
+	for _, st := range b.Stmts {
+		if reason := checkStmtSupport(st); reason != "" {
+			return reason
+		}
+	}
+	return ""
+}
+
+func checkStmtSupport(st Stmt) string {
+	if st == nil {
+		return ""
+	}
+	switch s := st.(type) {
+	case *SpawnStmt:
+		return "green fibers (spawn)"
+	case *SelectStmt:
+		return "channel multiplexing (select)"
+	case *DeferStmt:
+		return "defer statements"
+	case *ArenaStmt:
+		return checkBlockSupport(s.Body)
+	case *BlockStmt:
+		return checkBlockSupport(s)
+	case *IfStmt:
+		if r := checkExprSupport(s.Cond); r != "" {
+			return r
+		}
+		if r := checkBlockSupport(s.Then); r != "" {
+			return r
+		}
+		if s.Else != nil {
+			return checkStmtSupport(s.Else)
+		}
+	case *IfLetStmt:
+		if r := checkExprSupport(s.Expr); r != "" {
+			return r
+		}
+		if r := checkBlockSupport(s.Then); r != "" {
+			return r
+		}
+		if s.Else != nil {
+			return checkStmtSupport(s.Else)
+		}
+	case *WhileStmt:
+		if r := checkExprSupport(s.Cond); r != "" {
+			return r
+		}
+		return checkBlockSupport(s.Body)
+	case *WhileLetStmt:
+		if r := checkExprSupport(s.Call); r != "" {
+			return r
+		}
+		return checkBlockSupport(s.Body)
+	case *ForStmt:
+		if r := checkExprSupport(s.Iter); r != "" {
+			return r
+		}
+		return checkBlockSupport(s.Body)
+	case *MatchStmt:
+		if r := checkExprSupport(s.Expr); r != "" {
+			return r
+		}
+		for _, arm := range s.Arms {
+			if r := checkStmtSupport(arm.Body); r != "" {
+				return r
+			}
+		}
+	case *LetStmt:
+		if r := checkTypeSupport(s.Type); r != "" {
+			return r
+		}
+		if s.Value != nil {
+			return checkExprSupport(s.Value)
+		}
+	case *AssignStmt:
+		if r := checkExprSupport(s.LHS); r != "" {
+			return r
+		}
+		return checkExprSupport(s.RHS)
+	case *ReturnStmt:
+		if s.Value != nil {
+			return checkExprSupport(s.Value)
+		}
+	case *ExprStmt:
+		return checkExprSupport(s.Expr)
+	}
+	return ""
+}
+
+func checkExprSupport(ex Expr) string {
+	if ex == nil {
+		return ""
+	}
+	switch e := ex.(type) {
+	case *ArenaExpr:
+		return checkBlockSupport(e.Body)
+	case *PromoteExpr:
+		return checkExprSupport(e.Value)
+	case *TraitCoerceExpr:
+		return "dynamic trait dispatch (vtables)"
+	case *BinaryExpr:
+		if r := checkExprSupport(e.Left); r != "" {
+			return r
+		}
+		return checkExprSupport(e.Right)
+	case *UnaryExpr:
+		return checkExprSupport(e.Operand)
+	case *CallExpr:
+		if e.TraitName != "" {
+			return "dynamic trait dispatch (vtables)"
+		}
+		if r := checkExprSupport(e.Callee); r != "" {
+			return r
+		}
+		for _, arg := range e.Args {
+			if r := checkExprSupport(arg); r != "" {
+				return r
+			}
+		}
+	case *MemberExpr:
+		return checkExprSupport(e.Target)
+	case *IndexExpr:
+		if r := checkExprSupport(e.Target); r != "" {
+			return r
+		}
+		return checkExprSupport(e.Index)
+	case *SliceSubExpr:
+		if r := checkExprSupport(e.Target); r != "" {
+			return r
+		}
+		if e.Start != nil {
+			if r := checkExprSupport(e.Start); r != "" {
+				return r
+			}
+		}
+		if e.End != nil {
+			if r := checkExprSupport(e.End); r != "" {
+				return r
+			}
+		}
+	case *StructInitExpr:
+		for _, f := range e.Fields {
+			if r := checkExprSupport(f.Val); r != "" {
+				return r
+			}
+		}
+	case *SliceInitExpr:
+		for _, el := range e.Elements {
+			if r := checkExprSupport(el); r != "" {
+				return r
+			}
+		}
+	case *ArrayInitExpr:
+		for _, el := range e.Elements {
+			if r := checkExprSupport(el); r != "" {
+				return r
+			}
+		}
+	case *TryExpr:
+		return checkExprSupport(e.Operand)
+	case *OrElseExpr:
+		if r := checkExprSupport(e.Primary); r != "" {
+			return r
+		}
+		return checkExprSupport(e.Fallback)
+	case *ErrorExpr:
+		return checkExprSupport(e.Arg)
+	case *InterpolatedStringExpr:
+		for _, p := range e.Parts {
+			if r := checkExprSupport(p); r != "" {
+				return r
+			}
+		}
+	case *TupleExpr:
+		for _, el := range e.Elems {
+			if r := checkExprSupport(el); r != "" {
+				return r
+			}
+		}
+	}
+	return ""
+}
+
 // EmitWasm compiles an AST program directly into WebAssembly binary bytecode (.wasm)
-// without requiring Clang, Zig, or any intermediate C compiler.
+// without requiring Clang, Zig, or any intermediate C compiler. If the program requires
+// complex runtime features (concurrency, vtables, arenas), it returns an error so the caller
+// can trigger the transparent C/wasm32 fallback.
 func EmitWasm(prog *Program) ([]byte, error) {
+	if supported, reason := DirectWasmSupport(prog); !supported {
+		return nil, fmt.Errorf("requires C/wasm32 fallback: %s", reason)
+	}
 	emitter := newWasmEmitter()
 	return emitter.compile(prog)
 }

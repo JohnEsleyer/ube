@@ -32,6 +32,7 @@ func build(args []string) error {
 	}
 
 	// 1. Direct WebAssembly Binary Emission (Instant, Zero C SDK dependency)
+	var fallbackReason string
 	if backend != "c" && !html && !emitC {
 		if wasmBytes, emitErr := compiler.EmitWasm(ast); emitErr == nil {
 			if writeErr := os.WriteFile(output, wasmBytes, 0755); writeErr == nil {
@@ -40,6 +41,8 @@ func build(args []string) error {
 				printPurity(report)
 				return nil
 			}
+		} else {
+			fallbackReason = emitErr.Error()
 		}
 	}
 
@@ -51,7 +54,7 @@ func build(args []string) error {
 		defer os.Remove(cPath)
 	}
 
-	wasmOutput, err := compileWasm(ast, cPath, output, html)
+	wasmOutput, toolUsed, err := compileWasmWithTool(ast, cPath, output, html)
 	if err != nil {
 		return err
 	}
@@ -61,6 +64,12 @@ func build(args []string) error {
 		label = "✓ Built WebAssembly web app"
 	case !wasmOutput:
 		label = "✓ Built native fallback"
+	case toolUsed != "":
+		if fallbackReason != "" {
+			label = fmt.Sprintf("✓ Built Wasm module (%s fallback)", toolUsed)
+		} else {
+			label = fmt.Sprintf("✓ Built Wasm module (%s)", toolUsed)
+		}
 	}
 	fmt.Printf("%s %s (%s)\n", paint(label, colorGreen), output, paint(time.Since(start).Round(time.Millisecond).String(), colorDim))
 	printPurity(report)
@@ -117,32 +126,37 @@ func parseBuildArgs(args []string) (string, string, string, bool, bool, error) {
 // to a native C build so development can continue; the boolean reports whether
 // the final artifact is actually WebAssembly.
 func compileWasm(ast *compiler.Program, cPath, output string, html bool) (bool, error) {
+	ok, _, err := compileWasmWithTool(ast, cPath, output, html)
+	return ok, err
+}
+
+func compileWasmWithTool(ast *compiler.Program, cPath, output string, html bool) (bool, string, error) {
 	if !html {
 		if wasmBytes, emitErr := compiler.EmitWasm(ast); emitErr == nil {
 			if writeErr := os.WriteFile(output, wasmBytes, 0755); writeErr == nil {
-				return true, nil
+				return true, "direct", nil
 			}
 		}
 	}
 	if err := os.WriteFile(cPath, []byte(compiler.NewGenerator(ast).Generate()), 0644); err != nil {
-		return false, err
+		return false, "", err
 	}
 	runtimeDir, err := ubert.EnsureRuntime()
 	if err != nil {
-		return false, fmt.Errorf("initialize runtime header: %w", err)
+		return false, "", fmt.Errorf("initialize runtime header: %w", err)
 	}
 	_ = os.Remove(output)
 
 	if html {
 		emcc, err := exec.LookPath("emcc")
 		if err != nil {
-			return false, fmt.Errorf("emcc (Emscripten) is required to build HTML canvas outputs")
+			return false, "", fmt.Errorf("emcc (Emscripten) is required to build HTML canvas outputs")
 		}
 		cmdArgs := []string{"-O2", "-I" + runtimeDir, cPath, "-o", output, "-sWASM=1", "-sEXIT_RUNTIME=1"}
 		if out, e := exec.Command(emcc, cmdArgs...).CombinedOutput(); e != nil {
-			return false, fmt.Errorf("HTML Wasm build failed:\n%s", strings.TrimSpace(string(out)))
+			return false, "", fmt.Errorf("HTML Wasm build failed:\n%s", strings.TrimSpace(string(out)))
 		}
-		return true, nil
+		return true, "emcc", nil
 	}
 
 	// 1. clang can drive wasm-ld directly when a WASI sysroot is installed.
@@ -151,7 +165,7 @@ func compileWasm(ast *compiler.Program, cPath, output string, html bool) (bool, 
 			cmdArgs := []string{"--target=" + target, "-O2", "-I" + runtimeDir, cPath, "-o", output, "-lm"}
 			if out, e := exec.Command(clang, cmdArgs...).CombinedOutput(); e == nil {
 				if fileNonEmpty(output) {
-					return true, nil
+					return true, "clang/wasm32-wasi", nil
 				}
 			} else if strings.Contains(string(out), "unknown target") {
 				continue
@@ -162,33 +176,29 @@ func compileWasm(ast *compiler.Program, cPath, output string, html bool) (bool, 
 	// 2. zig cc provides a self-contained wasm32-wasi toolchain.
 	if zig, err := exec.LookPath("zig"); err == nil {
 		cmdArgs := []string{"cc", "-target", "wasm32-wasi", "-O2", "-I" + runtimeDir, cPath, "-o", output, "-lm"}
-		if out, e := exec.Command(zig, cmdArgs...).CombinedOutput(); e == nil {
+		if _, e := exec.Command(zig, cmdArgs...).CombinedOutput(); e == nil {
 			if fileNonEmpty(output) {
-				return true, nil
+				return true, "zig/wasm32-wasi", nil
 			}
-		} else {
-			_ = out
 		}
 	}
 
 	// 3. emcc can emit a standalone Wasm module as well.
 	if emcc, err := exec.LookPath("emcc"); err == nil {
 		cmdArgs := []string{"-O2", "-I" + runtimeDir, cPath, "-o", output, "-sSTANDALONE_WASM=1", "-sEXIT_RUNTIME=1"}
-		if out, e := exec.Command(emcc, cmdArgs...).CombinedOutput(); e == nil {
+		if _, e := exec.Command(emcc, cmdArgs...).CombinedOutput(); e == nil {
 			if fileNonEmpty(output) {
-				return true, nil
+				return true, "emcc", nil
 			}
-		} else {
-			_ = out
 		}
 	}
 
 	// 4. Native C fallback keeps `ube build` and `ube run` usable without a
 	// Wasm SDK. The artifact is a normal host executable.
 	if err := compileNative(ast, cPath, output, true, false); err != nil {
-		return false, err
+		return false, "", err
 	}
-	return false, nil
+	return false, "", nil
 }
 
 func fileNonEmpty(path string) bool {
