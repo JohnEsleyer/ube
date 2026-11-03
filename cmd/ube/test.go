@@ -181,19 +181,37 @@ func runCompiledTest(file, testName string) (bool, time.Duration, string) {
 	}
 	defer os.RemoveAll(dir)
 
+	wasmPath := filepath.Join(dir, "test.wasm")
 	cPath := filepath.Join(dir, "test.c")
-	binPath := filepath.Join(dir, "test-bin")
-	if err := compileNative(ast, cPath, binPath, false, false); err != nil {
-		return false, 0, err.Error()
+
+	wasmBuilt := false
+	if wasmBytes, emitErr := compiler.EmitWasm(ast); emitErr == nil {
+		if err := os.WriteFile(wasmPath, wasmBytes, 0755); err == nil {
+			wasmBuilt = true
+		}
+	}
+	if !wasmBuilt {
+		var err error
+		wasmBuilt, err = compileWasm(ast, cPath, wasmPath, false)
+		if err != nil {
+			return false, 0, err.Error()
+		}
 	}
 
 	start := time.Now()
-	out, err := exec.Command(binPath).CombinedOutput()
+	var out string
+	if wasmBuilt {
+		out, err = runWasmCapture(wasmPath, nil)
+	} else {
+		var outBytes []byte
+		outBytes, err = exec.Command(wasmPath).CombinedOutput()
+		out = string(outBytes)
+	}
 	duration := time.Since(start).Round(time.Millisecond)
 	if err != nil {
-		return false, duration, string(out) + "\n" + err.Error()
+		return false, duration, out + "\n" + err.Error()
 	}
-	return true, duration, string(out)
+	return true, duration, out
 }
 
 func injectTestHarness(prog *compiler.Program, testName string) {

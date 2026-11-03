@@ -88,10 +88,14 @@ func parseBuildArgs(args []string) (string, string, string, bool, bool, error) {
 			backend = "wasm"
 		case args[i] == "--backend=wasm" || (args[i] == "--backend" && i+1 < len(args) && args[i+1] == "wasm"):
 			backend = "wasm"
-			if args[i] == "--backend" { i++ }
+			if args[i] == "--backend" {
+				i++
+			}
 		case args[i] == "--backend=c" || (args[i] == "--backend" && i+1 < len(args) && args[i+1] == "c"):
 			backend = "c"
-			if args[i] == "--backend" { i++ }
+			if args[i] == "--backend" {
+				i++
+			}
 		default:
 			if strings.HasPrefix(args[i], "-") {
 				return "", "", "", false, false, fmt.Errorf("unknown build option %s", args[i])
@@ -113,6 +117,13 @@ func parseBuildArgs(args []string) (string, string, string, bool, bool, error) {
 // to a native C build so development can continue; the boolean reports whether
 // the final artifact is actually WebAssembly.
 func compileWasm(ast *compiler.Program, cPath, output string, html bool) (bool, error) {
+	if !html {
+		if wasmBytes, emitErr := compiler.EmitWasm(ast); emitErr == nil {
+			if writeErr := os.WriteFile(output, wasmBytes, 0755); writeErr == nil {
+				return true, nil
+			}
+		}
+	}
 	if err := os.WriteFile(cPath, []byte(compiler.NewGenerator(ast).Generate()), 0644); err != nil {
 		return false, err
 	}

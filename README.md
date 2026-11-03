@@ -268,9 +268,9 @@ fn main() {
 | `ube doc` | `ube doc main.ube` | Generates documentation for public exports. |
 | `ube lsp` | `ube lsp` | Starts the Language Server Protocol. |
 
-> The compiler prefers `clang --target=wasm32-wasi`, `zig cc -target wasm32-wasi`,
-> or `emcc`. If no Wasm SDK is installed, `ube build` and `ube run` fall back to
-> a native C host executable so development can continue.
+> The compiler prioritizes direct WebAssembly binary emission with zero external C SDK
+> dependencies. It also supports `clang --target=wasm32-wasi`, `zig cc -target wasm32-wasi`,
+> or `emcc` for advanced HTML canvas outputs.
 >
 > `ube run` uses the **embedded [Wasmtime](https://wasmtime.dev) runtime** (Cranelift JIT) to execute
 > Wasm modules directly inside the `ube` process — no external `wasmtime` binary required.

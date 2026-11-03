@@ -20,6 +20,9 @@ ube_*_chk
 # Object files
 *.o
 
+# Wasm files
+*.wasm
+
 # Python bytecode
 __pycache__/
 *.pyc

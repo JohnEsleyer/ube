@@ -160,6 +160,80 @@ func runWasmtimeInProcess(wasmPath string, programArgs []string) error {
 	return nil
 }
 
+func runWasmtimeCapture(wasmPath string, programArgs []string) (string, error) {
+	engine := wasmtime.NewEngine()
+	store := wasmtime.NewStore(engine)
+
+	outPath := filepath.Join(os.TempDir(), fmt.Sprintf("ube-wasm-out-%d.tmp", time.Now().UnixNano()))
+	defer os.Remove(outPath)
+	if err := os.WriteFile(outPath, nil, 0644); err != nil {
+		return "", err
+	}
+
+	wasiConfig := wasmtime.NewWasiConfig()
+	wasiConfig.InheritEnv()
+	if err := wasiConfig.SetStdoutFile(outPath); err != nil {
+		return "", err
+	}
+	if err := wasiConfig.SetStderrFile(outPath); err != nil {
+		return "", err
+	}
+	wasiConfig.SetArgv(append([]string{filepath.Base(wasmPath)}, programArgs...))
+	store.SetWasi(wasiConfig)
+
+	linker := wasmtime.NewLinker(engine)
+	if err := linker.DefineWasi(); err != nil {
+		return "", fmt.Errorf("wasmtime define wasi: %w", err)
+	}
+
+	module, err := wasmtime.NewModuleFromFile(engine, wasmPath)
+	if err != nil {
+		return "", fmt.Errorf("wasmtime compile module: %w", err)
+	}
+
+	instance, err := linker.Instantiate(store, module)
+	if err != nil {
+		return "", fmt.Errorf("wasmtime instantiate: %w", err)
+	}
+
+	entry := instance.GetFunc(store, "_start")
+	if entry == nil {
+		return "", errors.New("wasm module does not export entrypoint '_start'")
+	}
+
+	_, callErr := entry.Call(store)
+	outBytes, _ := os.ReadFile(outPath)
+	outStr := string(outBytes)
+
+	if callErr != nil {
+		var wasmErr *wasmtime.Error
+		if errors.As(callErr, &wasmErr) {
+			if code, ok := wasmErr.ExitStatus(); ok {
+				if code == 0 {
+					return outStr, nil
+				}
+				return outStr, exitCodeError{code: int(code)}
+			}
+		}
+		return outStr, fmt.Errorf("wasm execution error: %w", callErr)
+	}
+	return outStr, nil
+}
+
+func runWasmCapture(wasmPath string, programArgs []string) (string, error) {
+	if out, err := runWasmtimeCapture(wasmPath, programArgs); err == nil {
+		return out, nil
+	} else if out != "" {
+		return out, err
+	}
+	if cmd, cmdErr := wasmRuntimeCommand(wasmPath, programArgs); cmdErr == nil {
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	out, err := exec.Command(wasmPath, programArgs...).CombinedOutput()
+	return string(out), err
+}
+
 // wasmRuntimeCommand returns an exec.Cmd that runs wasmPath using an external
 // Wasm runtime found on PATH. It is kept as a fallback in case the in-process
 // Wasmtime runner encounters an error.
