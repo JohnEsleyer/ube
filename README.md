@@ -1,4 +1,3 @@
-
 <div align="center">
 
 <img src="editors/vscode/icons/ube.svg" width="128" height="128" alt="Ube Logo">
@@ -6,27 +5,24 @@
 # The Ube Programming Language
 
 **The sweet, grounded language for games, apps, and high-throughput backends.**  
-*WebAssembly-first &bull; Fully Sandboxed &bull; Zero GC &bull; Clean like Go*
+*100% WebAssembly Native &bull; Zero External Toolchains &bull; Zero GC &bull; Clean like Go*
 
-[![Version](https://img.shields.io/badge/version-0.9.0-9333ea.svg)](https://github.com/JohnEsleyer/ube/releases)
+[![Version](https://img.shields.io/badge/version-1.0.0-9333ea.svg)](https://github.com/JohnEsleyer/ube/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Target](https://img.shields.io/badge/target-wasm32--wasi-654ff0.svg)](https://wasi.dev)
-[![Runtime](https://img.shields.io/badge/runtime-embedded%20wasmtime-orange.svg)](https://wasmtime.dev)
+[![Architecture](https://img.shields.io/badge/architecture-direct%20wasm%20binary-9333ea.svg)](https://github.com/JohnEsleyer/ube)
 
 </div>
 
 ---
 
-## 🍠 Table of Contents
+## Table of Contents
 
-- [The Ube Philosophy](#-the-ube-philosophy)
-- [Compilation Model: What Actually Happens](#-compilation-model-what-actually-happens)
-  - [The Two Backends](#the-two-backends)
-  - [What Requires a C Toolchain Today](#what-requires-a-c-toolchain-today)
-  - [The Roadmap to a Pure Wasm Backend](#the-roadmap-to-a-pure-wasm-backend)
-- [Memory Architecture: Zero GC, Zero Pauses](#-memory-architecture-zero-gc-zero-pauses)
-- [Installation & Toolchain](#-installation--toolchain)
-- [Language Tour & Syntax Reference](#-language-tour--syntax-reference)
+- [The Ube Philosophy](#the-ube-philosophy)
+- [Direct WebAssembly Architecture](#direct-webassembly-architecture)
+- [Memory Architecture: Zero GC, Zero Pauses](#memory-architecture-zero-gc-zero-pauses)
+- [Installation & Toolchain](#installation--toolchain)
+- [Language Tour & Syntax Reference](#language-tour--syntax-reference)
   - [1. Variables, Mutability & Types](#1-variables-mutability--types)
   - [2. Affine Move Semantics (Ownership)](#2-affine-move-semantics-ownership)
   - [3. Functions, Receivers & Methods](#3-functions-receivers--methods)
@@ -41,22 +37,20 @@
   - [12. Generics & Trait Bounds](#12-generics--trait-bounds)
   - [13. Traits & Dynamic Dispatch (Fat Pointers)](#13-traits--dynamic-dispatch-fat-pointers)
   - [14. Sandboxed Host Imports (`extern fn`)](#14-sandboxed-host-imports-extern-fn)
-- [Standard Library & Module System](#-standard-library--module-system)
-- [Developer CLI Toolchain](#-developer-cli-toolchain)
-- [Native AI Pipeline (`ube sig / load / patch`)](#-native-ai-pipeline-ube-sig--load--patch)
-- [Editor Integration (VS Code & LSP)](#-editor-integration-vs-code--lsp)
-- [Running the Test Suite](#-running-the-test-suite)
-- [License](#-license)
+- [Standard Library & Module System](#standard-library--module-system)
+- [Developer CLI Toolchain](#developer-cli-toolchain)
+- [Native AI Pipeline (`ube sig / load / patch`)](#native-ai-pipeline-ube-sig--load--patch)
+- [Editor Integration (VS Code & LSP)](#editor-integration-vs-code--lsp)
+- [Running the Test Suite](#running-the-test-suite)
+- [License](#license)
 
 ---
 
-## 🍠 The Ube Philosophy
+## The Ube Philosophy
 
-Ube is a statically typed, memory-safe language engineered for a specific pragmatic domain: **interactive games, high-throughput backend services, desktop tools, and sandboxed plugins**.
+Ube is a statically typed, memory-safe language engineered for **interactive games, high-throughput backend services, desktop tools, and sandboxed plugins**.
 
-Ube is **not** a kernel or embedded hardware language. It does not manipulate CPU control registers, emit raw inline assembly, or expose raw pointers (`*T`). Those domains belong to C, C++, and Zig.
-
-Instead, Ube exists for developers who want:
+Ube compiles **directly to WebAssembly bytecode in single-digit milliseconds** with **zero external compiler toolchains** (no Clang, no LLVM, no Zig, no GCC, no Emscripten needed).
 
 * **The readability and concurrency model of Go** (`let`, `mut`, `spawn`, `Chan[T]`, `select`)
 * **The predictable latency and speed of C** (no garbage collection pauses, instant regional frees)
@@ -66,72 +60,64 @@ Instead, Ube exists for developers who want:
 | :--- | :--- | :--- | :--- | :--- |
 | **Garbage Collector** | Yes (runtime pauses) | None | None | **None (Zero GC)** |
 | **Lifetimes / Borrow Checker** | No | Yes (`'a`, complex) | No (manual free) | **No (Affine + Arenas)** |
+| **Compilation Toolchain** | Heavy Go runtime | Heavy LLVM | Clang / GCC | **Direct Wasm (1ms build)** |
 | **Raw Pointer Arithmetic** | Yes (`unsafe`) | Yes (`unsafe`) | Yes (standard) | **Permanently Forbidden** |
-| **Concurrency Safety** | Data races possible | Compile-time check | Unsafe manual | **Shared-Nothing Flat Data** |
 | **Execution Target** | OS Machine Code | OS Machine Code | OS Machine Code | **WebAssembly / WASI** |
 | **AI Patch Efficiency** | Verbose `if err != nil` | Lifetime friction | Header divergence | **Native `sig/load/patch` AST** |
 
 ---
 
-## 🛡️ Compilation Model: What Actually Happens
-
-Ube targets WebAssembly. Every Ube program that ships ends up as a `.wasm` module (or, for `--html`, a browser-loadable WebAssembly bundle). There are, however, **two compilation backends**, and it's worth being precise about which one you get.
-
-### The Single Backend: Direct WebAssembly Emission
+## Direct WebAssembly Architecture
 
 ```
                       ┌──────────────────────┐
                       │   .ube Source Code   │
                       └──────────┬───────────┘
                                  │
-                     Parse, Monomorphize, Typecheck
+                   Lex, Parse, Monomorphize, Typecheck
                                  │
                                  ▼
-   ┌─────────────────────────────────────────────────────────┐
-   │  Direct Wasm Emitter (wasm_emit.go)                     │
-   │                                                         │
-   │  No external toolchain needed                           │
-   │  Handles the complete Ube language                      │
-   │  Sub-millisecond compile times                          │
-   └──────────┬──────────────────────────────────────────────┘
-              │
-              ▼
-        output.wasm
-              │
-              ▼
-  Executed via Embedded Wasmtime JIT
-  (Zero external binaries needed to *run*)
+    ┌─────────────────────────────────────────────────────────┐
+    │  Pure Wasm Bytecode Emitter (pkg/wasm)                  │
+    │                                                         │
+    │  • 100% self-contained binary module builder            │
+    │  • Direct LEB128 opcode & section streaming             │
+    │  • 1ms to 5ms compile times                             │
+    │  • Zero external toolchains or headers                  │
+    └────────────────────────────┬────────────────────────────┘
+                                 │
+                                 ▼
+                            output.wasm
+                                 │
+                                 ▼
+                     WASI / Wasmtime Runtime
 ```
 
-Ube now has a **single compilation backend** that emits WebAssembly bytecode directly from the AST. This fulfills the language's core promise: **100% WebAssembly, zero external toolchains.** The old C transpiler has been retired.
+Every language construct compiles directly to Wasm bytecode instructions:
 
-This emitter supports the **entire Ube language**, including advanced features. There is no fallback, and no C toolchain is required for any feature.
-
-| Language feature | Status |
-| :--- | :---: |
-| Arithmetic, loops, `if`/`else`, `match` | ✅ |
-| Functions, methods, structs, enums, fixed arrays, dynamic slices | ✅ |
-| Generics (monomorphized) | ✅ |
-| **Traits (dynamic dispatch / vtables)** | ✅ |
-| **`spawn` (cooperative fibers)** | ✅ |
-| **`Chan[T]` (channel concurrency)** | ✅ |
-| **`select` (channel multiplexing)** | ✅ |
-| **`defer` statements** | ✅ |
-| **`Pool[T]` (generational entity pools)** | ✅ |
-
-Building for the web (`--html`) is a deployment target that bundles your `.wasm` file with a JavaScript host layer. This process may use external tools like Emscripten, but the language itself no longer relies on them for compilation.
+| Language Feature | Native WebAssembly Implementation | Status |
+| :--- | :--- | :---: |
+| Arithmetic & Bitwise | Direct Wasm numeric opcodes (`i32.add`, `i64.mul`, `f32.sub`, etc.) | ✅ |
+| Structured Control Flow | `block`, `loop`, `br`, `br_if`, `if/else` | ✅ |
+| Structs & Mut Receivers | Shadow stack & linear memory pointer offsets | ✅ |
+| Dynamic Slices (`[]T`) | Arena-backed fat pointer header `{ptr, len, cap}` | ✅ |
+| Regional Arenas (`arena`) | Global `__arena_pointer` recorded on entry & unwound on exit | ✅ |
+| Tagged Enums & Matching | Discriminant tag header + payload union + branch jump table | ✅ |
+| Monomorphized Generics | Specialization into concrete zero-overhead Wasm functions | ✅ |
+| Dynamic Trait Dispatch | Page 0 Vtables + fat pointer `{vtable_ptr, data_ptr}` + `call_indirect` | ✅ |
+| Optionals & Results | Discriminated memory wrappers `{has_val/is_ok, payload}` | ✅ |
 
 ---
 
-## 🧠 Memory Architecture: Zero GC, Zero Pauses
+## Memory Architecture: Zero GC, Zero Pauses
 
-Ube achieves zero-cost deterministic memory management through three layered tiers. This design is identical regardless of which backend compiles your program.
+Ube achieves zero-cost deterministic memory management through three layered tiers:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        TIER 1: STACK VALUES                            │
 │           Primitives (i32, f32, bool), Fixed-size Arrays ([N]T)        │
-│           Instant push/pop with function frame activation.             │
+│           Push/pop with function frame activation on Wasm stack.       │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │
 ┌───────────────────────────────────▼────────────────────────────────────┐
@@ -139,8 +125,7 @@ Ube achieves zero-cost deterministic memory management through three layered tie
 │       Dynamic Slices ([]T), String Concatenation, Scratch Buffers      │
 │       - Linear bump allocation: O(1) allocation cost.                  │
 │       - Scope exit: Reclaims entire scratch buffer in 1 CPU cycle.     │
-│       - Upward Invariant: Inner data escaping to outer scope must be    │
-│         promoted with explicit promote(value) deep-copy.               │
+│       - Upward Invariant: Escaping data is promoted via promote().     │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │
 ┌───────────────────────────────────▼────────────────────────────────────┐
@@ -153,7 +138,7 @@ Ube achieves zero-cost deterministic memory management through three layered tie
 
 ---
 
-## 📦 Installation & Toolchain
+## Installation & Toolchain
 
 ### Option 1: Automated Shell Installer (macOS & Linux)
 
@@ -161,31 +146,14 @@ Ube achieves zero-cost deterministic memory management through three layered tie
 curl -sSL https://raw.githubusercontent.com/JohnEsleyer/ube/main/install.sh | bash
 ```
 
-### Option 2: Build From Source (Requires Go 1.18+ and CGO)
+### Option 2: Build From Source (Requires Go 1.18+)
 
 ```sh
 git clone https://github.com/JohnEsleyer/ube.git
 cd ube
-CGO_ENABLED=1 go build -o bin/ube ./cmd/ube
+go build -o bin/ube ./cmd/ube
 sudo cp bin/ube /usr/local/bin/ube
 ```
-
-> **Why is `CGO_ENABLED=1` required?**
-> Ube embeds the native Wasmtime Cranelift JIT engine so you can *run* `.wasm` binaries immediately without external dependencies. Precompiled native libraries for Linux (x86_64, aarch64), macOS (Intel & Apple Silicon), and Windows (x86_64) are resolved automatically by `go build`.
-
-### Optional: C toolchain for advanced features
-
-If your program uses traits, `spawn`, channels, `select`, `defer`, or `Pool[T]`, or if you want `--html` output, you'll need **one** of:
-
-```sh
-# Easiest on macOS / Linux:
-brew install zig          # or: apt install clang
-
-# Or Emscripten for --html:
-# https://emscripten.org/docs/getting_started/downloads.html
-```
-
-The `ube` binary auto-detects whichever is available. If you don't have any of them, `ube run` will transparently fall back to a native C build using the system `cc`.
 
 Verify your installation:
 
@@ -195,7 +163,7 @@ ube version
 
 ---
 
-## 📖 Language Tour & Syntax Reference
+## Language Tour & Syntax Reference
 
 ### 1. Variables, Mutability & Types
 
@@ -232,7 +200,7 @@ fn main() {
 
 ### 2. Affine Move Semantics (Ownership)
 
-Non-copy types (`string`, `[]T`, `Pool[T]`, and structs holding them) move ownership on assignment. Reassignment reactivates a variable:
+Non-copy types (`string`, `[]T`, `Pool[T]`, and structs holding them) move ownership on assignment:
 
 ```ube
 fn main() {
@@ -252,20 +220,18 @@ fn main() {
 
 ### 3. Functions, Receivers & Methods
 
-Functions are top-level and statically typed. Methods attach via Go-style receiver parameters:
-
 ```ube
 struct Rectangle {
     width: i32,
     height: i32
 }
 
-// Regular top-level function
+// Top-level function
 fn add(a: i32, b: i32) -> i32 {
     return a + b
 }
 
-// Value receiver (read-only copy)
+// Value receiver (read-only)
 fn (r Rectangle) area() -> i32 {
     return r.width * r.height
 }
@@ -288,8 +254,6 @@ fn main() {
 ---
 
 ### 4. Anonymous Struct Embedding
-
-Compose data types cleanly using struct embedding. Embedded fields and methods promote to the parent:
 
 ```ube
 struct Position {
@@ -318,7 +282,7 @@ fn main() {
 
 ### 5. Tagged Enums & Pattern Matching
 
-Enums are tagged unions that can carry arbitrary payloads. Matching is exhaustive at compile time:
+Enums are tagged unions carrying arbitrary payloads. Pattern matching is verified at compile time:
 
 ```ube
 enum Action {
@@ -342,7 +306,7 @@ fn handle_action(act: Action) {
 
 ### 6. Error Handling & Optionals (`!`, `?`, `or_else`)
 
-No exceptions, no runtime panic checks. Errors and missing values are explicit in signatures:
+No exceptions or hidden runtime panics:
 
 ```ube
 // Result type: T ! E
@@ -362,17 +326,14 @@ fn find_user(id: i32) -> string? {
 }
 
 fn boot() -> i32 ! string {
-    // '?' bubbles up errors immediately
     let port = parse_port(8080)?
     return port
 }
 
 fn main() {
-    // 'or_else' provides a fallback value
     let port = parse_port(-1) or_else 3000
     println(port) // 3000
 
-    // 'if let' safely unwraps optionals or results
     if let user = find_user(42) {
         println(f"Found user: {user}")
     } else {
@@ -385,12 +346,10 @@ fn main() {
 
 ### 7. Strings, Slicing & `StringBuilder`
 
-Strings are UTF-8 byte slices in linear memory. Format interpolation is enabled with `f"..."`:
-
 ```ube
 fn main() {
     let title = "WebAssembly"
-    let slice = title[0:4] // "WebA" (end exclusive)
+    let slice = title[0:4] // "WebA"
     println(slice)
 
     // Formatted interpolation
@@ -424,11 +383,9 @@ fn sum_slice(vals: []i32) -> i32 {
 }
 
 fn main() {
-    // Stack-allocated array
     let arr = [3]i32{10, 20, 30}
     println(sum_slice(arr)) // Coerces [3]i32 -> []i32: prints 60
 
-    // Dynamic slice
     let mut s = []i32{}
     s.push(1)
     s.push(2)
@@ -445,7 +402,7 @@ fn main() {
 
 ### 9. Regional Bump Arenas (`arena` & `promote`)
 
-Scratch allocations inside an `arena` block are wiped in **a single CPU instruction** upon exiting:
+Allocations inside an `arena` block are wiped instantly by unwinding `__arena_pointer` on scope exit:
 
 ```ube
 fn main() {
@@ -458,28 +415,16 @@ fn main() {
 
         // Rescues data from scratch arena into parent arena:
         persistent = promote(scratch)
-    } // Entire child arena wiped in 1 instruction
+    } // Entire child arena reclaimed in 1 instruction
 
     println(persistent.len) // 2
     println(persistent[0])  // 10
-
-    // Arena expression form:
-    let msg = arena {
-        let raw = "sandbox_token"
-        promote(raw[0:7])
-    }
-    println(msg) // "sandbox"
 }
 ```
-
-> **The Upward Reference Invariant:**
-> Inner arenas cannot mutate outer slices or return inner references directly. The compiler enforces this statically: data escaping an arena **must** pass through `promote()`.
 
 ---
 
 ### 10. Generational Entity Pools (`Pool[T]`)
-
-For game entities, dynamic UI nodes, and graph lifecycles:
 
 ```ube
 struct Enemy {
@@ -489,27 +434,19 @@ struct Enemy {
 
 fn main() {
     let mut pool = Pool[Enemy].new(64)
-
-    // Spawning yields a generational Handle[Enemy]
     let h1 = pool.spawn(Enemy{ id: 1, hp: 100 })
 
     if let e = pool.get(h1) {
         println(e.hp) // 100
     }
 
-    // Linearly frees handle; invalidates it at compile time
     pool.despawn(h1)
-    // pool.get(h1) -> Compile error: use of moved variable 'h1'
 }
 ```
-
-> **Backend note:** `Pool[T]` currently requires Backend B (C transpiler). A Wasm-native implementation is planned (see [Roadmap](#the-roadmap-to-a-pure-wasm-backend)).
 
 ---
 
 ### 11. Concurrency, Tasks & Channels (`spawn`, `Chan[T]`, `select`)
-
-Shared-nothing concurrency guarantees data race freedom by construction:
 
 ```ube
 struct Packet {
@@ -541,16 +478,11 @@ fn main() {
 }
 ```
 
-> **The Flat Type Invariant:**
-> Values sent across channels or passed to `spawn` **must be flat** (primitives, fixed arrays, or structs of flat types). Heap-backed dynamic slices, strings, and pools cannot cross task boundaries, preventing data races without lock overhead.
-
-> **Backend note:** `spawn`, `Chan[T]`, and `select` currently require Backend B (C transpiler). A Wasm-native cooperative scheduler is planned (see [Roadmap](#the-roadmap-to-a-pure-wasm-backend)).
-
 ---
 
 ### 12. Generics & Trait Bounds
 
-Generics in Ube are **monomorphized at compile time** into zero-overhead specialized code:
+Compile-time monomorphization into zero-overhead specialized Wasm code:
 
 ```ube
 struct Pair[A, B] {
@@ -573,8 +505,6 @@ fn main() {
 
 ### 13. Traits & Dynamic Dispatch (Fat Pointers)
 
-Define shared interfaces for heterogeneous objects:
-
 ```ube
 trait Speaker {
     fn speak() -> string
@@ -596,31 +526,26 @@ fn main() {
 }
 ```
 
-> **Backend note:** Dynamic trait dispatch (fat pointers / vtables) currently requires Backend B. Static dispatch via monomorphized generic bounds is on the P1 roadmap for Backend A.
-
 ---
 
 ### 14. Sandboxed Host Imports (`extern fn`)
 
-WASI and host environment capabilities enter explicitly through typed WebAssembly host imports without unsafe blocks:
-
 ```ube
-// Wasm host imports (WASI / JavaScript / WebGPU bindings)
 extern fn time_now_ms() -> i64
 extern fn host_print(s: string)
 
 fn main() {
     let start = time_now_ms()
-    host_print("Hello from fully sandboxed WebAssembly!")
+    host_print("Hello from WebAssembly!")
     println(time_now_ms() - start)
 }
 ```
 
 ---
 
-## 📚 Standard Library & Module System
+## Standard Library & Module System
 
-The standard library is bundled directly into the compiler binary and can be imported anywhere:
+Bundled directly into the compiler binary:
 
 ```ube
 import "std/math" as math
@@ -649,39 +574,28 @@ fn main() {
 | `std/bytes` | Dynamic `ByteBuffer` with raw byte inspection and slice conversions. |
 | `std/collections` | Generic `Stack[T]` and key-value `SimpleMap[K, V]` with iterator support. |
 | `std/io` | `Reader`, `Writer`, `BufReader`, `BufWriter`, `Stdin`, `Stdout`, and stream copying. |
-| `std/wasi` | Raw preview-1 WASI imports, file descriptor I/O, and file metadata access. |
+| `std/wasi` | Raw preview-1 WASI imports and file descriptor I/O. |
 
 ---
 
-## 🛠️ Developer CLI Toolchain
-
-The single `ube` binary provides a complete toolchain:
+## Developer CLI Toolchain
 
 | Command | Example | Description |
 | :--- | :--- | :--- |
-| `ube run` | `ube run main.ube` | Compiles to Wasm and executes directly via the **embedded Wasmtime** Cranelift JIT engine. |
-| `ube build` | `ube build main.ube` | Compiles into a standalone sandboxed WebAssembly module (`main.wasm`). |
-| `ube build --html` | `ube build game.ube --html` | Packages into a Web Canvas HTML5 application using Emscripten. |
-| `ube check` | `ube check main.ube` | Static audit of syntax, types, affine moves, and sandbox purity. |
-| `ube check --backend` | `ube check --backend main.ube` | Reports which compilation backend your program will use (direct Wasm or C transpile). |
+| `ube build` | `ube build main.ube` | Compiles directly into a standalone WebAssembly module (`main.wasm`) in ~1ms. |
+| `ube run` | `ube run main.ube` | Compiles to Wasm bytecode in-memory and executes via embedded Wasm runtime. |
+| `ube check` | `ube check main.ube` | Static audit of syntax, types, and affine moves. |
 | `ube test` | `ube test tests/` | Runs all test files (`test_*.ube`) and standalone `test_*` functions. |
 | `ube fmt` | `ube fmt -w .` | Canonical auto-formatter with automatic struct field columnar alignment. |
 | `ube doc` | `ube doc main.ube [sym]` | Prints signatures, fields, and method documentation. |
 | `ube flow` | `ube flow main.ube` | Renders a visual call-tree showing memory scopes, tasks, and callees. |
 | `ube lsp` | `ube lsp` | Starts the Language Server Protocol for VS Code and Zed. |
 
-#### Backend-selection flags
-
-* `--backend=direct`: Force the direct Wasm emitter. Fails if the program uses any feature only supported by Backend B.
-* `--backend=c`: Force the C transpiler even if the program would compile directly.
-* `--require-direct`: Alias for `--backend=direct`; useful in CI to guarantee your project stays on the pure-Wasm path.
-* `--emit-c`: Write the generated C to a file (implies `--backend=c`).
-
 ---
 
-## 🤖 Native AI Pipeline (`ube sig / load / patch`)
+## Native AI Pipeline (`ube sig / load / patch`)
 
-Ube includes a built-in **1-Click Clipboard Pipeline** designed for Large Language Models (Claude, DeepSeek, ChatGPT). It eliminates token waste by allowing complete multi-file implementations in **1 to 2 turns max**:
+Ube includes a built-in **1-Click Clipboard Pipeline** designed for Large Language Models (Claude, DeepSeek, ChatGPT) allowing complete multi-file implementations in **1 to 2 turns max**:
 
 ```
 [Local Codebase]                        [AI Agent / LLM Chat]
@@ -699,63 +613,14 @@ Ube includes a built-in **1-Click Clipboard Pipeline** designed for Large Langua
  [Atomic Disk Update] ◄───────────────────────────────┘
 ```
 
-### AI Commands
-
 * `ube prompt -c`: Copies the token-efficient Ube system prompt to your clipboard.
 * `ube sig [dir] -c`: Dumps zero-body symbol signatures (~300 tokens for an entire codebase).
 * `ube load -ci -c`: Reads an LLM request from clipboard, extracts only the referenced AST nodes, and copies the context back.
 * `ube patch -ci`: Reads an LLM patch from clipboard and applies all changes atomically via an in-memory Virtual File System (VFS).
 
-#### Supported `ube load` Request Directives
-
-```xml
-<request>
-  <!-- Recursively loads the target function, its callees, and referenced types -->
-  <trace symbol="Server.handle_request" depth="2" />
-
-  <!-- Extracts single symbol declaration -->
-  <def symbol="Player" />
-
-  <!-- Isolates a specific match arm or switch case -->
-  <select path="game.ube" fn="update" case="Action::Attack" />
-
-  <!-- Isolates specific methods on a struct -->
-  <select struct="Server" methods="start,shutdown" />
-
-  <!-- Cross-references all read, write, or call sites across the project -->
-  <xref symbol="Config" action="write" />
-</request>
-```
-
-#### Supported `ube patch` Directives (Atomic VFS Engine)
-
-```xml
-<!-- Surgical search & replace scoped to a function -->
-<replace path="src/player.ube" within="take_damage">
-<search>
-    self.hp -= amount
-</search>
-<with>
-    self.hp = max(0, self.hp - amount)
-</with>
-</replace>
-
-<!-- Overwrite or create file -->
-<file path="src/utils.ube">
-pub fn clamp(v: i32, lo: i32, hi: i32) -> i32 {
-    if v < lo { return lo }
-    if v > hi { return hi }
-    return v
-}
-</file>
-
-<!-- Delete file -->
-<delete path="src/obsolete.ube" />
-```
-
 ---
 
-## 🔌 Editor Integration (VS Code & LSP)
+## Editor Integration (VS Code & LSP)
 
 Official VS Code language support is included in `editors/vscode/`:
 
@@ -764,20 +629,9 @@ Official VS Code language support is included in `editors/vscode/`:
 * **On-Save Formatting**: Integrated with `ube fmt` and struct field column alignment.
 * **Icon Theme**: Native purple Ube jam jar icon for `.ube` files.
 
-Install the extension:
-
-```sh
-cd editors/vscode
-npm install
-npm run package
-code --install-extension ube-0.9.0.vsix
-```
-
 ---
 
-## 🧪 Running the Test Suite
-
-Run Ube's language and end-to-end integration test runner:
+## Running the Test Suite
 
 ```sh
 # Run compiler unit tests (Go test suite)
@@ -785,13 +639,10 @@ go test -v ./...
 
 # Run Ube language integration tests via CLI runner
 ube test tests/
-
-# Assert every program in examples/ and tests/ compiles on the pure-Wasm backend
-ube check --backend=direct examples/ tests/
 ```
 
 ---
 
-## 📄 License
+## License
 
 Distributed under the MIT License. See [LICENSE](LICENSE) for details.
