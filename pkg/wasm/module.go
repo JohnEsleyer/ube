@@ -1,7 +1,5 @@
 package wasm
 
-import "bytes"
-
 // ImportEntry defines an external import (function, memory, table, or global).
 type ImportEntry struct {
 	Module string
@@ -270,9 +268,4 @@ func writeSection(buf *Buffer, id SectionID, content []byte) {
 	buf.Emit(byte(id))
 	buf.EmitUleb128(uint32(len(content)))
 	buf.EmitBytes(content)
-}
-
-// ModuleEqual checks if two byte slices are identical.
-func ModuleEqual(a, b []byte) bool {
-	return bytes.Equal(a, b)
 }

@@ -125,9 +125,6 @@ func loadAndCheck(file string) (*compiler.Program, purityReport, error) {
 	if err != nil {
 		return nil, purityReport{}, err
 	}
-	if err := compiler.Monomorphize(ast); err != nil {
-		return nil, purityReport{}, err
-	}
 	checker := compiler.NewTypechecker()
 	report := purityReport{}
 	for _, decl := range ast.Decls {

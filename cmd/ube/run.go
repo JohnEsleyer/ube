@@ -61,6 +61,3 @@ func run(args []string) error {
 	}
 	return nil
 }
-
-// runWasmtimeInProcess, runWasmtimeCapture, runWasmCapture, wasmRuntimeCommand remain unchanged for brevity.
-// They are already part of a pure-Wasm execution path.

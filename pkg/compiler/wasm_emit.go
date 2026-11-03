@@ -9,12 +9,6 @@ import (
 	"math"
 )
 
-// DirectWasmSupport audits whether prog can be compiled directly to WebAssembly bytecode.
-// Ube is 100% Wasm-native with zero C dependencies.
-func DirectWasmSupport(prog *Program) (bool, string) {
-	return true, ""
-}
-
 // EmitWasm compiles an AST program directly into WebAssembly binary bytecode (.wasm)
 // with zero external toolchains (no clang, no zig, no C headers).
 func EmitWasm(prog *Program) ([]byte, error) {

@@ -19,18 +19,7 @@ func (tc *Typechecker) isCopyType(t UbeType) bool {
 	if t == nil {
 		return true
 	}
-	switch typ := t.(type) {
-	case PrimitiveType, RangeType, ChanType:
-		return true
-	case ArrayType:
-		return tc.isCopyType(typ.Elem)
-	case OptionalType:
-		return tc.isCopyType(typ.Inner)
-	case ResultType:
-		return tc.isCopyType(typ.Ok) && tc.isCopyType(typ.Err)
-	default:
-		return false
-	}
+	return t.IsCopy()
 }
 
 func movedValueError(loc SourceLocation, name string) error {

@@ -39,36 +39,32 @@ type TraitMeta struct {
 }
 
 type TypeEnvironment struct {
-	Parent         *TypeEnvironment
-	Vars           map[string]VarInfo
-	Structs        map[string][]FieldDecl
-	StructMeta     map[string]StructMeta
-	Enums          map[string][]VariantDecl
-	EnumMeta       map[string]EnumMeta
-	Traits         map[string]*TraitDecl
-	TraitMeta      map[string]TraitMeta
-	Funcs          map[string]FuncSignature
-	GenericStructs map[string]*StructDecl
-	GenericFuncs   map[string]*FnDecl
-	CurFile        string
-	CurRet         UbeType
-	LoopDepth      int
-	ScopeDepth     int
+	Parent     *TypeEnvironment
+	Vars       map[string]VarInfo
+	Structs    map[string][]FieldDecl
+	StructMeta map[string]StructMeta
+	Enums      map[string][]VariantDecl
+	EnumMeta   map[string]EnumMeta
+	Traits     map[string]*TraitDecl
+	TraitMeta  map[string]TraitMeta
+	Funcs      map[string]FuncSignature
+	CurFile    string
+	CurRet     UbeType
+	LoopDepth  int
+	ScopeDepth int
 }
 
 func NewTypeEnvironment(parent *TypeEnvironment) *TypeEnvironment {
 	return &TypeEnvironment{
-		Parent:         parent,
-		Vars:           make(map[string]VarInfo),
-		Structs:        make(map[string][]FieldDecl),
-		StructMeta:     make(map[string]StructMeta),
-		Enums:          make(map[string][]VariantDecl),
-		EnumMeta:       make(map[string]EnumMeta),
-		Traits:         make(map[string]*TraitDecl),
-		TraitMeta:      make(map[string]TraitMeta),
-		Funcs:          make(map[string]FuncSignature),
-		GenericStructs: make(map[string]*StructDecl),
-		GenericFuncs:   make(map[string]*FnDecl),
+		Parent:     parent,
+		Vars:       make(map[string]VarInfo),
+		Structs:    make(map[string][]FieldDecl),
+		StructMeta: make(map[string]StructMeta),
+		Enums:      make(map[string][]VariantDecl),
+		EnumMeta:   make(map[string]EnumMeta),
+		Traits:     make(map[string]*TraitDecl),
+		TraitMeta:  make(map[string]TraitMeta),
+		Funcs:      make(map[string]FuncSignature),
 	}
 }
 
@@ -86,8 +82,6 @@ func childTypeEnvironment(parent *TypeEnvironment) *TypeEnvironment {
 		env.ScopeDepth = parent.ScopeDepth
 		env.Traits = parent.Traits
 		env.TraitMeta = parent.TraitMeta
-		env.GenericStructs = parent.GenericStructs
-		env.GenericFuncs = parent.GenericFuncs
 	}
 	return env
 }

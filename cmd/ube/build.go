@@ -11,15 +11,9 @@ import (
 )
 
 func build(args []string) error {
-	file, output, _, _, html, err := parseBuildArgs(args)
+	file, output, err := parseBuildArgs(args)
 	if err != nil {
 		return err
-	}
-
-	if html {
-		// Building for HTML requires Emscripten. This is a deployment target
-		// choice, not a language feature fallback. We make this explicit.
-		return fmt.Errorf("building for --html requires Emscripten (emcc), which is no longer part of the default Ube toolchain. Please use `emcc` directly with the generated .wasm file, or see the documentation for browser integration options")
 	}
 
 	if output == "" {
@@ -55,9 +49,9 @@ func build(args []string) error {
 	return nil
 }
 
-func parseBuildArgs(args []string) (file, output, backend string, emitC, html bool, err error) {
+func parseBuildArgs(args []string) (file, output string, err error) {
 	if len(args) == 0 {
-		return "", "", "", false, false, fmt.Errorf("usage: ube build <file.ube> [-o app.wasm]")
+		return "", "", fmt.Errorf("usage: ube build <file.ube> [-o app.wasm]")
 	}
 	file = ""
 	output = ""
@@ -65,23 +59,25 @@ func parseBuildArgs(args []string) (file, output, backend string, emitC, html bo
 		switch {
 		case args[i] == "-o":
 			if i+1 >= len(args) {
-				return "", "", "", false, false, fmt.Errorf("-o requires an output path")
+				return "", "", fmt.Errorf("-o requires an output path")
 			}
 			output = args[i+1]
 			i++
+		case args[i] == "--wasm":
+			// Default target, accepted as valid flag
 		case args[i] == "--html":
-			html = true
+			return "", "", fmt.Errorf("building for --html requires Emscripten (emcc), which is no longer part of the default Ube toolchain. Please use `emcc` directly with the generated .wasm file, or see the documentation for browser integration options")
 		case strings.HasPrefix(args[i], "-"):
-			return "", "", "", false, false, fmt.Errorf("unknown or unsupported build option %s", args[i])
+			return "", "", fmt.Errorf("unknown or unsupported build option %s", args[i])
 		default:
 			if file != "" {
-				return "", "", "", false, false, fmt.Errorf("multiple source files are not supported")
+				return "", "", fmt.Errorf("multiple source files are not supported")
 			}
 			file = args[i]
 		}
 	}
 	if file == "" {
-		return "", "", "", false, false, fmt.Errorf("specify a .ube source file")
+		return "", "", fmt.Errorf("specify a .ube source file")
 	}
-	return file, output, "", false, html, nil
+	return file, output, nil
 }

@@ -4,24 +4,9 @@ import (
 	"errors"
 	"os"
 	"os/exec"
-	"path/filepath"
 
-	"github.com/JohnEsleyer/ube/pkg/compiler"
 	"github.com/bytecodealliance/wasmtime-go/v29"
 )
-
-// compileWasm compiles the given Program directly into WebAssembly bytecode.
-func compileWasm(prog *compiler.Program, file, testName string, wantC bool) (bool, string) {
-	wasmBytes, err := compiler.EmitWasm(prog)
-	if err != nil {
-		return false, ""
-	}
-	out := filepath.Join(os.TempDir(), "ube-test-"+testName+".wasm")
-	if werr := os.WriteFile(out, wasmBytes, 0755); werr != nil {
-		return false, ""
-	}
-	return true, out
-}
 
 // runWasmCapture executes a Wasm file in-process and returns captured stdout
 // plus any execution error.
