@@ -1,0 +1,633 @@
+` overwrites the target files cleanly and eliminates any search-block whitespace drift.
+
+Apply with `textify patch -ci` (or `ube patch -ci`):
+
+```xml
+<file path="std/io.ube">
+// Ube standard library: input/output primitives and stream utilities.
+
+import "std/wasi"
+import "std/bytes"
+
+// -------------------------------------------------------------
+// Core I/O Traits
+// -------------------------------------------------------------
+
+pub trait Reader {
+    fn read(buf: []u8) -> i32 ! string
+}
+
+pub trait Writer {
+    fn write(data: []u8) -> i32 ! string
+}
+
+pub trait Closer {
+    fn close() -> bool ! string
+}
+
+pub trait Seeker {
+    fn seek(offset: i32, whence: i32) -> i32 ! string
+}
+
+pub trait ByteReader {
+    fn read_byte() -> i32 ! string
+}
+
+pub trait ByteWriter {
+    fn write_byte(val: u8) -> i32 ! string
+}
+
+pub trait StringWriter {
+    fn write_string(s: string) -> i32 ! string
+}
+
+// -------------------------------------------------------------
+// Seek Constants
+// -------------------------------------------------------------
+
+pub fn io_seek_set() -> i32 { return 0 }
+pub fn io_seek_cur() -> i32 { return 1 }
+pub fn io_seek_end() -> i32 { return 2 }
+
+pub fn IO_SEEK_SET() -> i32 { return 0 }
+pub fn IO_SEEK_CUR() -> i32 { return 1 }
+pub fn IO_SEEK_END() -> i32 { return 2 }
+
+// -------------------------------------------------------------
+// Standard Streams (WASI Backed)
+// -------------------------------------------------------------
+
+pub struct Stdin {
+    pub fd: i32
+}
+
+pub fn io_stdin() -> Stdin {
+    return Stdin { fd: wasi_stdin() }
+}
+
+pub fn (s Stdin) read(mut buf: []u8) -> i32 ! string {
+    return fd_read_bytes(s.fd, buf)
+}
+
+pub fn (s Stdin) read_byte() -> i32 ! string {
+    let mut b = []u8{0}
+    let res = fd_read_bytes(s.fd, b)
+    if let n = res {
+        if n <= 0 {
+            return -1
+        }
+        let mut val = 0
+        val += b[0]
+        return val
+    }
+    return -1
+}
+
+pub struct Stdout {
+    pub fd: i32
+}
+
+pub fn io_stdout() -> Stdout {
+    return Stdout { fd: wasi_stdout() }
+}
+
+pub fn (s Stdout) write(data: []u8) -> i32 ! string {
+    return fd_write_bytes(s.fd, data)
+}
+
+pub fn (s Stdout) write_string(str: string) -> i32 ! string {
+    return fd_write_bytes(s.fd, str.bytes())
+}
+
+pub fn (s Stdout) write_line(str: string) -> i32 ! string {
+    let mut b = str.bytes()
+    b.push(10)
+    return fd_write_bytes(s.fd, b)
+}
+
+pub fn (s Stdout) flush() -> bool ! string {
+    return true
+}
+
+pub struct Stderr {
+    pub fd: i32
+}
+
+pub fn io_stderr() -> Stderr {
+    return Stderr { fd: wasi_stderr() }
+}
+
+pub fn (s Stderr) write(data: []u8) -> i32 ! string {
+    return fd_write_bytes(s.fd, data)
+}
+
+pub fn (s Stderr) write_string(str: string) -> i32 ! string {
+    return fd_write_bytes(s.fd, str.bytes())
+}
+
+pub fn (s Stderr) write_line(str: string) -> i32 ! string {
+    let mut b = str.bytes()
+    b.push(10)
+    return fd_write_bytes(s.fd, b)
+}
+
+pub fn (s Stderr) flush() -> bool ! string {
+    return true
+}
+
+// -------------------------------------------------------------
+// File Object (WASI File Descriptor Wrapper)
+// -------------------------------------------------------------
+
+pub struct File {
+    pub fd: i32
+}
+
+pub fn file_from_fd(fd: i32) -> File {
+    return File { fd: fd }
+}
+
+pub fn (f File) read(mut buf: []u8) -> i32 ! string {
+    return fd_read_bytes(f.fd, buf)
+}
+
+pub fn (f File) write(data: []u8) -> i32 ! string {
+    return fd_write_bytes(f.fd, data)
+}
+
+pub fn (f File) write_string(s: string) -> i32 ! string {
+    return fd_write_bytes(f.fd, s.bytes())
+}
+
+pub fn (f File) write_line(s: string) -> i32 ! string {
+    let mut b = s.bytes()
+    b.push(10)
+    return fd_write_bytes(f.fd, b)
+}
+
+pub fn (f File) close() -> bool ! string {
+    return true
+}
+
+// -------------------------------------------------------------
+// In-Memory Streams
+// -------------------------------------------------------------
+
+pub struct BytesReader {
+    pub data: []u8,
+    pub pos: i32
+}
+
+pub fn bytes_reader_new(data: []u8) -> BytesReader {
+    return BytesReader {
+        data: data,
+        pos: 0
+    }
+}
+
+pub fn (mut r BytesReader) read(mut buf: []u8) -> i32 ! string {
+    if r.pos >= r.data.len {
+        return 0
+    }
+    let mut n = 0
+    while r.pos < r.data.len && n < buf.len {
+        buf[n] = r.data[r.pos]
+        r.pos += 1
+        n += 1
+    }
+    return n
+}
+
+pub fn (mut r BytesReader) read_byte() -> i32 ! string {
+    if r.pos >= r.data.len {
+        return -1
+    }
+    let b = r.data[r.pos]
+    r.pos += 1
+    let mut val = 0
+    val += b
+    return val
+}
+
+pub fn (mut r BytesReader) read_line() -> string ! string {
+    if r.pos >= r.data.len {
+        return error("EOF")
+    }
+    let mut line_bytes = []u8{}
+    while r.pos < r.data.len {
+        let b = r.data[r.pos]
+        r.pos += 1
+        if b == 10 { // '\n'
+            if line_bytes.len > 0 && line_bytes[line_bytes.len - 1] == 13 { // '\r'
+                line_bytes.pop()
+            }
+            break
+        }
+        line_bytes.push(b)
+    }
+    if let s = string.from_bytes(line_bytes) {
+        return s
+    }
+    return error("invalid utf8 in line")
+}
+
+pub fn (mut r BytesReader) seek(offset: i32, whence: i32) -> i32 ! string {
+    let mut new_pos = r.pos
+    if whence == 0 {
+        new_pos = offset
+    } else if whence == 1 {
+        new_pos = r.pos + offset
+    } else if whence == 2 {
+        new_pos = r.data.len + offset
+    } else {
+        return error("invalid whence")
+    }
+
+    if new_pos < 0 {
+        return error("negative seek offset")
+    }
+    r.pos = new_pos
+    return r.pos
+}
+
+pub fn (r BytesReader) remaining() -> i32 {
+    let rem = r.data.len - r.pos
+    if rem < 0 {
+        return 0
+    }
+    return rem
+}
+
+pub fn (r BytesReader) len() -> i32 {
+    return r.data.len
+}
+
+pub fn (r BytesReader) position() -> i32 {
+    return r.pos
+}
+
+pub fn (mut r BytesReader) reset() {
+    r.pos = 0
+}
+
+pub struct BytesWriter {
+    pub buf: ByteBuffer
+}
+
+pub fn bytes_writer_new() -> BytesWriter {
+    return BytesWriter {
+        buf: buffer_new(0)
+    }
+}
+
+pub fn (mut w BytesWriter) write(data: []u8) -> i32 ! string {
+    let n = data.len
+    w.buf.write_bytes(data)
+    return n
+}
+
+pub fn (mut w BytesWriter) write_byte(b: u8) -> i32 ! string {
+    w.buf.write_u8(b)
+    return 1
+}
+
+pub fn (mut w BytesWriter) write_string(s: string) -> i32 ! string {
+    return w.write(s.bytes())
+}
+
+pub fn (mut w BytesWriter) write_line(s: string) -> i32 ! string {
+    let mut b = s.bytes()
+    b.push(10)
+    return w.write(b)
+}
+
+pub fn (w BytesWriter) to_slice() -> []u8 {
+    return w.buf.to_slice()
+}
+
+pub fn (w BytesWriter) to_string() -> string {
+    if let s = string.from_bytes(w.to_slice()) {
+        return s
+    }
+    return ""
+}
+
+pub fn (w BytesWriter) len() -> i32 {
+    return w.buf.len()
+}
+
+pub fn (mut w BytesWriter) reset() {
+    w.buf.reset()
+}
+
+// -------------------------------------------------------------
+// Buffered I/O (BufReader & BufWriter)
+// -------------------------------------------------------------
+
+pub struct BufReader {
+    pub fd: i32,
+    pub buf: []u8,
+    pub pos: i32,
+    pub limit: i32
+}
+
+pub fn buf_reader_new(fd: i32) -> BufReader {
+    let mut b = []u8{}
+    let mut i = 0
+    while i < 1024 {
+        b.push(0)
+        i += 1
+    }
+    return BufReader {
+        fd: fd,
+        buf: b,
+        pos: 0,
+        limit: 0
+    }
+}
+
+pub fn (mut b BufReader) read_byte() -> i32 ! string {
+    if b.pos >= b.limit {
+        let n = fd_read_bytes(b.fd, b.buf)
+        if let read_len = n {
+            if read_len <= 0 {
+                return -1
+            }
+            b.limit = read_len
+            b.pos = 0
+        } else {
+            return -1
+        }
+    }
+    let byte_val = b.buf[b.pos]
+    b.pos += 1
+    let mut res = 0
+    res += byte_val
+    return res
+}
+
+pub fn (mut b BufReader) read(mut dst: []u8) -> i32 ! string {
+    if dst.len == 0 {
+        return 0
+    }
+    let mut total = 0
+    while total < dst.len {
+        if b.pos >= b.limit {
+            let n = fd_read_bytes(b.fd, b.buf)
+            if let read_len = n {
+                if read_len <= 0 {
+                    break
+                }
+                b.limit = read_len
+                b.pos = 0
+            } else {
+                break
+            }
+        }
+        dst[total] = b.buf[b.pos]
+        b.pos += 1
+        total += 1
+    }
+    return total
+}
+
+pub fn (mut b BufReader) read_line() -> string ! string {
+    let mut line_bytes = []u8{}
+    while true {
+        let byte_res = b.read_byte()
+        if let val = byte_res {
+            if val < 0 {
+                if line_bytes.len == 0 {
+                    return error("EOF")
+                }
+                break
+            }
+            if val == 10 { // '\n'
+                if line_bytes.len > 0 && line_bytes[line_bytes.len - 1] == 13 {
+                    line_bytes.pop()
+                }
+                break
+            }
+            line_bytes.push(val)
+        } else {
+            if line_bytes.len == 0 {
+                return error("EOF")
+            }
+            break
+        }
+    }
+    if let s = string.from_bytes(line_bytes) {
+        return s
+    }
+    return error("invalid utf8 in line")
+}
+
+pub struct BufWriter {
+    pub fd: i32,
+    pub buf: []u8,
+    pub count: i32
+}
+
+pub fn buf_writer_new(fd: i32) -> BufWriter {
+    let mut b = []u8{}
+    let mut i = 0
+    while i < 1024 {
+        b.push(0)
+        i += 1
+    }
+    return BufWriter {
+        fd: fd,
+        buf: b,
+        count: 0
+    }
+}
+
+pub fn (mut w BufWriter) flush() -> bool ! string {
+    if w.count == 0 {
+        return true
+    }
+    let mut to_write = []u8{}
+    let mut i = 0
+    while i < w.count {
+        to_write.push(w.buf[i])
+        i += 1
+    }
+    let res = fd_write_bytes(w.fd, to_write)
+    if let written = res {
+        w.count = 0
+        return true
+    } else {
+        return error("failed to flush buffer")
+    }
+}
+
+pub fn (mut w BufWriter) write(data: []u8) -> i32 ! string {
+    let mut written = 0
+    let mut i = 0
+    while i < data.len {
+        if w.count >= w.buf.len {
+            let fl = w.flush()
+            if let ok = fl {
+                // flushed ok
+            } else {
+                return written
+            }
+        }
+        w.buf[w.count] = data[i]
+        w.count += 1
+        written += 1
+        i += 1
+    }
+    return written
+}
+
+pub fn (mut w BufWriter) write_byte(b: u8) -> i32 ! string {
+    if w.count >= w.buf.len {
+        let fl = w.flush()
+        if let ok = fl {
+            // flushed ok
+        } else {
+            return error("failed to flush before writing byte")
+        }
+    }
+    w.buf[w.count] = b
+    w.count += 1
+    return 1
+}
+
+pub fn (mut w BufWriter) write_string(s: string) -> i32 ! string {
+    return w.write(s.bytes())
+}
+
+pub fn (mut w BufWriter) write_line(s: string) -> i32 ! string {
+    let mut b = s.bytes()
+    b.push(10)
+    return w.write(b)
+}
+
+// -------------------------------------------------------------
+// Stream Combinators & Helpers
+// -------------------------------------------------------------
+
+pub fn read_all(mut r: BytesReader) -> []u8 {
+    let mut out = []u8{}
+    let mut chunk = []u8{}
+    let mut i = 0
+    while i < 128 {
+        chunk.push(0)
+        i += 1
+    }
+    while true {
+        if let n = r.read(chunk) {
+            if n <= 0 {
+                break
+            }
+            let mut j = 0
+            while j < n {
+                out.push(chunk[j])
+                j += 1
+            }
+        } else {
+            break
+        }
+    }
+    return out
+}
+
+pub fn read_all_string(mut r: BytesReader) -> string {
+    let bytes = read_all(r)
+    if let s = string.from_bytes(bytes) {
+        return s
+    }
+    return ""
+}
+
+pub fn read_all_fd(fd: i32) -> []u8 ! string {
+    let mut out = []u8{}
+    let mut chunk = []u8{}
+    let mut i = 0
+    while i < 1024 {
+        chunk.push(0)
+        i += 1
+    }
+    while true {
+        let res = fd_read_bytes(fd, chunk)
+        if let n = res {
+            if n <= 0 {
+                break
+            }
+            let mut j = 0
+            while j < n {
+                out.push(chunk[j])
+                j += 1
+            }
+        } else {
+            break
+        }
+    }
+    return out
+}
+
+pub fn copy(mut dst: BytesWriter, mut src: BytesReader) -> i32 {
+    let mut total = 0
+    let mut buf = []u8{}
+    let mut i = 0
+    while i < 128 {
+        buf.push(0)
+        i += 1
+    }
+    while true {
+        if let n = src.read(buf) {
+            if n <= 0 {
+                break
+            }
+            let mut chunk = []u8{}
+            let mut j = 0
+            while j < n {
+                chunk.push(buf[j])
+                j += 1
+            }
+            if let written = dst.write(chunk) {
+                total += written
+            } else {
+                break
+            }
+        } else {
+            break
+        }
+    }
+    return total
+}
+
+pub fn copy_fd(dst_fd: i32, src_fd: i32) -> i32 ! string {
+    let mut total = 0
+    let mut chunk = []u8{}
+    let mut i = 0
+    while i < 1024 {
+        chunk.push(0)
+        i += 1
+    }
+    while true {
+        let res = fd_read_bytes(src_fd, chunk)
+        if let n = res {
+            if n <= 0 {
+                break
+            }
+            let mut slice_to_write = []u8{}
+            let mut j = 0
+            while j < n {
+                slice_to_write.push(chunk[j])
+                j += 1
+            }
+            let w_res = fd_write_bytes(dst_fd, slice_to_write)
+            if let written = w_res {
+                total += written
+            } else {
+                return error("failed writing to destination fd")
+            }
+        } else {
+            break
+        }
+    }
+    return total
+}

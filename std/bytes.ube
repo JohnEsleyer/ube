@@ -6,8 +6,6 @@ pub struct ByteBuffer {
 }
 
 pub fn buffer_new(capacity: i32) -> ByteBuffer {
-    // Slice growth is handled by the runtime. `capacity` is accepted so
-    // callers can express intent without relying on a manual allocator.
     return ByteBuffer {
         data: []u8{},
         count: 0
@@ -30,6 +28,15 @@ pub fn (mut b ByteBuffer) write_bytes(data: []u8) {
 
 pub fn (b ByteBuffer) len() -> i32 {
     return b.count
+}
+
+pub fn (b ByteBuffer) is_empty() -> bool {
+    return b.count == 0
+}
+
+pub fn (mut b ByteBuffer) reset() {
+    b.data = []u8{}
+    b.count = 0
 }
 
 pub fn (b ByteBuffer) get(idx: i32) -> u8 {

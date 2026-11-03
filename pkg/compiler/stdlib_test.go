@@ -249,7 +249,49 @@ fn main() {
 	}
 	want := "5\n5\n72\n111\n3\n3"
 	if out := compileLoadedFile(t, mainFile); out != want {
-		t.Fatalf("unexpected io output:\n got: %q\nwant: %q", out, want)
+		t.Fatalf("unexpected stdlib output:\n got: %q\nwant: %q", out, want)
+	}
+}
+
+func TestStdlib_ImportIOComprehensive(t *testing.T) {
+	dir := t.TempDir()
+	mainFile := writeUbeFile(t, dir, "main.ube", `
+import "std/io"
+
+fn main() {
+    let mut w = bytes_writer_new()
+    w.write_string("Alpha\nBeta\n")
+    println(w.to_string())
+
+    let mut r = bytes_reader_new(w.to_slice())
+    if let l1 = r.read_line() {
+        println(l1)
+    }
+    if let l2 = r.read_line() {
+        println(l2)
+    }
+
+    w.reset()
+    println(w.len())
+    w.write_byte(42)
+    println(w.len())
+    let s = w.to_slice()
+    println(s[0])
+}
+`)
+	prog, err := compiler.NewModuleLoader().Load(mainFile)
+	if err != nil {
+		t.Fatalf("failed to load std/io: %v", err)
+	}
+	if err := compiler.Monomorphize(prog); err != nil {
+		t.Fatalf("monomorphize failed: %v", err)
+	}
+	if err := compiler.NewTypechecker().Check(prog); err != nil {
+		t.Fatalf("typecheck failed: %v", err)
+	}
+	want := "Alpha\nBeta\n\nAlpha\nBeta\n0\n1\n42"
+	if out := compileLoadedFile(t, mainFile); out != want {
+		t.Fatalf("unexpected stdlib output:\n got: %q\nwant: %q", out, want)
 	}
 }
 
