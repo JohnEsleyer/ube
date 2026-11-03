@@ -1,116 +1,91 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import {
-    LanguageClient,
-    LanguageClientOptions,
-    ServerOptions
+  LanguageClient,
+  LanguageClientOptions,
+  ServerOptions,
 } from 'vscode-languageclient/node';
 
 let client: LanguageClient | undefined;
 
-function getCompilerPath(): string {
-    const config = vscode.workspace.getConfiguration('ube');
-    return config.get<string>('compilerPath') || 'ube';
-}
-
-function startLspClient(context: vscode.ExtensionContext) {
-    const config = vscode.workspace.getConfiguration('ube');
-    if (!config.get<boolean>('lsp.enable', true)) {
-        return;
-    }
-
-    const command = getCompilerPath();
-    const serverOptions: ServerOptions = {
-        command: command,
-        args: ['lsp'],
-        options: {
-            shell: false
-        }
-    };
-
-    const clientOptions: LanguageClientOptions = {
-        documentSelector: [{ scheme: 'file', language: 'ube' }],
-        synchronize: {
-            fileEvents: vscode.workspace.createFileSystemWatcher('**/*.ube')
-        }
-    };
-
-    client = new LanguageClient(
-        'ubeLSP',
-        'Ube Language Server',
-        serverOptions,
-        clientOptions
-    );
-
-    client.start().catch((err) => {
-        vscode.window.showWarningMessage(
-            `Failed to start Ube language server ('${command} lsp'): ${err.message}. Make sure 'ube' is installed and in your PATH.`
-        );
-    });
-}
-
 export function activate(context: vscode.ExtensionContext) {
-    startLspClient(context);
+  const config = vscode.workspace.getConfiguration('ube');
+  const compilerPath = config.get<string>('compilerPath') || 'ube';
+  const enableLsp = config.get<boolean>('lsp.enable') ?? true;
 
-    context.subscriptions.push(
-        vscode.commands.registerCommand('ube.restartServer', async () => {
-            if (client) {
-                await client.stop();
-                client = undefined;
-            }
-            startLspClient(context);
-            vscode.window.showInformationMessage('Ube language server restarted.');
-        })
-    );
+  if (enableLsp) {
+    startClient(compilerPath);
+  }
 
-    context.subscriptions.push(
-        vscode.commands.registerCommand('ube.runFile', () => {
-            const editor = vscode.window.activeTextEditor;
-            if (!editor || editor.document.languageId !== 'ube') {
-                vscode.window.showErrorMessage('No active Ube file to run.');
-                return;
-            }
+  context.subscriptions.push(
+    vscode.commands.registerCommand('ube.restartServer', async () => {
+      if (client) {
+        await client.stop();
+        client = undefined;
+      }
+      startClient(compilerPath);
+      vscode.window.showInformationMessage('Ube language server restarted.');
+    }),
+    vscode.commands.registerCommand('ube.runFile', () => {
+      const activeDoc = vscode.window.activeTextEditor?.document;
+      if (!activeDoc || activeDoc.languageId !== 'ube') {
+        vscode.window.showWarningMessage('No active Ube file to run.');
+        return;
+      }
+      activeDoc.save();
+      const terminal = vscode.window.activeTerminal || vscode.window.createTerminal('Ube');
+      terminal.show();
+      terminal.sendText(`${compilerPath} run "${activeDoc.fileName}"`);
+    }),
+    vscode.commands.registerCommand('ube.checkFile', () => {
+      const activeDoc = vscode.window.activeTextEditor?.document;
+      if (!activeDoc || activeDoc.languageId !== 'ube') {
+        vscode.window.showWarningMessage('No active Ube file to check.');
+        return;
+      }
+      activeDoc.save();
+      const terminal = vscode.window.activeTerminal || vscode.window.createTerminal('Ube');
+      terminal.show();
+      terminal.sendText(`${compilerPath} check "${activeDoc.fileName}"`);
+    }),
+    vscode.commands.registerCommand('ube.formatFile', async () => {
+      const activeDoc = vscode.window.activeTextEditor?.document;
+      if (!activeDoc || activeDoc.languageId !== 'ube') {
+        return;
+      }
+      await activeDoc.save();
+      const terminal = vscode.window.activeTerminal || vscode.window.createTerminal('Ube');
+      terminal.show();
+      terminal.sendText(`${compilerPath} fmt -w "${activeDoc.fileName}"`);
+    })
+  );
+}
 
-            const filePath = editor.document.fileName;
-            const terminal = vscode.window.activeTerminal || vscode.window.createTerminal('Ube');
-            terminal.show();
-            terminal.sendText(`${getCompilerPath()} run "${filePath}"`);
-        })
-    );
+function startClient(compilerPath: string) {
+  const serverOptions: ServerOptions = {
+    command: compilerPath,
+    args: ['lsp'],
+  };
 
-    context.subscriptions.push(
-        vscode.commands.registerCommand('ube.checkFile', () => {
-            const editor = vscode.window.activeTextEditor;
-            if (!editor || editor.document.languageId !== 'ube') {
-                vscode.window.showErrorMessage('No active Ube file to check.');
-                return;
-            }
+  const clientOptions: LanguageClientOptions = {
+    documentSelector: [{ scheme: 'file', language: 'ube' }],
+    synchronize: {
+      fileEvents: vscode.workspace.createFileSystemWatcher('**/*.ube'),
+    },
+  };
 
-            const filePath = editor.document.fileName;
-            const terminal = vscode.window.activeTerminal || vscode.window.createTerminal('Ube Check');
-            terminal.show();
-            terminal.sendText(`${getCompilerPath()} check "${filePath}"`);
-        })
-    );
+  client = new LanguageClient(
+    'ubeLanguageServer',
+    'Ube Language Server',
+    serverOptions,
+    clientOptions
+  );
 
-    context.subscriptions.push(
-        vscode.commands.registerCommand('ube.formatFile', async () => {
-            const editor = vscode.window.activeTextEditor;
-            if (!editor || editor.document.languageId !== 'ube') {
-                return;
-            }
-            await editor.document.save();
-            const filePath = editor.document.fileName;
-            const terminal = vscode.window.activeTerminal || vscode.window.createTerminal('Ube Fmt');
-            terminal.show();
-            terminal.sendText(`${getCompilerPath()} fmt "${filePath}"`);
-        })
-    );
+  client.start();
 }
 
 export function deactivate(): Thenable<void> | undefined {
-    if (!client) {
-        return undefined;
-    }
-    return client.stop();
+  if (!client) {
+    return undefined;
+  }
+  return client.stop();
 }

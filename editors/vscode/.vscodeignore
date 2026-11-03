@@ -1,3 +1,4 @@
 *.vsix
 .git*
 node_modules/**
+!extension.js

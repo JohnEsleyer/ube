@@ -74,7 +74,7 @@
         },
         {
           "name": "keyword.declaration.ube",
-          "match": "\\b(let|mut|fn|struct|enum|trait|extern|import)\\b"
+          "match": "\\b(let|mut|fn|struct|enum|trait|extern|import|as)\\b"
         },
         {
           "name": "keyword.other.ube",
@@ -110,7 +110,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.ube",
-          "match": "\\b(print|println|eprint|eprintln|promote|panic|assert|clock_ms|clock_ns|env_get)\\b"
+          "match": "\\b(print|println|eprint|eprintln|promote|panic|assert|error|clock_ms|clock_ns|env_get)\\b"
         }
       ]
     },
