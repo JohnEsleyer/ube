@@ -48,6 +48,13 @@ func (tc *Typechecker) markMovedIfAffine(expr Expr, env *TypeEnvironment) error 
 }
 
 func (tc *Typechecker) markMovedIfType(expr Expr, env *TypeEnvironment, shouldMove func(UbeType) bool) error {
+	// A projection such as `value.field` or `items[i]` reads a component; it
+	// must not consume the whole aggregate. Only whole-value expressions
+	// participate in move tracking.
+	switch expr.(type) {
+	case *MemberExpr, *IndexExpr, *SliceSubExpr:
+		return nil
+	}
 	root := assignmentRoot(expr)
 	if root == "" {
 		return nil
@@ -326,12 +333,20 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		if err != nil {
 			return err
 		}
-		oType, ok := optT.(OptionalType)
-		if !ok {
-			return fmt.Errorf("[%s] if-let requires optional type, got '%s'", s.At, optT)
+		var unwrapped UbeType
+		switch t := optT.(type) {
+		case OptionalType:
+			unwrapped = t.Inner
+		case ResultType:
+			// `if let x = result` binds the success value; the else branch
+			// is taken when the result carries an error.
+			unwrapped = t.Ok
+			s.IsResult = true
+		default:
+			return fmt.Errorf("[%s] if-let requires optional or result type, got '%s'", s.At, optT)
 		}
 		thenEnv := childTypeEnvironment(env)
-		thenEnv.Vars[s.VarName] = VarInfo{Type: oType.Inner, IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Expr, env), LoopDepth: thenEnv.LoopDepth}
+		thenEnv.Vars[s.VarName] = VarInfo{Type: unwrapped, IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Expr, env), LoopDepth: thenEnv.LoopDepth}
 		if err := tc.checkBlock(s.Then, thenEnv); err != nil {
 			return err
 		}
@@ -392,7 +407,33 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		case RangeType:
 			elemT = it.Elem
 		default:
-			return fmt.Errorf("[%s] for-in requires slice, array, or range (start..end), got '%s'", s.At, iterT)
+			// Custom iterator protocol:
+			//   fn (mut self) next() -> T?
+			typeName := iterT.String()
+			sig, found := tc.Global.Funcs[typeName+".next"]
+			if !found {
+				base := typeBaseName(iterT)
+				if base != "" && base != typeName {
+					sig, found = tc.Global.Funcs[base+".next"]
+					if found {
+						typeName = base
+					}
+				}
+			}
+			if !found {
+				return fmt.Errorf("[%s] cannot iterate over '%s': expected a slice, array, range, or a type implementing 'fn next(mut self) -> T?'", s.At, iterT)
+			}
+			if len(sig.Params) != 0 {
+				return fmt.Errorf("[%s] iterator method '%s.next' must take no arguments", s.At, typeName)
+			}
+			opt, isOpt := sig.RetType.(OptionalType)
+			if !isOpt {
+				return fmt.Errorf("[%s] iterator method '%s.next' must return an optional type (got '%s')", s.At, typeName, sig.RetType)
+			}
+			elemT = opt.Inner
+			s.IsCustomIterator = true
+			s.NextMethod = typeName + "_next"
+			s.ReceiverIsMut = sig.ReceiverMut
 		}
 		s.IterType = iterT
 		loopEnv := childTypeEnvironment(env)

@@ -52,16 +52,17 @@ type structMeta struct {
 }
 
 type wasmEmitter struct {
-	types       [][]byte
-	typeMap     map[string]uint32
-	funcs       []uint32 // type index for each defined func
-	codeBodies  [][]byte
-	data        []byte
-	dataOffset  uint32
-	fnIndices   map[string]uint32
-	fdWriteIdx  uint32
-	hasFdWrite  bool
-	structs     map[string]structMeta
+	types         [][]byte
+	typeMap       map[string]uint32
+	funcs         []uint32 // type index for each defined func
+	codeBodies    [][]byte
+	data          []byte
+	dataOffset    uint32
+	fnIndices     map[string]uint32
+	fdWriteIdx    uint32
+	hasFdWrite    bool
+	structs       map[string]structMeta
+	moduleAliases map[string]string
 }
 
 func newWasmEmitter() *wasmEmitter {
@@ -102,6 +103,12 @@ func (e *wasmEmitter) internString(s string) (uint32, uint32) {
 }
 
 func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
+	e.moduleAliases = map[string]string{}
+	if prog != nil {
+		for alias, prefix := range prog.ModuleAliases {
+			e.moduleAliases[alias] = prefix
+		}
+	}
 	// Register WASI fd_write import type: (i32, i32, i32, i32) -> i32
 	e.fdWriteIdx = 0
 	e.hasFdWrite = true
@@ -480,6 +487,17 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		}
 
 	case *MemberExpr:
+		// Qualified zero-argument module member: math.PI.
+		if target, ok := e.Target.(*IdentExpr); ok {
+			if prefix, isModule := ctx.emitter.moduleAliases[target.Name]; isModule {
+				name := prefix + e.Member
+				if fnIdx, exists := ctx.emitter.fnIndices[name]; exists {
+					buf.WriteByte(0x10) // call
+					writeUleb128(buf, fnIdx)
+					return nil
+				}
+			}
+		}
 		// Struct field load: target.member
 		structName := e.TargetType.String()
 		meta, ok := ctx.emitter.structs[structName]
@@ -538,13 +556,24 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		writeUleb128(buf, structBase)
 
 	case *CallExpr:
-		if ident, ok := e.Callee.(*IdentExpr); ok {
-			if ident.Name == "print" || ident.Name == "println" {
-				return ctx.compilePrint(buf, e.Args, ident.Name == "println")
+		name := ""
+		switch callee := e.Callee.(type) {
+		case *IdentExpr:
+			name = callee.Name
+		case *MemberExpr:
+			if target, ok := callee.Target.(*IdentExpr); ok {
+				if prefix, isModule := ctx.emitter.moduleAliases[target.Name]; isModule {
+					name = prefix + callee.Member
+				}
 			}
-			fnIdx, exists := ctx.emitter.fnIndices[ident.Name]
+		}
+		if name != "" {
+			if name == "print" || name == "println" {
+				return ctx.compilePrint(buf, e.Args, name == "println")
+			}
+			fnIdx, exists := ctx.emitter.fnIndices[name]
 			if !exists {
-				return fmt.Errorf("unknown function %s", ident.Name)
+				return fmt.Errorf("unknown function %s", name)
 			}
 			for _, arg := range e.Args {
 				if err := ctx.compileExpr(buf, arg); err != nil {
@@ -902,7 +931,7 @@ func (e *wasmEmitter) assembleBinary() ([]byte, error) {
 	writeUleb128(&importSec, 1) // 1 import
 	writeString(&importSec, "wasi_snapshot_preview1")
 	writeString(&importSec, "fd_write")
-	importSec.WriteByte(0x00) // import kind: func
+	importSec.WriteByte(0x00)   // import kind: func
 	writeUleb128(&importSec, 0) // type index 0
 	writeSection(&out, secImport, importSec.Bytes())
 
@@ -926,10 +955,10 @@ func (e *wasmEmitter) assembleBinary() ([]byte, error) {
 	var globSec bytes.Buffer
 	writeUleb128(&globSec, 1) // 1 global
 	globSec.WriteByte(valTypeI32)
-	globSec.WriteByte(0x01)   // mutability: mutable (1)
-	globSec.WriteByte(0x41)   // i32.const
+	globSec.WriteByte(0x01) // mutability: mutable (1)
+	globSec.WriteByte(0x41) // i32.const
 	writeSleb128(&globSec, initialHeap)
-	globSec.WriteByte(0x0b)   // end
+	globSec.WriteByte(0x0b) // end
 	writeSection(&out, secGlobal, globSec.Bytes())
 
 	// 7. Export section (export "memory" and "_start")
@@ -960,7 +989,7 @@ func (e *wasmEmitter) assembleBinary() ([]byte, error) {
 		dataSec.WriteByte(0x00)   // memory index 0
 		dataSec.WriteByte(0x41)   // i32.const
 		writeSleb128(&dataSec, staticDataOff)
-		dataSec.WriteByte(0x0b)   // end
+		dataSec.WriteByte(0x0b) // end
 		writeUleb128(&dataSec, uint32(len(e.data)))
 		dataSec.Write(e.data)
 		writeSection(&out, secData, dataSec.Bytes())

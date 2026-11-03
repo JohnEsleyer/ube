@@ -28,6 +28,19 @@ func integerType(t UbeType) bool {
 	return false
 }
 
+// lookupModuleMember resolves `alias.member` to the internal flattened name
+// used for an imported module. Unaliased imports map to the empty prefix, so
+// `wasi.fd_write(...)` and `fd_write(...)` resolve to the same declaration.
+func (tc *Typechecker) lookupModuleMember(alias, member string) (string, FuncSignature, bool) {
+	prefix, isModule := tc.ModuleAliases[alias]
+	if !isModule {
+		return "", FuncSignature{}, false
+	}
+	key := prefix + member
+	sig, ok := tc.Global.Funcs[key]
+	return key, sig, ok
+}
+
 func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, error) {
 	switch e := expr.(type) {
 	case *PromoteExpr:
@@ -268,6 +281,38 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		// Wasm host imports declared with 'extern fn' are safe, sandboxed calls.
 		// No unsafe wrapper is required or permitted anywhere in the language.
 
+		// Safe string construction from a byte slice:
+		//   string.from_bytes(bytes) -> string ! string
+		if mem, ok := e.Callee.(*MemberExpr); ok {
+			if id, ok := mem.Target.(*IdentExpr); ok && id.Name == "string" &&
+				(mem.Member == "from_bytes" || mem.Member == "from_utf8") {
+				if len(e.Args) != 1 {
+					return nil, fmt.Errorf("[%s] string.%s expects 1 argument (got %d)", e.At, mem.Member, len(e.Args))
+				}
+				argT, err := tc.inferExpr(e.Args[0], env)
+				if err != nil {
+					return nil, err
+				}
+				sl, isSlice := argT.(SliceType)
+				if !isSlice || sl.Elem.String() != "u8" {
+					return nil, fmt.Errorf("[%s] string.%s expects '[]u8', got '%s'", e.At, mem.Member, argT)
+				}
+				return ResultType{Ok: StringType{}, Err: StringType{}}, nil
+			}
+
+			// Qualified module function call: math.min(a, b).
+			if id, ok := mem.Target.(*IdentExpr); ok {
+				if _, isVar := env.LookupVar(id.Name); !isVar {
+					if _, sig, found := tc.lookupModuleMember(id.Name, mem.Member); found {
+						if err := tc.checkCallArgs(e.Args, sig.Params, sig.Escaping, env, e.At); err != nil {
+							return nil, err
+						}
+						return sig.RetType, nil
+					}
+				}
+			}
+		}
+
 		if id, ok := e.Callee.(*IdentExpr); ok && id.Name == "format" {
 			if len(e.Args) == 0 {
 				return nil, fmt.Errorf("[%s] format expects at least a format string", e.At)
@@ -379,6 +424,11 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			if _, isStr := tgtT.(StringType); isStr {
 				e.ReceiverType = tgtT
 				switch mem.Member {
+				case "bytes", "as_bytes":
+					if len(e.Args) != 0 {
+						return nil, fmt.Errorf("[%s] %s expects 0 arguments", e.At, mem.Member)
+					}
+					return SliceType{Elem: PrimitiveType{Name: "u8"}}, nil
 				case "trim":
 					if len(e.Args) != 0 {
 						return nil, fmt.Errorf("[%s] trim expects 0 arguments", e.At)
@@ -715,6 +765,12 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 
 	case *MemberExpr:
 		if id, ok := e.Target.(*IdentExpr); ok {
+			// Qualified zero-argument module member: math.PI.
+			if _, isVar := env.LookupVar(id.Name); !isVar {
+				if _, sig, found := tc.lookupModuleMember(id.Name, e.Member); found && len(sig.Params) == 0 {
+					return sig.RetType, nil
+				}
+			}
 			if variants, isEnum := tc.Global.Enums[id.Name]; isEnum {
 				if meta, hasMeta := tc.Global.EnumMeta[id.Name]; hasMeta {
 					if env.CurFile != "" && meta.File != "" && env.CurFile != meta.File && !meta.IsPub {

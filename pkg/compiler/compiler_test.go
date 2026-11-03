@@ -63,13 +63,30 @@ func TestMain(m *testing.M) {
 
 func compilePipeline(t *testing.T, source string) (*compiler.Program, error) {
 	t.Helper()
-	tokens, err := compiler.NewLexer("test.ube", source).Tokenize()
-	if err != nil {
-		return nil, err
-	}
-	prog, err := compiler.NewParser(tokens).ParseProgram()
-	if err != nil {
-		return nil, err
+	var prog *compiler.Program
+	if strings.Contains(source, "import \"") {
+		// Import declarations are resolved by the module loader, so route
+		// import-bearing snippets through it just like the real driver.
+		dir := t.TempDir()
+		entry := filepath.Join(dir, "main.ube")
+		if err := os.WriteFile(entry, []byte(source), 0600); err != nil {
+			return nil, err
+		}
+		loaded, err := compiler.NewModuleLoader().Load(entry)
+		if err != nil {
+			return nil, err
+		}
+		prog = loaded
+	} else {
+		tokens, err := compiler.NewLexer("test.ube", source).Tokenize()
+		if err != nil {
+			return nil, err
+		}
+		parsed, err := compiler.NewParser(tokens).ParseProgram()
+		if err != nil {
+			return nil, err
+		}
+		prog = parsed
 	}
 	if err := compiler.Monomorphize(prog); err != nil {
 		return nil, err

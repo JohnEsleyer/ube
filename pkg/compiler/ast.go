@@ -284,8 +284,11 @@ type IfLetStmt struct {
 	At      SourceLocation
 	VarName string
 	Expr    Expr
-	Then    *BlockStmt
-	Else    Stmt
+	// IsResult distinguishes `if let` over a result (`T ! E`) from an
+	// optional. Result values are tested with .ok instead of .has_val.
+	IsResult bool
+	Then     *BlockStmt
+	Else     Stmt
 }
 
 func (s *IfLetStmt) Loc() SourceLocation { return s.At }
@@ -311,11 +314,14 @@ func (s *WhileLetStmt) Loc() SourceLocation { return s.At }
 func (s *WhileLetStmt) stmtNode()           {}
 
 type ForStmt struct {
-	At       SourceLocation
-	ItemName string
-	Iter     Expr
-	IterType UbeType
-	Body     *BlockStmt
+	At               SourceLocation
+	ItemName         string
+	Iter             Expr
+	IterType         UbeType
+	IsCustomIterator bool
+	NextMethod       string
+	ReceiverIsMut    bool
+	Body             *BlockStmt
 }
 
 func (s *ForStmt) Loc() SourceLocation { return s.At }
@@ -402,8 +408,9 @@ type Decl interface {
 }
 
 type ImportDecl struct {
-	At   SourceLocation
-	Path string
+	At    SourceLocation
+	Path  string
+	Alias string
 }
 
 func (d *ImportDecl) Loc() SourceLocation { return d.At }
@@ -496,6 +503,11 @@ func (d *ExternFnDecl) declNode()           {}
 type Program struct {
 	At    SourceLocation
 	Decls []Decl
+	// ModuleAliases maps a source-level module qualifier (for example "math"
+	// in `import "std/math" as math`) to the internal name prefix used for
+	// that module's declarations. An unaliased import maps its module base
+	// name to "" so both `foo()` and `mod.foo()` remain usable.
+	ModuleAliases map[string]string
 }
 
 func (p *Program) Loc() SourceLocation { return p.At }

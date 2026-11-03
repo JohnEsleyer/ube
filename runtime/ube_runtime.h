@@ -375,6 +375,102 @@ typedef struct { bool ok; union { UbeSlice_string val; string err; }; } UbeResul
 #define UbeOption_string_DEFINED
 typedef struct { bool has_val; string val; } UbeOption_string;
 #endif
+#ifndef UbeSlice_u8_DEFINED
+#define UbeSlice_u8_DEFINED
+typedef struct { uint8_t* data; size_t len; size_t cap; } UbeSlice_u8;
+#endif
+#ifndef UbeResult_i32_string_DEFINED
+#define UbeResult_i32_string_DEFINED
+typedef struct { bool ok; union { int32_t val; string err; }; } UbeResult_i32_string;
+#endif
+
+// Strict UTF-8 validation (no overlongs, no surrogate code points, max
+// U+10FFFF). Used by `string.from_bytes`.
+static inline bool ube_is_valid_utf8(const uint8_t* data, size_t len) {
+    size_t i = 0;
+    while (i < len) {
+        uint8_t c = data[i];
+        if (c <= 0x7F) {
+            i++;
+        } else if ((c & 0xE0) == 0xC0) {
+            if (i + 1 >= len) return false;
+            if ((data[i + 1] & 0xC0) != 0x80) return false;
+            if (c < 0xC2) return false;
+            i += 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            if (i + 2 >= len) return false;
+            if ((data[i + 1] & 0xC0) != 0x80 || (data[i + 2] & 0xC0) != 0x80) return false;
+            if (c == 0xE0 && data[i + 1] < 0xA0) return false;
+            if (c == 0xED && data[i + 1] >= 0xA0) return false;
+            i += 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            if (i + 3 >= len) return false;
+            if ((data[i + 1] & 0xC0) != 0x80 ||
+                (data[i + 2] & 0xC0) != 0x80 ||
+                (data[i + 3] & 0xC0) != 0x80) return false;
+            if (c == 0xF0 && data[i + 1] < 0x90) return false;
+            if (c == 0xF4 && data[i + 1] > 0x8F) return false;
+            if (c > 0xF4) return false;
+            i += 4;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+static inline UbeResult_string_string ube_str_from_bytes(UbeSlice_u8 b) {
+    UbeResult_string_string res;
+    if (!ube_is_valid_utf8((const uint8_t*)b.data, b.len)) {
+        res.ok = false;
+        res.err = ube_str_lit("invalid utf-8 encoding");
+        return res;
+    }
+    char* mem = (char*)ube_bump_alloc(b.len + 1);
+    if (b.len > 0 && b.data != NULL) memcpy(mem, b.data, b.len);
+    mem[b.len] = '\0';
+    res.ok = true;
+    res.val = (string){ mem, b.len };
+    return res;
+}
+
+// WASI-style scalar buffer bridges. They take owned slice views and perform
+// the ciovec marshalling internally, so Ube source never needs raw pointers.
+static inline UbeResult_i32_string ube_wasi_fd_write(int32_t fd, UbeSlice_u8 data) {
+    UbeResult_i32_string res;
+    FILE* stream = NULL;
+    if (fd == 0) stream = stdin;
+    else if (fd == 1) stream = stdout;
+    else if (fd == 2) stream = stderr;
+
+    if (stream) {
+        size_t n = data.len ? fwrite(data.data, 1, data.len, stream) : 0;
+        fflush(stream);
+        res.ok = true;
+        res.val = (int32_t)n;
+        return res;
+    }
+    res.ok = false;
+    res.err = ube_str_lit("invalid file descriptor");
+    return res;
+}
+
+static inline UbeResult_i32_string ube_wasi_fd_read(int32_t fd, UbeSlice_u8* buf) {
+    UbeResult_i32_string res;
+    FILE* stream = NULL;
+    if (fd == 0) stream = stdin;
+
+    if (stream) {
+        size_t n = buf->cap ? fread(buf->data, 1, buf->cap, stream) : 0;
+        buf->len = n;
+        res.ok = true;
+        res.val = (int32_t)n;
+        return res;
+    }
+    res.ok = false;
+    res.err = ube_str_lit("invalid file descriptor");
+    return res;
+}
 
 static inline string ube_str_trim(string s) {
     if (s.len == 0) return s;

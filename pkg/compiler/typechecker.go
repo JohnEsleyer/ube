@@ -116,12 +116,17 @@ func (e *TypeEnvironment) updateVar(name string, update func(*VarInfo)) bool {
 }
 
 type Typechecker struct {
-	Global  *TypeEnvironment
-	Externs map[string]bool
+	Global        *TypeEnvironment
+	Externs       map[string]bool
+	ModuleAliases map[string]string
 }
 
 func NewTypechecker() *Typechecker {
-	tc := &Typechecker{Global: NewTypeEnvironment(nil), Externs: make(map[string]bool)}
+	tc := &Typechecker{
+		Global:        NewTypeEnvironment(nil),
+		Externs:       make(map[string]bool),
+		ModuleAliases: make(map[string]string),
+	}
 	void := PrimitiveType{Name: "void"}
 	i32 := PrimitiveType{Name: "i32"}
 	i64 := PrimitiveType{Name: "i64"}
@@ -162,6 +167,22 @@ func NewTypechecker() *Typechecker {
 	tc.Global.Funcs["pow"] = FuncSignature{Params: []FieldDecl{{Name: "base", Type: PrimitiveType{Name: "f64"}}, {Name: "exp", Type: PrimitiveType{Name: "f64"}}}, RetType: PrimitiveType{Name: "f64"}}
 	tc.Global.Funcs["floor"] = FuncSignature{Params: []FieldDecl{{Name: "f", Type: PrimitiveType{Name: "f64"}}}, RetType: PrimitiveType{Name: "f64"}}
 	tc.Global.Funcs["ceil"] = FuncSignature{Params: []FieldDecl{{Name: "f", Type: PrimitiveType{Name: "f64"}}}, RetType: PrimitiveType{Name: "f64"}}
+
+	// Byte/slice and WASI buffer bridges. These are compiler/runtime
+	// intrinsics rather than ordinary stdlib functions.
+	u8Slice := SliceType{Elem: PrimitiveType{Name: "u8"}}
+	tc.Global.Funcs["string_from_bytes"] = FuncSignature{
+		Params:  []FieldDecl{{Name: "b", Type: u8Slice}},
+		RetType: ResultType{Ok: str, Err: str},
+	}
+	tc.Global.Funcs["wasi_fd_write"] = FuncSignature{
+		Params:  []FieldDecl{{Name: "fd", Type: i32}, {Name: "data", Type: u8Slice}},
+		RetType: ResultType{Ok: i32, Err: str},
+	}
+	tc.Global.Funcs["wasi_fd_read"] = FuncSignature{
+		Params:  []FieldDecl{{Name: "fd", Type: i32}, {Name: "buf", Type: u8Slice, IsMut: true}},
+		RetType: ResultType{Ok: i32, Err: str},
+	}
 
 	// StringBuilder receiver methods
 	tc.Global.Funcs["format"] = FuncSignature{RetType: str}
@@ -210,6 +231,15 @@ func (tc *Typechecker) resolveType(t UbeType) UbeType {
 }
 
 func (tc *Typechecker) Check(prog *Program) error {
+	if tc.ModuleAliases == nil {
+		tc.ModuleAliases = make(map[string]string)
+	}
+	if prog != nil {
+		for alias, prefix := range prog.ModuleAliases {
+			tc.ModuleAliases[alias] = prefix
+		}
+	}
+
 	tc.Global.Structs["UbeHandle"] = []FieldDecl{
 		{Name: "index", Type: PrimitiveType{Name: "u32"}},
 		{Name: "gen", Type: PrimitiveType{Name: "u32"}},

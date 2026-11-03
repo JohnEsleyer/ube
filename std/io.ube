@@ -1,0 +1,212 @@
+// Ube standard library: input/output primitives and stream utilities.
+
+import "std/wasi"
+import "std/bytes"
+
+// -------------------------------------------------------------
+// Core I/O Traits
+// -------------------------------------------------------------
+
+pub trait Reader {
+    fn read(buf: []u8) -> i32 ! string
+}
+
+pub trait Writer {
+    fn write(data: []u8) -> i32 ! string
+}
+
+pub trait Closer {
+    fn close() -> bool ! string
+}
+
+pub trait Seeker {
+    fn seek(offset: i32, whence: i32) -> i32 ! string
+}
+
+// -------------------------------------------------------------
+// Seek Constants
+// -------------------------------------------------------------
+
+pub fn io_seek_set() -> i32 { return 0 }
+pub fn io_seek_cur() -> i32 { return 1 }
+pub fn io_seek_end() -> i32 { return 2 }
+
+// -------------------------------------------------------------
+// Standard Streams (WASI Backed)
+// -------------------------------------------------------------
+
+pub struct Stdin {
+    pub fd: i32
+}
+
+pub fn io_stdin() -> Stdin {
+    return Stdin { fd: wasi_stdin() }
+}
+
+pub fn (s Stdin) read(mut buf: []u8) -> i32 ! string {
+    return fd_read_bytes(s.fd, buf)
+}
+
+pub struct Stdout {
+    pub fd: i32
+}
+
+pub fn io_stdout() -> Stdout {
+    return Stdout { fd: wasi_stdout() }
+}
+
+pub fn (s Stdout) write(data: []u8) -> i32 ! string {
+    return fd_write_bytes(s.fd, data)
+}
+
+pub struct Stderr {
+    pub fd: i32
+}
+
+pub fn io_stderr() -> Stderr {
+    return Stderr { fd: wasi_stderr() }
+}
+
+pub fn (s Stderr) write(data: []u8) -> i32 ! string {
+    return fd_write_bytes(s.fd, data)
+}
+
+// -------------------------------------------------------------
+// In-Memory Streams
+// -------------------------------------------------------------
+
+pub struct BytesReader {
+    pub data: []u8,
+    pub pos: i32
+}
+
+pub fn bytes_reader_new(data: []u8) -> BytesReader {
+    return BytesReader {
+        data: data,
+        pos: 0
+    }
+}
+
+pub fn (mut r BytesReader) read(mut buf: []u8) -> i32 ! string {
+    if r.pos >= r.data.len {
+        return 0
+    }
+    let mut n = 0
+    while r.pos < r.data.len && n < buf.len {
+        buf[n] = r.data[r.pos]
+        r.pos += 1
+        n += 1
+    }
+    return n
+}
+
+pub fn (mut r BytesReader) seek(offset: i32, whence: i32) -> i32 ! string {
+    let mut new_pos = r.pos
+    if whence == 0 {
+        new_pos = offset
+    } else if whence == 1 {
+        new_pos = r.pos + offset
+    } else if whence == 2 {
+        new_pos = r.data.len + offset
+    } else {
+        return error("invalid whence")
+    }
+
+    if new_pos < 0 {
+        return error("negative seek offset")
+    }
+    r.pos = new_pos
+    return r.pos
+}
+
+pub fn (r BytesReader) remaining() -> i32 {
+    let rem = r.data.len - r.pos
+    if rem < 0 {
+        return 0
+    }
+    return rem
+}
+
+pub struct BytesWriter {
+    pub buf: ByteBuffer
+}
+
+pub fn bytes_writer_new() -> BytesWriter {
+    return BytesWriter {
+        buf: buffer_new(0)
+    }
+}
+
+pub fn (mut w BytesWriter) write(data: []u8) -> i32 ! string {
+    let n = data.len
+    w.buf.write_bytes(data)
+    return n
+}
+
+pub fn (w BytesWriter) to_slice() -> []u8 {
+    return w.buf.to_slice()
+}
+
+pub fn (w BytesWriter) len() -> i32 {
+    return w.buf.len()
+}
+
+// -------------------------------------------------------------
+// Stream Combinators & Helpers
+// -------------------------------------------------------------
+
+pub fn read_all(mut r: BytesReader) -> []u8 {
+    let mut out = []u8{}
+    let mut chunk = []u8{}
+    let mut i = 0
+    while i < 128 {
+        chunk.push(0)
+        i += 1
+    }
+    while true {
+        if let n = r.read(chunk) {
+            if n <= 0 {
+                break
+            }
+            let mut j = 0
+            while j < n {
+                out.push(chunk[j])
+                j += 1
+            }
+        } else {
+            break
+        }
+    }
+    return out
+}
+
+pub fn copy(mut dst: BytesWriter, mut src: BytesReader) -> i32 {
+    let mut total = 0
+    let mut buf = []u8{}
+    let mut i = 0
+    while i < 128 {
+        buf.push(0)
+        i += 1
+    }
+    while true {
+        if let n = src.read(buf) {
+            if n <= 0 {
+                break
+            }
+            let mut chunk = []u8{}
+            let mut j = 0
+            while j < n {
+                chunk.push(buf[j])
+                j += 1
+            }
+            if let written = dst.write(chunk) {
+                total += written
+            } else {
+                break
+            }
+        } else {
+            break
+        }
+    }
+    return total
+}

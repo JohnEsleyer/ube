@@ -32,6 +32,13 @@ pub fn (s Stack[T]) is_empty() -> bool {
     return s.items.len == 0
 }
 
+// Iterator protocol: `for item in stack { ... }` pops until the stack is
+// empty. `next` is called on a mutable receiver, matching the typechecker's
+// custom-iterator convention.
+pub fn (mut s Stack[T]) next() -> T? {
+    return s.pop()
+}
+
 pub struct Pair[K, V] {
     pub key: K,
     pub val: V

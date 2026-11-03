@@ -38,6 +38,7 @@ const (
 	TokenImport   TokenType = "import"
 	TokenDefer    TokenType = "defer"
 	TokenTrait    TokenType = "trait"
+	TokenAs       TokenType = "as"
 
 	// Format Strings
 	TokenFormatString TokenType = "FORMAT_STRING"

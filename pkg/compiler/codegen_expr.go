@@ -105,6 +105,29 @@ func (g *Generator) genExpr(expr Expr) string {
 		return fmt.Sprintf("%s(%s)", e.Op, g.genExpr(e.Operand))
 
 	case *CallExpr:
+		if mem, ok := e.Callee.(*MemberExpr); ok {
+			if id, ok := mem.Target.(*IdentExpr); ok && id.Name == "string" &&
+				(mem.Member == "from_bytes" || mem.Member == "from_utf8") {
+				return fmt.Sprintf("ube_str_from_bytes(%s)", g.genExpr(e.Args[0]))
+			}
+			// Qualified module call: math.min(a, b) -> math__min(a, b).
+			if id, ok := mem.Target.(*IdentExpr); ok && g.Program != nil {
+				if prefix, isModule := g.Program.ModuleAliases[id.Name]; isModule {
+					callee := prefix + mem.Member
+					if g.userFuncs[callee] {
+						args := make([]string, len(e.Args))
+						for i, arg := range e.Args {
+							value := g.genExpr(arg)
+							if g.sliceMutParams[callee][i] {
+								value = "&(" + value + ")"
+							}
+							args[i] = value
+						}
+						return fmt.Sprintf("%s(%s)", cFuncName(callee), strings.Join(args, ", "))
+					}
+				}
+			}
+		}
 		if mem, ok := e.Callee.(*MemberExpr); ok && mem.Member == "recv" {
 			elemType := e.PoolElem
 			if elemType == nil {
@@ -171,9 +194,13 @@ func (g *Generator) genExpr(expr Expr) string {
 		if id, ok := e.Callee.(*IdentExpr); ok && id.Name == "println_str" && len(e.Args) == 1 {
 			return fmt.Sprintf("UBE_PRINTLN(%s)", g.genExpr(e.Args[0]))
 		}
+		if id, ok := e.Callee.(*IdentExpr); ok && id.Name == "wasi_fd_read" && !g.userFuncs[id.Name] {
+			return fmt.Sprintf("ube_wasi_fd_read(%s, &(%s))", g.genExpr(e.Args[0]), g.genExpr(e.Args[1]))
+		}
 		if id, ok := e.Callee.(*IdentExpr); ok {
 			builtins := map[string]string{
-				"time_now_ms": "ube_time_now_ms", "time_now_ns": "ube_time_now_ns",
+				"wasi_fd_write": "ube_wasi_fd_write",
+				"time_now_ms":   "ube_time_now_ms", "time_now_ns": "ube_time_now_ns",
 				"sleep_ms": "ube_sleep_ms", "yield": "ube_yield",
 				"exit_process": "ube_exit_process", "int_to_str": "ube_int_to_str", "str_to_int": "ube_str_to_int",
 				"read_file": "ube_read_file", "write_file": "ube_write_file", "os_args": "ube_os_args",
@@ -221,6 +248,8 @@ func (g *Generator) genExpr(expr Expr) string {
 			if _, isStr := mem.TargetType.(StringType); isStr {
 				target := g.genExpr(mem.Target)
 				switch mem.Member {
+				case "bytes", "as_bytes":
+					return fmt.Sprintf("({ __auto_type _str_b = %s; (UbeSlice_u8){ .data = (uint8_t*)_str_b.data, .len = _str_b.len, .cap = _str_b.len }; })", target)
 				case "trim":
 					return fmt.Sprintf("ube_str_trim(%s)", target)
 				case "starts_with":
@@ -371,6 +400,14 @@ func (g *Generator) genExpr(expr Expr) string {
 		return fmt.Sprintf("%s(%s)", calleeCode, strings.Join(args, ", "))
 
 	case *MemberExpr:
+		if id, ok := e.Target.(*IdentExpr); ok && e.TargetType == nil && g.Program != nil {
+			if prefix, isModule := g.Program.ModuleAliases[id.Name]; isModule {
+				callee := prefix + e.Member
+				if g.userFuncs[callee] {
+					return fmt.Sprintf("%s()", cFuncName(callee))
+				}
+			}
+		}
 		if id, ok := e.Target.(*IdentExpr); ok && g.isUnitEnumVariant(id.Name, e.Member) {
 			return fmt.Sprintf("(%s){ .tag = %s_%s }", id.Name, id.Name, e.Member)
 		}

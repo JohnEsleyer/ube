@@ -32,6 +32,7 @@ var keywords = map[string]TokenType{
 	"import":   TokenImport,
 	"defer":    TokenDefer,
 	"trait":    TokenTrait,
+	"as":       TokenAs,
 	"true":     TokenBool,
 	"false":    TokenBool,
 	"none":     TokenNone,

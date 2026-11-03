@@ -290,7 +290,11 @@ func (g *Generator) genStmt(st Stmt) {
 	case *IfLetStmt:
 		tmp := g.newTmp()
 		g.emit(fmt.Sprintf("__auto_type %s = %s;", tmp, g.genExpr(s.Expr)))
-		g.emit(fmt.Sprintf("if (%s.has_val) {", tmp))
+		okField := "has_val"
+		if s.IsResult {
+			okField = "ok"
+		}
+		g.emit(fmt.Sprintf("if (%s.%s) {", tmp, okField))
 		g.indent++
 		g.emit(fmt.Sprintf("__auto_type %s = %s.val;", s.VarName, tmp))
 		g.genBlock(s.Then)
@@ -373,6 +377,34 @@ func (g *Generator) genStmt(st Stmt) {
 
 	case *ForStmt:
 		labels := loopLabel{breakTo: g.newTmp() + "_break", continueTo: g.newTmp() + "_continue"}
+		if s.IsCustomIterator {
+			iterTmp := g.newTmp()
+			g.emit(fmt.Sprintf("%s %s = %s;", g.toCType(s.IterType), iterTmp, g.genExpr(s.Iter)))
+			g.emit("while (1) {")
+			g.indent++
+			g.loopLabels = append(g.loopLabels, labels)
+			g.loopSelectDepth = append(g.loopSelectDepth, len(g.selectGroups))
+			g.loopDeferDepth = append(g.loopDeferDepth, len(g.deferScopes))
+			g.loopScopeDepth = append(g.loopScopeDepth, len(g.scopeMarks))
+			optTmp := g.newTmp()
+			if s.ReceiverIsMut {
+				g.emit(fmt.Sprintf("__auto_type %s = %s(&%s);", optTmp, s.NextMethod, iterTmp))
+			} else {
+				g.emit(fmt.Sprintf("__auto_type %s = %s(%s);", optTmp, s.NextMethod, iterTmp))
+			}
+			g.emit(fmt.Sprintf("if (!%s.has_val) { break; }", optTmp))
+			g.emit(fmt.Sprintf("__auto_type %s = %s.val;", s.ItemName, optTmp))
+			g.genBlock(s.Body)
+			g.loopDeferDepth = g.loopDeferDepth[:len(g.loopDeferDepth)-1]
+			g.loopScopeDepth = g.loopScopeDepth[:len(g.loopScopeDepth)-1]
+			g.emit(labels.continueTo + ":;")
+			g.loopLabels = g.loopLabels[:len(g.loopLabels)-1]
+			g.loopSelectDepth = g.loopSelectDepth[:len(g.loopSelectDepth)-1]
+			g.indent--
+			g.emit("}")
+			g.emit(labels.breakTo + ":;")
+			return
+		}
 		if rng, ok := s.Iter.(*RangeExpr); ok {
 			startTmp := g.newTmp()
 			endTmp := g.newTmp()

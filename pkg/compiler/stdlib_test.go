@@ -208,6 +208,51 @@ fn main() {
 	}
 }
 
+func TestStdlib_ImportIO(t *testing.T) {
+	dir := t.TempDir()
+	mainFile := writeUbeFile(t, dir, "main.ube", `
+import "std/io"
+
+fn main() {
+    let mut w = bytes_writer_new()
+    let data = []u8{72, 101, 108, 108, 111}
+    let n = w.write(data)
+    if let written = n {
+        println(written)
+    }
+
+    let mut r = bytes_reader_new(w.to_slice())
+    let mut buf = []u8{0, 0, 0, 0, 0}
+    let rn = r.read(buf)
+    if let read_len = rn {
+        println(read_len)
+        println(buf[0])
+        println(buf[4])
+    }
+
+    let mut src = bytes_reader_new([]u8{65, 66, 67})
+    let mut dst = bytes_writer_new()
+    let copied = copy(dst, src)
+    println(copied)
+    println(dst.len())
+}
+`)
+	prog, err := compiler.NewModuleLoader().Load(mainFile)
+	if err != nil {
+		t.Fatalf("failed to load std/io: %v", err)
+	}
+	if err := compiler.Monomorphize(prog); err != nil {
+		t.Fatalf("monomorphize failed: %v", err)
+	}
+	if err := compiler.NewTypechecker().Check(prog); err != nil {
+		t.Fatalf("typecheck failed: %v", err)
+	}
+	want := "5\n5\n72\n111\n3\n3"
+	if out := compileLoadedFile(t, mainFile); out != want {
+		t.Fatalf("unexpected io output:\n got: %q\nwant: %q", out, want)
+	}
+}
+
 func TestStdlib_ImportWithUbeSuffix(t *testing.T) {
 	dir := t.TempDir()
 	mainFile := writeUbeFile(t, dir, "main.ube", `

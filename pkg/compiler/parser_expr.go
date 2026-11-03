@@ -380,6 +380,46 @@ func (p *Parser) parsePrimary() Expr {
 
 	if tok.Type == TokenIdent {
 		idTok := p.advance()
+		qualifiedName := false
+
+		// Qualified struct/type initializer: `module.Type{...}` or
+		// `module.Type[T]{...}`. Calls such as `module.fn(...)` stay as
+		// MemberExpr nodes so the typechecker can resolve the module alias.
+		if p.check(TokenDot) && p.peek(1).Type == TokenIdent {
+			savedPos := p.pos
+			p.advance()
+			member := p.advance().Val
+			qualified := idTok.Val + "__" + member
+			// A struct literal name starts with an uppercase letter. Requiring
+			// that here avoids mistaking `value.field { ... }` (a member lookup
+			// followed by an if/while block) for `module.Type { ... }`.
+			useQualified := member[0] >= 'A' && member[0] <= 'Z' && p.check(TokenLBrace)
+			if !useQualified && p.check(TokenLBracket) {
+				depth := 0
+				for i := p.pos; i < len(p.tokens); i++ {
+					if p.tokens[i].Type == TokenLBracket {
+						depth++
+					} else if p.tokens[i].Type == TokenRBracket {
+						depth--
+						if depth == 0 {
+							if i+1 < len(p.tokens) {
+								next := p.tokens[i+1].Type
+								useQualified = next == TokenLParen || next == TokenLBrace
+							}
+							break
+						}
+					} else if p.tokens[i].Type == TokenEOF || p.tokens[i].Type == TokenSemicolon {
+						break
+					}
+				}
+			}
+			if useQualified {
+				idTok.Val = qualified
+				qualifiedName = true
+			} else {
+				p.pos = savedPos
+			}
+		}
 
 		// Generic struct init or generic call: Name[T1, T2]{...} or Name[T1, T2](...)
 		if p.check(TokenLBracket) && len(idTok.Val) > 0 {
@@ -393,7 +433,7 @@ func (p *Parser) parsePrimary() Expr {
 					if depth == 0 {
 						if i+1 < len(p.tokens) {
 							nextT := p.tokens[i+1].Type
-							if nextT == TokenLParen || (nextT == TokenLBrace && idTok.Val[0] >= 'A' && idTok.Val[0] <= 'Z') {
+							if nextT == TokenLParen || (nextT == TokenLBrace && (qualifiedName || (idTok.Val[0] >= 'A' && idTok.Val[0] <= 'Z'))) {
 								hasGenericFollower = true
 							}
 						}
@@ -429,7 +469,7 @@ func (p *Parser) parsePrimary() Expr {
 						return nil
 					}
 					p.advance() // consume ']'
-					if p.check(TokenLBrace) && idTok.Val[0] >= 'A' && idTok.Val[0] <= 'Z' {
+					if p.check(TokenLBrace) && (qualifiedName || (idTok.Val[0] >= 'A' && idTok.Val[0] <= 'Z')) {
 						p.advance()
 						var fields []FieldInit
 						for !p.check(TokenRBrace) && !p.check(TokenEOF) {
@@ -470,7 +510,7 @@ func (p *Parser) parsePrimary() Expr {
 			}
 		}
 
-		if p.check(TokenLBrace) && len(idTok.Val) > 0 && idTok.Val[0] >= 'A' && idTok.Val[0] <= 'Z' {
+		if p.check(TokenLBrace) && len(idTok.Val) > 0 && (qualifiedName || (idTok.Val[0] >= 'A' && idTok.Val[0] <= 'Z')) {
 			p.advance()
 			var fields []FieldInit
 			for !p.check(TokenRBrace) && !p.check(TokenEOF) {

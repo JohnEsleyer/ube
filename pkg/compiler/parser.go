@@ -122,7 +122,12 @@ func (p *Parser) parseDecl() Decl {
 		}
 		loc := p.advance().Loc
 		path := p.expect(TokenString, "Expected import path").Val
-		return &ImportDecl{At: loc, Path: path}
+		alias := ""
+		if p.check(TokenAs) {
+			p.advance()
+			alias = p.expect(TokenIdent, "Expected identifier after 'as'").Val
+		}
+		return &ImportDecl{At: loc, Path: path, Alias: alias}
 	case TokenStruct:
 		d := p.parseStructDecl()
 		d.IsPub = isPub
@@ -453,6 +458,13 @@ func (p *Parser) parseType() UbeType {
 		t = StringBuilderType{}
 	} else if tok.Type == TokenIdent {
 		idName := p.advance().Val
+		// Qualified type name: `module.Type`. Module imports with an alias
+		// prefix every declaration with `<alias>__`, so normalize the type
+		// reference to the same internal spelling.
+		for p.check(TokenDot) {
+			p.advance()
+			idName += "__" + p.expect(TokenIdent, "Expected type name after '.'").Val
+		}
 		if p.check(TokenLBracket) {
 			p.advance()
 			var typeArgs []UbeType

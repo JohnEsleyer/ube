@@ -11,16 +11,22 @@ type ModuleLoader struct {
 	visited, visiting map[string]bool
 	allDecls          []Decl
 	entryDir          string
+	moduleAliases     map[string]string
 }
 
 func NewModuleLoader() *ModuleLoader {
-	return &ModuleLoader{visited: map[string]bool{}, visiting: map[string]bool{}}
+	return &ModuleLoader{
+		visited:       map[string]bool{},
+		visiting:      map[string]bool{},
+		moduleAliases: map[string]string{},
+	}
 }
 
 func (m *ModuleLoader) Load(entry string) (*Program, error) {
 	m.visited = map[string]bool{}
 	m.visiting = map[string]bool{}
 	m.allDecls = nil
+	m.moduleAliases = map[string]string{}
 	abs, err := filepath.Abs(entry)
 	if err != nil {
 		return nil, err
@@ -29,7 +35,33 @@ func (m *ModuleLoader) Load(entry string) (*Program, error) {
 	if err = m.loadRecursive(abs); err != nil {
 		return nil, err
 	}
-	return &Program{At: SourceLocation{File: abs, Line: 1, Col: 1}, Decls: m.allDecls}, nil
+	return &Program{
+		At:            SourceLocation{File: abs, Line: 1, Col: 1},
+		Decls:         m.allDecls,
+		ModuleAliases: m.moduleAliases,
+	}, nil
+}
+
+// moduleBaseName derives the default qualifier for an unaliased import:
+// `std/math` -> "math", `./helpers.ube` -> "helpers".
+func moduleBaseName(path string) string {
+	if key, ok := isStdImport(path); ok {
+		parts := strings.Split(key, "/")
+		return parts[len(parts)-1]
+	}
+	base := filepath.Base(path)
+	return strings.TrimSuffix(base, ".ube")
+}
+
+func (m *ModuleLoader) registerImportAlias(imp *ImportDecl, prefix string) {
+	name := imp.Alias
+	if name == "" {
+		name = moduleBaseName(imp.Path)
+	}
+	if name == "" || name == "." || name == ".." {
+		return
+	}
+	m.moduleAliases[name] = prefix
 }
 
 // isStdImport reports whether p refers to the standard library and returns the
@@ -92,6 +124,10 @@ func (m *ModuleLoader) resolveStdSource(key string) (string, error) {
 }
 
 func (m *ModuleLoader) loadRecursive(path string) error {
+	return m.loadModule(path, "")
+}
+
+func (m *ModuleLoader) loadModule(path, prefix string) error {
 	var (
 		abs string
 		src string
@@ -100,19 +136,6 @@ func (m *ModuleLoader) loadRecursive(path string) error {
 	stdKey, fromStd := isStdImport(path)
 	if fromStd {
 		abs = "std:" + stdKey
-		if m.visited[abs] {
-			return nil
-		}
-		if m.visiting[abs] {
-			return fmt.Errorf("cyclic import detected: %s", path)
-		}
-		m.visiting[abs] = true
-
-		moduleSrc, err := m.resolveStdSource(stdKey)
-		if err != nil {
-			return err
-		}
-		src = moduleSrc
 	} else {
 		var err error
 		abs, err = filepath.Abs(path)
@@ -120,14 +143,29 @@ func (m *ModuleLoader) loadRecursive(path string) error {
 			return err
 		}
 		abs = filepath.Clean(abs)
-		if m.visited[abs] {
-			return nil
-		}
-		if m.visiting[abs] {
-			return fmt.Errorf("cyclic import detected: %s", abs)
-		}
-		m.visiting[abs] = true
+	}
 
+	// The same source file may be imported unaliased and under one or more
+	// aliases. Keep those namespaces independent.
+	visitKey := abs
+	if prefix != "" {
+		visitKey = abs + "#" + prefix
+	}
+	if m.visited[visitKey] {
+		return nil
+	}
+	if m.visiting[visitKey] {
+		return fmt.Errorf("cyclic import detected: %s", path)
+	}
+	m.visiting[visitKey] = true
+
+	if fromStd {
+		moduleSrc, err := m.resolveStdSource(stdKey)
+		if err != nil {
+			return err
+		}
+		src = moduleSrc
+	} else {
 		b, err := os.ReadFile(abs)
 		if err != nil {
 			return fmt.Errorf("failed to read %s: %w", abs, err)
@@ -143,6 +181,10 @@ func (m *ModuleLoader) loadRecursive(path string) error {
 	if err != nil {
 		return err
 	}
+	if prefix != "" {
+		renameAliasedModule(prog, prefix)
+	}
+
 	for _, d := range prog.Decls {
 		if imp, ok := d.(*ImportDecl); ok {
 			var importPath string
@@ -153,14 +195,19 @@ func (m *ModuleLoader) loadRecursive(path string) error {
 			} else {
 				importPath = filepath.Join(filepath.Dir(abs), imp.Path)
 			}
-			if err := m.loadRecursive(importPath); err != nil {
+			childPrefix := ""
+			if imp.Alias != "" {
+				childPrefix = imp.Alias + "__"
+			}
+			m.registerImportAlias(imp, childPrefix)
+			if err := m.loadModule(importPath, childPrefix); err != nil {
 				return err
 			}
 		} else {
 			m.allDecls = append(m.allDecls, d)
 		}
 	}
-	delete(m.visiting, abs)
-	m.visited[abs] = true
+	delete(m.visiting, visitKey)
+	m.visited[visitKey] = true
 	return nil
 }

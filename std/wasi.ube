@@ -25,3 +25,13 @@ extern "wasi_snapshot_preview1" fn path_open(fd: i32, dirflags: i32, path: i32, 
 extern "wasi_snapshot_preview1" fn path_create_directory(fd: i32, path: i32, path_len: i32) -> i32
 extern "wasi_snapshot_preview1" fn path_filestat_get(fd: i32, flags: i32, path: i32, path_len: i32, buf: i32) -> i32
 extern "wasi_snapshot_preview1" fn proc_exit(rval: i32)
+
+// Safe slice-backed I/O. The compiler/runtime bridges these to the scalar
+// WASI fd_read/fd_write imports and marshal ciovec structures internally.
+pub fn fd_write_bytes(fd: i32, data: []u8) -> i32 ! string {
+    return wasi_fd_write(fd, data)
+}
+
+pub fn fd_read_bytes(fd: i32, mut buf: []u8) -> i32 ! string {
+    return wasi_fd_read(fd, buf)
+}
