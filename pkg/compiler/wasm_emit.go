@@ -649,6 +649,51 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			buf.WriteByte(0x36) // i32.store
 			writeUleb128(buf, 2)
 			writeUleb128(buf, uint32(offset))
+		} else if idx, ok := s.LHS.(*IndexExpr); ok {
+			// Array or slice element assignment: target[index] = RHS
+			addrLocal := ctx.allocLocal(valTypeI32)
+			if err := ctx.compileExpr(buf, idx.Target); err != nil {
+				return err
+			}
+			if _, isSlice := idx.TargetType.(SliceType); isSlice {
+				buf.WriteByte(0x28) // i32.load data pointer from slice header offset 0
+				writeUleb128(buf, 2)
+				writeUleb128(buf, 0)
+			}
+			if err := ctx.compileExpr(buf, idx.Index); err != nil {
+				return err
+			}
+			buf.WriteByte(0x41) // i32.const 4
+			writeSleb128(buf, 4)
+			buf.WriteByte(0x6c) // i32.mul
+			buf.WriteByte(0x6a) // i32.add
+			buf.WriteByte(0x21) // local.set addrLocal
+			writeUleb128(buf, addrLocal)
+
+			buf.WriteByte(0x20) // local.get addrLocal
+			writeUleb128(buf, addrLocal)
+
+			if s.Op != "=" {
+				buf.WriteByte(0x20) // local.get addrLocal
+				writeUleb128(buf, addrLocal)
+				buf.WriteByte(0x28) // i32.load
+				writeUleb128(buf, 2)
+				writeUleb128(buf, 0)
+
+				if err := ctx.compileExpr(buf, s.RHS); err != nil {
+					return err
+				}
+				if err := emitCompoundOp(buf, s.Op); err != nil {
+					return err
+				}
+			} else {
+				if err := ctx.compileExpr(buf, s.RHS); err != nil {
+					return err
+				}
+			}
+			buf.WriteByte(0x36) // i32.store
+			writeUleb128(buf, 2)
+			writeUleb128(buf, 0)
 		}
 
 	case *ExprStmt:
@@ -797,7 +842,157 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 
 			buf.WriteByte(0x0b) // end loop
 			buf.WriteByte(0x0b) // end block
+		} else {
+			// for item in array or slice collection
+			targetLocal := ctx.allocLocal(valTypeI32)
+			if err := ctx.compileExpr(buf, s.Iter); err != nil {
+				return err
+			}
+			buf.WriteByte(0x21) // local.set targetLocal
+			writeUleb128(buf, targetLocal)
+
+			lenLocal := ctx.allocLocal(valTypeI32)
+			dataLocal := ctx.allocLocal(valTypeI32)
+
+			if arr, ok := s.IterType.(ArrayType); ok {
+				buf.WriteByte(0x41) // i32.const Size
+				writeSleb128(buf, int32(arr.Size))
+				buf.WriteByte(0x21) // local.set lenLocal
+				writeUleb128(buf, lenLocal)
+
+				buf.WriteByte(0x20) // local.get targetLocal
+				writeUleb128(buf, targetLocal)
+				buf.WriteByte(0x21) // local.set dataLocal
+				writeUleb128(buf, dataLocal)
+			} else {
+				// Slice header: offset 0 = data, offset 4 = len
+				buf.WriteByte(0x20) // local.get targetLocal
+				writeUleb128(buf, targetLocal)
+				buf.WriteByte(0x28) // i32.load
+				writeUleb128(buf, 2)
+				writeUleb128(buf, 4)
+				buf.WriteByte(0x21) // local.set lenLocal
+				writeUleb128(buf, lenLocal)
+
+				buf.WriteByte(0x20) // local.get targetLocal
+				writeUleb128(buf, targetLocal)
+				buf.WriteByte(0x28) // i32.load
+				writeUleb128(buf, 2)
+				writeUleb128(buf, 0)
+				buf.WriteByte(0x21) // local.set dataLocal
+				writeUleb128(buf, dataLocal)
+			}
+
+			idxLocal := ctx.allocLocal(valTypeI32)
+			buf.WriteByte(0x41) // i32.const 0
+			writeSleb128(buf, 0)
+			buf.WriteByte(0x21) // local.set idxLocal
+			writeUleb128(buf, idxLocal)
+
+			itemLocal := ctx.allocLocal(valTypeI32)
+			ctx.locals[s.ItemName] = itemLocal
+
+			buf.WriteByte(0x02)        // block
+			buf.WriteByte(valTypeVoid) // void
+			buf.WriteByte(0x03)        // loop
+			buf.WriteByte(valTypeVoid) // void
+
+			ctx.loopLabels = append(ctx.loopLabels, 1)
+
+			// Condition: idxLocal < lenLocal
+			buf.WriteByte(0x20) // local.get idxLocal
+			writeUleb128(buf, idxLocal)
+			buf.WriteByte(0x20) // local.get lenLocal
+			writeUleb128(buf, lenLocal)
+			buf.WriteByte(0x49) // i32.lt_s
+			buf.WriteByte(0x45) // i32.eqz
+			buf.WriteByte(0x0d) // br_if 1 (break out)
+			writeUleb128(buf, 1)
+
+			// Load item = dataLocal[idxLocal * 4]
+			buf.WriteByte(0x20) // local.get dataLocal
+			writeUleb128(buf, dataLocal)
+			buf.WriteByte(0x20) // local.get idxLocal
+			writeUleb128(buf, idxLocal)
+			buf.WriteByte(0x41) // i32.const 4
+			writeSleb128(buf, 4)
+			buf.WriteByte(0x6c) // i32.mul
+			buf.WriteByte(0x6a) // i32.add
+			buf.WriteByte(0x28) // i32.load
+			writeUleb128(buf, 2)
+			writeUleb128(buf, 0)
+			buf.WriteByte(0x21) // local.set itemLocal
+			writeUleb128(buf, itemLocal)
+
+			if err := ctx.compileBlock(buf, s.Body); err != nil {
+				return err
+			}
+
+			// idxLocal++
+			buf.WriteByte(0x20) // local.get idxLocal
+			writeUleb128(buf, idxLocal)
+			buf.WriteByte(0x41) // i32.const 1
+			writeSleb128(buf, 1)
+			buf.WriteByte(0x6a) // i32.add
+			buf.WriteByte(0x21) // local.set idxLocal
+			writeUleb128(buf, idxLocal)
+
+			buf.WriteByte(0x0c) // br 0 (repeat)
+			writeUleb128(buf, 0)
+
+			ctx.loopLabels = ctx.loopLabels[:len(ctx.loopLabels)-1]
+
+			buf.WriteByte(0x0b) // end loop
+			buf.WriteByte(0x0b) // end block
 		}
+
+	case *IfLetStmt:
+		// Optional layout: offset 0: has_val (i32), offset 4: val (i32)
+		optLocal := ctx.allocLocal(valTypeI32)
+		if err := ctx.compileExpr(buf, s.Expr); err != nil {
+			return err
+		}
+		buf.WriteByte(0x21) // local.set optLocal
+		writeUleb128(buf, optLocal)
+
+		// Check has_val at offset 0
+		buf.WriteByte(0x20) // local.get optLocal
+		writeUleb128(buf, optLocal)
+		buf.WriteByte(0x28) // i32.load
+		writeUleb128(buf, 2)
+		writeUleb128(buf, 0)
+
+		buf.WriteByte(0x04)        // if
+		buf.WriteByte(valTypeVoid) // void
+
+		// Bind unwrapped value: varLocal = load optLocal + 4
+		varLocal := ctx.allocLocal(valTypeI32)
+		ctx.locals[s.VarName] = varLocal
+		buf.WriteByte(0x20) // local.get optLocal
+		writeUleb128(buf, optLocal)
+		buf.WriteByte(0x28) // i32.load
+		writeUleb128(buf, 2)
+		writeUleb128(buf, 4)
+		buf.WriteByte(0x21) // local.set varLocal
+		writeUleb128(buf, varLocal)
+
+		if err := ctx.compileBlock(buf, s.Then); err != nil {
+			return err
+		}
+
+		if s.Else != nil {
+			buf.WriteByte(0x05) // else
+			if elseBlock, ok := s.Else.(*BlockStmt); ok {
+				if err := ctx.compileBlock(buf, elseBlock); err != nil {
+					return err
+				}
+			} else if elseIf, ok := s.Else.(*IfStmt); ok {
+				if err := ctx.compileStmt(buf, elseIf); err != nil {
+					return err
+				}
+			}
+		}
+		buf.WriteByte(0x0b) // end
 
 	case *LoopControlStmt:
 		if s.Continue {
@@ -984,6 +1179,12 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		if err := ctx.compileExpr(buf, e.Target); err != nil {
 			return err
 		}
+		if _, isSlice := e.TargetType.(SliceType); isSlice {
+			// For slices, load data pointer from header offset 0
+			buf.WriteByte(0x28) // i32.load
+			writeUleb128(buf, 2)
+			writeUleb128(buf, 0)
+		}
 		if err := ctx.compileExpr(buf, e.Index); err != nil {
 			return err
 		}
@@ -996,6 +1197,39 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		writeUleb128(buf, 0)
 
 	case *MemberExpr:
+		// Check for .len and .cap property accesses on arrays and slices
+		if e.Member == "len" {
+			if arr, ok := e.TargetType.(ArrayType); ok {
+				buf.WriteByte(0x41) // i32.const arr.Size
+				writeSleb128(buf, int32(arr.Size))
+				return nil
+			}
+			if _, ok := e.TargetType.(SliceType); ok {
+				if err := ctx.compileExpr(buf, e.Target); err != nil {
+					return err
+				}
+				buf.WriteByte(0x28) // i32.load offset 4 (len)
+				writeUleb128(buf, 2)
+				writeUleb128(buf, 4)
+				return nil
+			}
+		}
+		if e.Member == "cap" {
+			if arr, ok := e.TargetType.(ArrayType); ok {
+				buf.WriteByte(0x41) // i32.const arr.Size
+				writeSleb128(buf, int32(arr.Size))
+				return nil
+			}
+			if _, ok := e.TargetType.(SliceType); ok {
+				if err := ctx.compileExpr(buf, e.Target); err != nil {
+					return err
+				}
+				buf.WriteByte(0x28) // i32.load offset 8 (cap)
+				writeUleb128(buf, 2)
+				writeUleb128(buf, 8)
+				return nil
+			}
+		}
 		// Qualified zero-argument module member: math.PI.
 		if target, ok := e.Target.(*IdentExpr); ok {
 			if prefix, isModule := ctx.emitter.moduleAliases[target.Name]; isModule {
@@ -1023,6 +1257,118 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		buf.WriteByte(0x28) // i32.load
 		writeUleb128(buf, 2)
 		writeUleb128(buf, uint32(offset))
+
+	case *ArrayInitExpr:
+		elemCount := len(e.Elements)
+		totalSize := elemCount * 4
+		baseLocal := ctx.allocLocal(valTypeI32)
+
+		// baseLocal = $arena_ptr
+		buf.WriteByte(0x23) // global.get 0
+		writeUleb128(buf, 0)
+		buf.WriteByte(0x21) // local.set baseLocal
+		writeUleb128(buf, baseLocal)
+
+		if totalSize > 0 {
+			buf.WriteByte(0x20) // local.get baseLocal
+			writeUleb128(buf, baseLocal)
+			buf.WriteByte(0x41) // i32.const totalSize
+			writeSleb128(buf, int32(totalSize))
+			buf.WriteByte(0x6a) // i32.add
+			buf.WriteByte(0x24) // global.set 0
+			writeUleb128(buf, 0)
+		}
+
+		for i, el := range e.Elements {
+			buf.WriteByte(0x20) // local.get baseLocal
+			writeUleb128(buf, baseLocal)
+			if err := ctx.compileExpr(buf, el); err != nil {
+				return err
+			}
+			buf.WriteByte(0x36) // i32.store
+			writeUleb128(buf, 2)
+			writeUleb128(buf, uint32(i*4))
+		}
+
+		buf.WriteByte(0x20) // local.get baseLocal
+		writeUleb128(buf, baseLocal)
+
+	case *SliceInitExpr:
+		elemCount := len(e.Elements)
+		dataSize := elemCount * 4
+		dataLocal := ctx.allocLocal(valTypeI32)
+		headerLocal := ctx.allocLocal(valTypeI32)
+
+		// Allocate elements data buffer
+		buf.WriteByte(0x23) // global.get 0
+		writeUleb128(buf, 0)
+		buf.WriteByte(0x21) // local.set dataLocal
+		writeUleb128(buf, dataLocal)
+
+		if dataSize > 0 {
+			buf.WriteByte(0x20) // local.get dataLocal
+			writeUleb128(buf, dataLocal)
+			buf.WriteByte(0x41) // i32.const dataSize
+			writeSleb128(buf, int32(dataSize))
+			buf.WriteByte(0x6a) // i32.add
+			buf.WriteByte(0x24) // global.set 0
+			writeUleb128(buf, 0)
+		}
+
+		for i, el := range e.Elements {
+			buf.WriteByte(0x20) // local.get dataLocal
+			writeUleb128(buf, dataLocal)
+			if err := ctx.compileExpr(buf, el); err != nil {
+				return err
+			}
+			buf.WriteByte(0x36) // i32.store
+			writeUleb128(buf, 2)
+			writeUleb128(buf, uint32(i*4))
+		}
+
+		// Allocate slice header (12 bytes: data ptr, len, cap)
+		buf.WriteByte(0x23) // global.get 0
+		writeUleb128(buf, 0)
+		buf.WriteByte(0x21) // local.set headerLocal
+		writeUleb128(buf, headerLocal)
+
+		buf.WriteByte(0x20) // local.get headerLocal
+		writeUleb128(buf, headerLocal)
+		buf.WriteByte(0x41) // i32.const 12
+		writeSleb128(buf, 12)
+		buf.WriteByte(0x6a) // i32.add
+		buf.WriteByte(0x24) // global.set 0
+		writeUleb128(buf, 0)
+
+		// offset 0: data pointer
+		buf.WriteByte(0x20) // local.get headerLocal
+		writeUleb128(buf, headerLocal)
+		buf.WriteByte(0x20) // local.get dataLocal
+		writeUleb128(buf, dataLocal)
+		buf.WriteByte(0x36) // i32.store
+		writeUleb128(buf, 2)
+		writeUleb128(buf, 0)
+
+		// offset 4: len
+		buf.WriteByte(0x20) // local.get headerLocal
+		writeUleb128(buf, headerLocal)
+		buf.WriteByte(0x41) // i32.const len
+		writeSleb128(buf, int32(elemCount))
+		buf.WriteByte(0x36) // i32.store
+		writeUleb128(buf, 2)
+		writeUleb128(buf, 4)
+
+		// offset 8: cap
+		buf.WriteByte(0x20) // local.get headerLocal
+		writeUleb128(buf, headerLocal)
+		buf.WriteByte(0x41) // i32.const cap
+		writeSleb128(buf, int32(elemCount))
+		buf.WriteByte(0x36) // i32.store
+		writeUleb128(buf, 2)
+		writeUleb128(buf, 8)
+
+		buf.WriteByte(0x20) // local.get headerLocal
+		writeUleb128(buf, headerLocal)
 
 	case *StructInitExpr:
 		// Allocates struct on the arena bump pointer and populates initialized fields

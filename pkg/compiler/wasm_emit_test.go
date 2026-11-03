@@ -196,6 +196,68 @@ fn main() {
 	}
 }
 
+func TestDirectWasm_ArraysAndSlices(t *testing.T) {
+	src := `
+fn main() {
+	let arr = [3]i32{10, 20, 30}
+	println(arr.len)
+	println(arr[0])
+	println(arr[2])
+
+	let mut s = []i32{100, 200, 300}
+	println(s.len)
+	s[1] = 999
+	println(s[1])
+
+	let mut total = 0
+	for val in s {
+		total += val
+	}
+	println(total)
+}
+`
+	lexer := compiler.NewLexer("arrays_slices.ube", src)
+	tokens, err := lexer.Tokenize()
+	if err != nil {
+		t.Fatalf("tokenize error: %v", err)
+	}
+
+	parser := compiler.NewParser(tokens)
+	prog, err := parser.ParseProgram()
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	tc := compiler.NewTypechecker()
+	if err := tc.Check(prog); err != nil {
+		t.Fatalf("typecheck error: %v", err)
+	}
+
+	wasmData, err := compiler.EmitWasm(prog)
+	if err != nil {
+		t.Fatalf("EmitWasm error: %v", err)
+	}
+	if len(wasmData) < 8 {
+		t.Fatalf("binary too small: %d", len(wasmData))
+	}
+
+	tmpFile := filepath.Join(t.TempDir(), "arrays_slices.wasm")
+	if err := os.WriteFile(tmpFile, wasmData, 0644); err != nil {
+		t.Fatalf("failed to write test wasm: %v", err)
+	}
+
+	if wasmtimePath, err2 := exec.LookPath("wasmtime"); err2 == nil {
+		out, runErr := exec.Command(wasmtimePath, tmpFile).CombinedOutput()
+		if runErr != nil {
+			t.Fatalf("wasmtime execution failed: %v\nOutput: %s", runErr, string(out))
+		}
+		expected := "3\n10\n30\n3\n999\n1399"
+		if strings.TrimSpace(string(out)) != expected {
+			t.Fatalf("expected:\n%s\ngot:\n%s", expected, string(out))
+		}
+	}
+}
+
 func TestDirectWasm_MethodsAndForLoop(t *testing.T) {
 	src := `
 struct Counter {
