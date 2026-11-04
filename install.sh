@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -9,25 +8,30 @@ red=$'\033[38;5;197m'
 bold=$'\033[1m'
 reset=$'\033[0m'
 
-printf '%s%s🍠 Ube installer%s\n' "$purple" "$bold" "$reset"
+printf '%s%s🍠 Ube Remote Installer%s\n' "$purple" "$bold" "$reset"
 
 command -v go >/dev/null 2>&1 || { 
     printf '%sError: Go is required to build Ube from source.%s\n' "$red" "$reset" >&2
     exit 1
 }
 
-source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-if [[ ! -d "$source_dir/cmd/ube" ]]; then
-  printf '%sError: Run install.sh from the root of the Ube repository.%s\n' "$red" "$reset" >&2
-  exit 1
-fi
+command -v git >/dev/null 2>&1 || { 
+    printf '%sError: git is required to clone the Ube repository.%s\n' "$red" "$reset" >&2
+    exit 1
+}
+
+temp_dir=$(mktemp -d)
+trap 'rm -rf "$temp_dir"' EXIT
+
+printf '%s==>%s Cloning Ube repository from GitHub...\n' "$cyan" "$reset"
+git clone --depth 1 https://github.com/JohnEsleyer/ube.git "$temp_dir/ube" >/dev/null 2>&1
 
 install_dir="${UBE_INSTALL_DIR:-$HOME/.ube}"
 bin_dir="${UBE_BIN_DIR:-$install_dir/bin}"
 mkdir -p "$bin_dir"
 
 printf '%s==>%s Building Ube WebAssembly toolchain...\n' "$cyan" "$reset"
-(cd "$source_dir" && go build -trimpath -ldflags='-s -w' -o "$bin_dir/ube" ./cmd/ube)
+(cd "$temp_dir/ube" && go build -trimpath -ldflags='-s -w' -o "$bin_dir/ube" ./cmd/ube)
 
 if [[ -w "/usr/local/bin" ]]; then
   cp "$bin_dir/ube" "/usr/local/bin/ube"
@@ -40,10 +44,11 @@ elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
 fi
 
 vscode_ext_dir="$HOME/.vscode/extensions/johnesleyer.ube-1.0.0"
-if [[ -d "$HOME/.vscode/extensions" && -d "$source_dir/editors/vscode" ]]; then
+if [[ -d "$HOME/.vscode/extensions" && -d "$temp_dir/ube/editors/vscode" ]]; then
   rm -rf "$vscode_ext_dir"
-  ln -sfn "$source_dir/editors/vscode" "$vscode_ext_dir"
-  printf '  Linked VS Code extension -> %s\n' "$vscode_ext_dir"
+  mkdir -p "$(dirname "$vscode_ext_dir")"
+  cp -r "$temp_dir/ube/editors/vscode" "$vscode_ext_dir"
+  printf '  Installed VS Code extension -> %s\n' "$vscode_ext_dir"
 fi
 
 path_line="export PATH=\"$bin_dir:\$PATH\""
@@ -62,7 +67,7 @@ if [[ $updated -eq 0 ]]; then
   printf '  Created %s/.bashrc\n' "$HOME"
 fi
 
-printf '\n%s%s✓ Installed Ube successfully%s\n' "$green" "$bold" "$reset"
+printf '\n%s%s✓ Installed Ube successfully from remote repository%s\n' "$green" "$bold" "$reset"
 printf '  Binary: %s/ube (Direct WebAssembly)\n\n' "$bin_dir"
 printf 'Get started:\n'
-printf '  ube help\n'
+printf '  ube --help\n'
