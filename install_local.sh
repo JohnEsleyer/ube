@@ -54,6 +54,28 @@ if [ -d "$HOME/.vscode/extensions" ]; then
 fi
 
 # 4. Verify installation
+# Warn if "which ube" does not resolve to what we just installed.
+RESOLVED="$(command -v ube || true)"
+case "$RESOLVED" in
+    "$INSTALL_DIR/ube"|"$HOME/.ube/bin/ube") ;;
+    "")  echo -e "${RED}WARN: ube not on PATH. Add $INSTALL_DIR to PATH.${NC}" ;;
+    *)   echo -e "${RED}WARN: which ube -> $RESOLVED (not the freshly installed binary).${NC}" ;;
+esac
+
 echo -e "\n${PURPLE}=== Installation Complete! ===${NC}"
 "$INSTALL_DIR/ube" version || true
+
+# Also update the legacy ~/.ube/bin location from install.sh, if present.
+if [ -d "$HOME/.ube/bin" ] && [ "$INSTALL_DIR" != "$HOME/.ube/bin" ]; then
+    cp "$REPO_ROOT/bin/ube" "$HOME/.ube/bin/ube"
+    chmod +x "$HOME/.ube/bin/ube"
+    echo -e "${GREEN}✓ Also updated $HOME/.ube/bin/ube${NC}"
+fi
+
+# Also update the older ~/.ube/bin location if it exists and is on PATH
+if [ -d "$HOME/.ube/bin" ]; then
+    cp "$REPO_ROOT/bin/ube" "$HOME/.ube/bin/ube"
+    chmod +x "$HOME/.ube/bin/ube"
+    echo -e "${GREEN}✓ Also updated $HOME/.ube/bin/ube${NC}"
+fi
 echo -e "${GREEN}Ready to use. Remember to run 'Developer: Reload Window' in VS Code if running.${NC}"
