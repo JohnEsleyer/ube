@@ -35,7 +35,6 @@ func (m *ModuleLoader) Load(entry string) (*Program, error) {
 	return m.LoadSource(abs, string(b))
 }
 
-// LoadSource parses source code for an entry file and loads all imported modules recursively.
 func (m *ModuleLoader) LoadSource(entry, source string) (*Program, error) {
 	m.visited = map[string]bool{}
 	m.visiting = map[string]bool{}
@@ -56,8 +55,8 @@ func (m *ModuleLoader) LoadSource(entry, source string) (*Program, error) {
 		return nil, err
 	}
 
-	visitKey := abs
-	m.visited[visitKey] = true
+	entryModule := strings.TrimSuffix(filepath.Base(abs), ".ube")
+	m.visited[abs] = true
 
 	for _, d := range prog.Decls {
 		if imp, ok := d.(*ImportDecl); ok {
@@ -67,14 +66,10 @@ func (m *ModuleLoader) LoadSource(entry, source string) (*Program, error) {
 			} else {
 				importPath = filepath.Join(filepath.Dir(abs), imp.Path)
 			}
-			childPrefix := ""
-			if imp.Alias != "" {
-				childPrefix = imp.Alias + "__"
-			}
-			m.registerImportAlias(imp, childPrefix)
-			if err := m.loadModule(importPath, childPrefix); err != nil {
+			if err := m.loadModule(importPath); err != nil {
 				return nil, err
 			}
+			m.registerImportAlias(imp)
 		} else {
 			m.allDecls = append(m.allDecls, d)
 		}
@@ -84,11 +79,10 @@ func (m *ModuleLoader) LoadSource(entry, source string) (*Program, error) {
 		At:            SourceLocation{File: abs, Line: 1, Col: 1},
 		Decls:         m.allDecls,
 		ModuleAliases: m.moduleAliases,
+		EntryModule:   entryModule,
 	}, nil
 }
 
-// moduleBaseName derives the default qualifier for an unaliased import:
-// `std/math` -> "math", `./helpers.ube` -> "helpers".
 func moduleBaseName(path string) string {
 	if key, ok := isStdImport(path); ok {
 		parts := strings.Split(key, "/")
@@ -98,19 +92,18 @@ func moduleBaseName(path string) string {
 	return strings.TrimSuffix(base, ".ube")
 }
 
-func (m *ModuleLoader) registerImportAlias(imp *ImportDecl, prefix string) {
-	name := imp.Alias
-	if name == "" {
-		name = moduleBaseName(imp.Path)
-	}
-	if name == "" || name == "." || name == ".." {
+func (m *ModuleLoader) registerImportAlias(imp *ImportDecl) {
+	canonical := moduleBaseName(imp.Path)
+	if canonical == "" || canonical == "." || canonical == ".." {
 		return
 	}
-	m.moduleAliases[name] = prefix
+	local := imp.Alias
+	if local == "" {
+		local = canonical
+	}
+	m.moduleAliases[local] = canonical
 }
 
-// isStdImport reports whether p refers to the standard library and returns the
-// normalized module key ("math", "collections", ...).
 func isStdImport(p string) (string, bool) {
 	if !strings.HasPrefix(p, "std/") {
 		return "", false
@@ -132,21 +125,13 @@ func validStdKey(key string) bool {
 	return true
 }
 
-// resolveStdSource finds a standard library module. The lookup order is:
-//  1. ./std/<module>/<module>.ube (local project override, subdirectory layout)
-//  2. ./std/<module>.ube (flat legacy override)
-//  3. std/<module>/<module>.ube next to the entry module
-//  4. $UBE_PATH entries
-//  5. the standard library embedded in the compiler binary
 func (m *ModuleLoader) resolveStdSource(key string) (string, error) {
 	if !validStdKey(key) {
 		return "", fmt.Errorf("invalid standard library module 'std/%s'", key)
 	}
-
 	clean := strings.TrimSuffix(key, ".ube")
 	subPath := filepath.Join(clean, clean+".ube")
 	flatPath := clean + ".ube"
-
 	candidates := []string{
 		filepath.Join("std", subPath),
 		filepath.Join("std", flatPath),
@@ -167,7 +152,6 @@ func (m *ModuleLoader) resolveStdSource(key string) (string, error) {
 			filepath.Join(root, flatPath),
 		)
 	}
-
 	for _, candidate := range candidates {
 		if src, err := os.ReadFile(candidate); err == nil {
 			return string(src), nil
@@ -180,15 +164,14 @@ func (m *ModuleLoader) resolveStdSource(key string) (string, error) {
 }
 
 func (m *ModuleLoader) loadRecursive(path string) error {
-	return m.loadModule(path, "")
+	return m.loadModule(path)
 }
 
-func (m *ModuleLoader) loadModule(path, prefix string) error {
+func (m *ModuleLoader) loadModule(path string) error {
 	var (
 		abs string
 		src string
 	)
-
 	stdKey, fromStd := isStdImport(path)
 	if fromStd {
 		abs = "std:" + stdKey
@@ -199,7 +182,6 @@ func (m *ModuleLoader) loadModule(path, prefix string) error {
 			return err
 		}
 		abs = filepath.Clean(abs)
-		// Allow extensionless local imports (e.g. "./math_helpers" -> "./math_helpers.ube")
 		if _, err := os.Stat(abs); os.IsNotExist(err) && !strings.HasSuffix(abs, ".ube") {
 			if _, err2 := os.Stat(abs + ".ube"); err2 == nil {
 				abs = abs + ".ube"
@@ -207,19 +189,13 @@ func (m *ModuleLoader) loadModule(path, prefix string) error {
 		}
 	}
 
-	// The same source file may be imported unaliased and under one or more
-	// aliases. Keep those namespaces independent.
-	visitKey := abs
-	if prefix != "" {
-		visitKey = abs + "#" + prefix
-	}
-	if m.visited[visitKey] {
+	if m.visited[abs] {
 		return nil
 	}
-	if m.visiting[visitKey] {
+	if m.visiting[abs] {
 		return fmt.Errorf("cyclic import detected: %s", path)
 	}
-	m.visiting[visitKey] = true
+	m.visiting[abs] = true
 
 	if fromStd {
 		moduleSrc, err := m.resolveStdSource(stdKey)
@@ -243,9 +219,12 @@ func (m *ModuleLoader) loadModule(path, prefix string) error {
 	if err != nil {
 		return err
 	}
-	if prefix != "" {
-		renameAliasedModule(prog, prefix)
+
+	canonical := moduleBaseName(abs)
+	if fromStd {
+		canonical = stdKey
 	}
+	qualifyDecls(prog, canonical)
 
 	for _, d := range prog.Decls {
 		if imp, ok := d.(*ImportDecl); ok {
@@ -257,19 +236,116 @@ func (m *ModuleLoader) loadModule(path, prefix string) error {
 			} else {
 				importPath = filepath.Join(filepath.Dir(abs), imp.Path)
 			}
-			childPrefix := ""
-			if imp.Alias != "" {
-				childPrefix = imp.Alias + "__"
-			}
-			m.registerImportAlias(imp, childPrefix)
-			if err := m.loadModule(importPath, childPrefix); err != nil {
+			if err := m.loadModule(importPath); err != nil {
 				return err
 			}
+			m.registerImportAlias(imp)
 		} else {
 			m.allDecls = append(m.allDecls, d)
 		}
 	}
-	delete(m.visiting, visitKey)
-	m.visited[visitKey] = true
+	delete(m.visiting, abs)
+	m.visited[abs] = true
 	return nil
+}
+
+func qualifyDecls(prog *Program, canonical string) {
+	if canonical == "" {
+		return
+	}
+	qualify := func(name string) string {
+		if name == "" || strings.Contains(name, ".") {
+			return name
+		}
+		return canonical + "." + name
+	}
+	for _, decl := range prog.Decls {
+		switch d := decl.(type) {
+		case *StructDecl:
+			d.Name = qualify(d.Name)
+			for i := range d.Fields {
+				d.Fields[i].Type = qualifyType(d.Fields[i].Type, qualify)
+			}
+		case *EnumDecl:
+			d.Name = qualify(d.Name)
+			for i := range d.Variants {
+				for j, vt := range d.Variants[i].Types {
+					d.Variants[i].Types[j] = qualifyType(vt, qualify)
+				}
+			}
+		case *TraitDecl:
+			d.Name = qualify(d.Name)
+			for i, st := range d.Supertraits {
+				d.Supertraits[i] = qualify(st)
+			}
+			for i := range d.Methods {
+				for j := range d.Methods[i].Params {
+					d.Methods[i].Params[j].Type = qualifyType(d.Methods[i].Params[j].Type, qualify)
+				}
+				d.Methods[i].RetType = qualifyType(d.Methods[i].RetType, qualify)
+			}
+		case *FnDecl:
+			if d.Receiver == nil {
+				d.Name = qualify(d.Name)
+			} else {
+				d.Receiver.Type = qualifyType(d.Receiver.Type, qualify)
+			}
+			for i := range d.Params {
+				d.Params[i].Type = qualifyType(d.Params[i].Type, qualify)
+			}
+			d.RetType = qualifyType(d.RetType, qualify)
+		case *ExternFnDecl:
+			for i := range d.Params {
+				d.Params[i].Type = qualifyType(d.Params[i].Type, qualify)
+			}
+			d.RetType = qualifyType(d.RetType, qualify)
+		}
+	}
+}
+
+func qualifyType(t UbeType, qualify func(string) string) UbeType {
+	switch v := t.(type) {
+	case nil:
+		return nil
+	case CustomType:
+		if strings.Contains(v.Name, ".") {
+			return v
+		}
+		return CustomType{Name: qualify(v.Name), Reg: v.Reg}
+	case TraitType:
+		if strings.Contains(v.Name, ".") {
+			return v
+		}
+		return TraitType{Name: qualify(v.Name), Reg: v.Reg}
+	case SliceType:
+		return SliceType{Elem: qualifyType(v.Elem, qualify), Reg: v.Reg}
+	case ArrayType:
+		return ArrayType{Elem: qualifyType(v.Elem, qualify), Size: v.Size, Reg: v.Reg}
+	case OptionalType:
+		return OptionalType{Inner: qualifyType(v.Inner, qualify), Reg: v.Reg}
+	case ResultType:
+		return ResultType{Ok: qualifyType(v.Ok, qualify), Err: qualifyType(v.Err, qualify), Reg: v.Reg}
+	case ChanType:
+		return ChanType{Elem: qualifyType(v.Elem, qualify), Reg: v.Reg}
+	case PoolType:
+		return PoolType{Elem: qualifyType(v.Elem, qualify), Reg: v.Reg}
+	case TupleType:
+		elems := make([]UbeType, len(v.Elems))
+		for i, e := range v.Elems {
+			elems[i] = qualifyType(e, qualify)
+		}
+		return TupleType{Elems: elems, Reg: v.Reg}
+	case GenericInstanceType:
+		args := make([]UbeType, len(v.TypeArgs))
+		for i, a := range v.TypeArgs {
+			args[i] = qualifyType(a, qualify)
+		}
+		base := v.Base
+		if !strings.Contains(base, ".") {
+			base = qualify(base)
+		}
+		return GenericInstanceType{Base: base, TypeArgs: args, Reg: v.Reg}
+	default:
+		return t
+	}
 }

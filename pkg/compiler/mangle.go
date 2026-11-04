@@ -1,3 +1,4 @@
+// File: pkg/compiler/mangle.go
 package compiler
 
 import "strings"

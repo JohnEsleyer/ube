@@ -1,3 +1,4 @@
+// File: pkg/compiler/qualified_struct_test.go
 package compiler_test
 
 import (
@@ -70,7 +71,7 @@ func TestWasmEmit_NoPanicOnUntypedMember(t *testing.T) {
 	prog := &compiler.Program{
 		Decls: []compiler.Decl{
 			&compiler.FnDecl{
-				Name: "main",
+				Name:    "main",
 				RetType: compiler.PrimitiveType{Name: "void"},
 				Body: &compiler.BlockStmt{
 					Stmts: []compiler.Stmt{

@@ -1,3 +1,4 @@
+// File: pkg/compiler/typechecker_compat.go
 package compiler
 
 import "fmt"

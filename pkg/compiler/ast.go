@@ -1,3 +1,4 @@
+// File: pkg/compiler/ast.go
 package compiler
 
 import "fmt"
@@ -46,7 +47,8 @@ type Decl interface {
 type Program struct {
 	At            SourceLocation
 	Decls         []Decl
-	ModuleAliases map[string]string
+	ModuleAliases map[string]string // local alias -> canonical module name
+	EntryModule   string            // canonical module name of the entry file
 }
 
 func (p *Program) Loc() SourceLocation { return p.At }

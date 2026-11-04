@@ -1,3 +1,4 @@
+// File: pkg/compiler/typechecker_fields.go
 package compiler
 
 // fieldMatch describes a field found by findFieldMatches, including where in

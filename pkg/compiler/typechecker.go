@@ -1,6 +1,11 @@
+// File: pkg/compiler/typechecker.go
 package compiler
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+	"strings"
+)
 
 type VarInfo struct {
 	Type       UbeType
@@ -49,6 +54,7 @@ type TypeEnvironment struct {
 	TraitMeta  map[string]TraitMeta
 	Funcs      map[string]FuncSignature
 	CurFile    string
+	CurModule  string
 	CurRet     UbeType
 	LoopDepth  int
 	ScopeDepth int
@@ -77,6 +83,7 @@ func childTypeEnvironment(parent *TypeEnvironment) *TypeEnvironment {
 		env.EnumMeta = parent.EnumMeta
 		env.Funcs = parent.Funcs
 		env.CurFile = parent.CurFile
+		env.CurModule = parent.CurModule
 		env.CurRet = parent.CurRet
 		env.LoopDepth = parent.LoopDepth
 		env.ScopeDepth = parent.ScopeDepth
@@ -162,8 +169,6 @@ func NewTypechecker() *Typechecker {
 	tc.Global.Funcs["floor"] = FuncSignature{Params: []FieldDecl{{Name: "f", Type: PrimitiveType{Name: "f64"}}}, RetType: PrimitiveType{Name: "f64"}}
 	tc.Global.Funcs["ceil"] = FuncSignature{Params: []FieldDecl{{Name: "f", Type: PrimitiveType{Name: "f64"}}}, RetType: PrimitiveType{Name: "f64"}}
 
-	// Byte/slice and WASI buffer bridges. These are compiler/runtime
-	// intrinsics rather than ordinary stdlib functions.
 	u8Slice := SliceType{Elem: PrimitiveType{Name: "u8"}}
 	tc.Global.Funcs["string_from_bytes"] = FuncSignature{
 		Params:  []FieldDecl{{Name: "b", Type: u8Slice}},
@@ -178,9 +183,6 @@ func NewTypechecker() *Typechecker {
 		RetType: ResultType{Ok: i32, Err: str},
 	}
 
-	// Low-level WASI intrinsics implemented directly by the Wasm emitter.
-	// They return raw results (bytes transferred, fd, or a negative errno) so
-	// the Ube standard library owns all error formatting.
 	tc.Global.Funcs["wasi_fd_write_raw"] = FuncSignature{
 		Params:  []FieldDecl{{Name: "fd", Type: i32}, {Name: "data", Type: u8Slice}},
 		RetType: i32,
@@ -221,7 +223,6 @@ func NewTypechecker() *Typechecker {
 		RetType: i32,
 	}
 
-	// StringBuilder receiver methods
 	tc.Global.Funcs["format"] = FuncSignature{RetType: str}
 	tc.Global.Funcs["StringBuilder.append"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}}, RetType: void}
 	tc.Global.Funcs["StringBuilder.append_str"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}}, RetType: void}
@@ -234,16 +235,94 @@ func NewTypechecker() *Typechecker {
 	return tc
 }
 
+// moduleOf returns the canonical module portion of a (possibly qualified)
+// declaration name.
+func (tc *Typechecker) moduleOf(qualified string) string {
+	if i := strings.IndexByte(qualified, '.'); i > 0 {
+		return qualified[:i]
+	}
+	if tc.Global != nil && tc.Global.CurModule != "" {
+		return tc.Global.CurModule
+	}
+	return ""
+}
+
+// moduleOfFn returns the canonical module for a function or method.
+// Method names (fn.Name) are not qualified by qualifyDecls, so their
+// module is derived from the qualified receiver type instead.
+func (tc *Typechecker) moduleOfFn(fn *FnDecl) string {
+	if fn.Receiver != nil {
+		if i := strings.IndexByte(fn.Receiver.Type.String(), '.'); i > 0 {
+			return fn.Receiver.Type.String()[:i]
+		}
+	}
+	if i := strings.IndexByte(fn.Name, '.'); i > 0 {
+		return fn.Name[:i]
+	}
+	if tc.Global != nil && tc.Global.CurModule != "" {
+		return tc.Global.CurModule
+	}
+	return ""
+}
+
+// canonicalName maps a type reference to a canonical, module-qualified name.
+// Idempotent.
+func (tc *Typechecker) canonicalName(name string) string {
+	if name == "" {
+		return name
+	}
+	switch name {
+	case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
+		"f32", "f64", "bool", "void", "string", "StringBuilder":
+		return name
+	}
+	if i := strings.IndexByte(name, '.'); i > 0 {
+		alias, rest := name[:i], name[i+1:]
+		if mod, ok := tc.ModuleAliases[alias]; ok {
+			return mod + "." + rest
+		}
+		return name
+	}
+	if tc.Global != nil && tc.Global.CurModule != "" {
+		qualified := tc.Global.CurModule + "." + name
+		if _, ok := tc.Global.Structs[qualified]; ok {
+			if os.Getenv("UBE_DEBUG_TYPES") != "" {
+				fmt.Fprintf(os.Stderr, "DEBUG canonical %q -> %q\n", name, qualified)
+			}
+			return qualified
+		}
+		if _, ok := tc.Global.Enums[qualified]; ok {
+			return qualified
+		}
+		if _, ok := tc.Global.Traits[qualified]; ok {
+			return qualified
+		}
+		if _, ok := tc.Global.Funcs[qualified]; ok {
+			if os.Getenv("UBE_DEBUG_TYPES") != "" {
+				fmt.Fprintf(os.Stderr, "DEBUG canonical %q -> %q\n", name, qualified)
+			}
+			return qualified
+		}
+		if os.Getenv("UBE_DEBUG_TYPES") != "" {
+			fmt.Fprintf(os.Stderr, "DEBUG canonical %q -> UNRESOLVED (curModule=%q)\n", name, tc.Global.CurModule)
+		}
+	}
+	return name
+}
+
 func (tc *Typechecker) resolveType(t UbeType) UbeType {
 	if t == nil {
 		return nil
 	}
 	switch v := t.(type) {
 	case CustomType:
-		if _, isTrait := tc.Global.Traits[v.Name]; isTrait {
-			return TraitType{Name: v.Name}
+		name := tc.canonicalName(v.Name)
+		if _, isTrait := tc.Global.Traits[name]; isTrait {
+			return TraitType{Name: name}
 		}
-		return v
+		return CustomType{Name: name, Reg: v.Reg}
+	case TraitType:
+		return TraitType{Name: tc.canonicalName(v.Name), Reg: v.Reg}
 	case SliceType:
 		return SliceType{Elem: tc.resolveType(v.Elem)}
 	case ArrayType:
@@ -262,6 +341,12 @@ func (tc *Typechecker) resolveType(t UbeType) UbeType {
 			elems[i] = tc.resolveType(e)
 		}
 		return TupleType{Elems: elems}
+	case GenericInstanceType:
+		args := make([]UbeType, len(v.TypeArgs))
+		for i, a := range v.TypeArgs {
+			args[i] = tc.resolveType(a)
+		}
+		return GenericInstanceType{Base: tc.canonicalName(v.Base), TypeArgs: args, Reg: v.Reg}
 	default:
 		return t
 	}
@@ -272,8 +357,22 @@ func (tc *Typechecker) Check(prog *Program) error {
 		tc.ModuleAliases = make(map[string]string)
 	}
 	if prog != nil {
-		for alias, prefix := range prog.ModuleAliases {
-			tc.ModuleAliases[alias] = prefix
+		for alias, canonical := range prog.ModuleAliases {
+			tc.ModuleAliases[alias] = canonical
+		}
+		tc.Global.CurModule = prog.EntryModule
+		if os.Getenv("UBE_DEBUG_TYPES") != "" {
+			for alias, canonical := range prog.ModuleAliases {
+				fmt.Fprintf(os.Stderr, "DEBUG ALIAS %q -> %q\n", alias, canonical)
+			}
+			for _, decl := range prog.Decls {
+				if fn, ok := decl.(*FnDecl); ok {
+					fmt.Fprintf(os.Stderr, "DEBUG FN %q\n", fn.Name)
+				}
+				if st, ok := decl.(*StructDecl); ok {
+					fmt.Fprintf(os.Stderr, "DEBUG ST %q\n", st.Name)
+				}
+			}
 		}
 	}
 
@@ -282,7 +381,6 @@ func (tc *Typechecker) Check(prog *Program) error {
 		{Name: "gen", Type: PrimitiveType{Name: "u32"}},
 	}
 
-	// 1. Monomorphization Pass for Generics
 	if err := tc.monomorphize(prog); err != nil {
 		return err
 	}
@@ -379,6 +477,7 @@ func (tc *Typechecker) Check(prog *Program) error {
 		if fn, ok := decl.(*FnDecl); ok {
 			env := NewTypeEnvironment(tc.Global)
 			env.CurFile = fn.At.File
+			env.CurModule = tc.moduleOfFn(fn)
 			env.CurRet = fn.RetType
 			env.ScopeDepth = 0
 			if fn.Receiver != nil {
@@ -387,7 +486,13 @@ func (tc *Typechecker) Check(prog *Program) error {
 			for _, p := range fn.Params {
 				env.Vars[p.Name] = VarInfo{Type: p.Type, IsMut: p.IsMut, Depth: 0, ValueDepth: 0}
 			}
-			if err := tc.checkBlock(fn.Body, env); err != nil {
+			// canonicalName reads tc.Global.CurModule; make it reflect the
+			// current function's module for the duration of this body check.
+			prevModule := tc.Global.CurModule
+			tc.Global.CurModule = env.CurModule
+			err := tc.checkBlock(fn.Body, env)
+			tc.Global.CurModule = prevModule
+			if err != nil {
 				return err
 			}
 		}

@@ -21,7 +21,6 @@ func EmitWasm(prog *Program) (wasmBytes []byte, err error) {
 			err = fmt.Errorf("internal compiler error (ICE): %v\nPlease report this issue", r)
 		}
 	}()
-
 	emitter := newWasmEmitter()
 	return emitter.compile(prog)
 }
@@ -57,6 +56,7 @@ const (
 
 type structMeta struct {
 	fieldOffsets map[string]int
+	fieldTypes   map[string]UbeType
 	totalSize    int
 }
 
@@ -242,10 +242,12 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 		case *StructDecl:
 			meta := structMeta{
 				fieldOffsets: make(map[string]int),
+				fieldTypes:   make(map[string]UbeType),
 			}
 			offset := 0
 			for _, f := range d.Fields {
 				meta.fieldOffsets[f.Name] = offset
+				meta.fieldTypes[f.Name] = f.Type
 				offset += 4
 			}
 			meta.totalSize = offset
@@ -282,6 +284,14 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 			} else {
 				e.fnIndices[fn.Name] = fnIdx
 				e.fnReturns[fn.Name] = fn.RetType
+				// Alias the bare short name so intra-module calls resolve.
+				if i := strings.LastIndexByte(fn.Name, '.'); i >= 0 {
+					bare := fn.Name[i+1:]
+					if _, exists := e.fnIndices[bare]; !exists {
+						e.fnIndices[bare] = fnIdx
+						e.fnReturns[bare] = fn.RetType
+					}
+				}
 				if fn.Name == "main" {
 					mainFn = fn
 				}
@@ -426,6 +436,9 @@ func (e *wasmEmitter) compileFunction(fn *FnDecl) ([]byte, error) {
 	for i := len(ctx.defers) - 1; i >= 0; i-- {
 		_ = ctx.compileDeferredCall(&bodyBuf, ctx.defers[i])
 	}
+	if fn.RetType != nil && fn.RetType.String() != "void" {
+		bodyBuf.WriteByte(0x00)
+	}
 	bodyBuf.WriteByte(0x0b)
 
 	var codeBuf bytes.Buffer
@@ -463,27 +476,38 @@ func (ctx *fnContext) compileBlock(buf *bytes.Buffer, block *BlockStmt) error {
 func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 	switch s := stmt.(type) {
 	case *LetStmt:
-		localType := valTypeI32
+		localType := byte(valTypeI32)
 		var t UbeType
-		if s.Type != nil {
-			t = s.Type
-		} else if s.ValueType != nil {
-			t = s.ValueType
-		} else if s.Value != nil {
+		if s.Value != nil {
 			if inferred := ctx.inferExprType(s.Value); inferred != "" {
 				t = CustomType{Name: inferred}
 			}
 		}
-		if t != nil && t.String() == "f32" {
-			localType = valTypeF32
-		} else if t != nil && t.String() == "f64" {
-			localType = valTypeF64
-		} else if t != nil && t.String() == "i64" {
-			localType = valTypeI64
+		if t == nil && s.Type != nil {
+			t = s.Type
+		}
+		if t == nil && s.ValueType != nil {
+			t = s.ValueType
+		}
+		if t != nil {
+			switch t.String() {
+			case "f32":
+				localType = valTypeF32
+			case "f64":
+				localType = valTypeF64
+			case "i64":
+				localType = valTypeI64
+			}
 		}
 		valIdx := ctx.allocLocal(localType)
 		ctx.locals[s.Name] = valIdx
-		ctx.localTypes[s.Name] = t
+		if t != nil {
+			ctx.localTypes[s.Name] = t
+		} else if s.Type != nil {
+			ctx.localTypes[s.Name] = s.Type
+		} else if s.ValueType != nil {
+			ctx.localTypes[s.Name] = s.ValueType
+		}
 		if s.Value != nil {
 			if err := ctx.compileExpr(buf, s.Value); err != nil {
 				return err
@@ -527,14 +551,26 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			if err := ctx.compileExpr(buf, mem.Target); err != nil {
 				return err
 			}
+			compoundLoadOp := byte(0x28)
+			compoundLoadAlign := uint32(2)
+			switch ctx.inferExprType(s.RHS) {
+			case "f32":
+				compoundLoadOp = 0x2a // f32.load
+			case "f64":
+				compoundLoadOp = 0x2b
+				compoundLoadAlign = 3
+			case "i64":
+				compoundLoadOp = 0x29
+				compoundLoadAlign = 3
+			}
 			if s.Op != "=" {
 				targetLocal := ctx.allocLocal(valTypeI32)
 				buf.WriteByte(0x22)
 				writeUleb128(buf, targetLocal)
 				buf.WriteByte(0x20)
 				writeUleb128(buf, targetLocal)
-				buf.WriteByte(0x28)
-				writeUleb128(buf, 2)
+				buf.WriteByte(compoundLoadOp)
+				writeUleb128(buf, compoundLoadAlign)
 				writeUleb128(buf, uint32(offset))
 
 				if err := ctx.compileExpr(buf, s.RHS); err != nil {
@@ -548,8 +584,20 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 					return err
 				}
 			}
-			buf.WriteByte(0x36)
-			writeUleb128(buf, 2)
+			storeOpcode := byte(0x36) // i32.store
+			storeAlign := uint32(2)
+			switch ctx.inferExprType(s.RHS) {
+			case "f32":
+				storeOpcode = 0x38 // f32.store
+			case "f64":
+				storeOpcode = 0x39 // f64.store
+				storeAlign = 3
+			case "i64":
+				storeOpcode = 0x37 // i64.store
+				storeAlign = 3
+			}
+			buf.WriteByte(storeOpcode)
+			writeUleb128(buf, storeAlign)
 			writeUleb128(buf, uint32(offset))
 		} else if idx, ok := s.LHS.(*IndexExpr); ok {
 			addrLocal := ctx.allocLocal(valTypeI32)
@@ -844,14 +892,35 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		buf.WriteByte(0x04)
 		buf.WriteByte(valTypeVoid)
 
-		varLocal := ctx.allocLocal(valTypeI32)
+		bindingType := unwrapBindingType(ctx.exprStaticType(s.Expr))
+		varLocalWasm := byte(valTypeI32)
+		if bindingType != nil {
+			switch bindingType.String() {
+			case "f32":
+				varLocalWasm = valTypeF32
+			case "f64":
+				varLocalWasm = valTypeF64
+			case "i64":
+				varLocalWasm = valTypeI64
+			}
+		}
+		varLocal := ctx.allocLocal(varLocalWasm)
 		ctx.locals[s.VarName] = varLocal
-		ctx.localTypes[s.VarName] = unwrapBindingType(ctx.exprStaticType(s.Expr))
+		ctx.localTypes[s.VarName] = bindingType
 		buf.WriteByte(0x20)
 		writeUleb128(buf, optLocal)
 		buf.WriteByte(0x28)
 		writeUleb128(buf, 2)
 		writeUleb128(buf, 4)
+		switch varLocalWasm {
+		case valTypeF32:
+			buf.WriteByte(0xbe) // f32.reinterpret_i32
+		case valTypeF64:
+			buf.WriteByte(0xad) // i64.extend_i32_u
+			buf.WriteByte(0xbf) // f64.reinterpret_i64
+		case valTypeI64:
+			buf.WriteByte(0xad) // i64.extend_i32_u
+		}
 		buf.WriteByte(0x21)
 		writeUleb128(buf, varLocal)
 
@@ -959,12 +1028,40 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			}
 
 			for bIdx, bName := range arm.Bindings {
-				bLocal := ctx.allocLocal(valTypeI32)
+				var bindingType UbeType
+				if variants, ok := ctx.emitter.enums[s.EnumName]; ok {
+					for _, v := range variants {
+						if v.Name == arm.Variant && bIdx < len(v.Types) {
+							bindingType = v.Types[bIdx]
+							break
+						}
+					}
+				}
+				bindingWasm := byte(valTypeI32)
+				loadOp := byte(0x28)
+				loadAlign := uint32(2)
+				if bindingType != nil {
+					switch bindingType.String() {
+					case "f32":
+						bindingWasm = valTypeF32
+						loadOp = 0x2a
+					case "f64":
+						bindingWasm = valTypeF64
+						loadOp = 0x2b
+						loadAlign = 3
+					case "i64":
+						bindingWasm = valTypeI64
+						loadOp = 0x29
+						loadAlign = 3
+					}
+				}
+				bLocal := ctx.allocLocal(bindingWasm)
 				ctx.locals[bName] = bLocal
+				ctx.localTypes[bName] = bindingType
 				buf.WriteByte(0x20)
 				writeUleb128(buf, targetLocal)
-				buf.WriteByte(0x28)
-				writeUleb128(buf, 2)
+				buf.WriteByte(loadOp)
+				writeUleb128(buf, loadAlign)
 				writeUleb128(buf, uint32(4+bIdx*4))
 				buf.WriteByte(0x21)
 				writeUleb128(buf, bLocal)
@@ -1165,11 +1262,12 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		case "!":
 			buf.WriteByte(0x45)
 		case "-":
-			if ctx.inferExprType(e.Operand) == "f32" {
-				buf.WriteByte(0x8c) // f32.neg
-			} else if ctx.inferExprType(e.Operand) == "f64" {
-				buf.WriteByte(0x9a) // f64.neg
-			} else {
+			switch ctx.inferExprType(e.Operand) {
+			case "f32":
+				buf.WriteByte(0x8c)
+			case "f64":
+				buf.WriteByte(0x9a)
+			default:
 				buf.WriteByte(0x41)
 				writeSleb128(buf, -1)
 				buf.WriteByte(0x6c)
@@ -1189,10 +1287,7 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		writeUleb128(buf, localIdx)
 
 	case *BinaryExpr:
-		leftT := ctx.inferExprType(e.Left)
-		rightT := ctx.inferExprType(e.Right)
-
-		if (e.Op == "==" || e.Op == "!=") && (leftT == "string" || rightT == "string" || (e.OperandType != nil && e.OperandType.String() == "string")) {
+		if (e.Op == "==" || e.Op == "!=") && (e.Left != nil && (e.OperandType != nil && e.OperandType.String() == "string")) {
 			if err := ctx.compileExpr(buf, e.Left); err != nil {
 				return err
 			}
@@ -1207,7 +1302,7 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			return nil
 		}
 
-		if e.Op == "+" && (leftT == "string" || rightT == "string" || (e.Type != nil && e.Type.String() == "string")) {
+		if e.Op == "+" && (e.Type != nil && e.Type.String() == "string") {
 			if err := ctx.compileExpr(buf, e.Left); err != nil {
 				return err
 			}
@@ -1226,9 +1321,7 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			return err
 		}
 
-		isF32 := leftT == "f32" || rightT == "f32" ||
-			(e.OperandType != nil && e.OperandType.String() == "f32") ||
-			(e.Type != nil && e.Type.String() == "f32")
+		isF32 := (e.OperandType != nil && e.OperandType.String() == "f32") || (e.Type != nil && e.Type.String() == "f32")
 		if isF32 {
 			switch e.Op {
 			case "+":
@@ -1372,14 +1465,6 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			}
 		}
 
-		if e.TargetType == nil {
-			return fmt.Errorf("%s: cannot resolve member access '%s' on untyped target", e.Loc(), e.Member)
-		}
-
-		if e.TargetType == nil {
-			return fmt.Errorf("%s: cannot resolve member access '%s' on untyped target", e.Loc(), e.Member)
-		}
-
 		structName := e.TargetType.String()
 		meta, ok := ctx.emitter.structs[structName]
 		if !ok {
@@ -1392,8 +1477,22 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		if err := ctx.compileExpr(buf, e.Target); err != nil {
 			return err
 		}
-		buf.WriteByte(0x28)
-		writeUleb128(buf, 2)
+		loadOp := byte(0x28)
+		loadAl := uint32(2)
+		if ft, ok := meta.fieldTypes[e.Member]; ok && ft != nil {
+			switch ft.String() {
+			case "f32":
+				loadOp = 0x2a
+			case "f64":
+				loadOp = 0x2b
+				loadAl = 3
+			case "i64":
+				loadOp = 0x29
+				loadAl = 3
+			}
+		}
+		buf.WriteByte(loadOp)
+		writeUleb128(buf, loadAl)
 		writeUleb128(buf, uint32(offset))
 
 	case *SliceSubExpr:
@@ -1561,18 +1660,9 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		writeUleb128(buf, hdrLocal)
 
 	case *StructInitExpr:
-		structName := e.Name
-		if strings.Contains(structName, ".") {
-			parts := strings.SplitN(structName, ".", 2)
-			if prefix, exists := ctx.emitter.moduleAliases[parts[0]]; exists {
-				structName = prefix + parts[1]
-			} else {
-				structName = parts[0] + "__" + parts[1]
-			}
-		}
-		meta, ok := ctx.emitter.structs[structName]
+		meta, ok := ctx.emitter.structs[e.Name]
 		if !ok {
-			return fmt.Errorf("unknown struct %s in init", structName)
+			return fmt.Errorf("unknown struct %s in init", e.Name)
 		}
 		structBase := ctx.allocLocal(valTypeI32)
 		ctx.emitAlloc(buf, int32(meta.totalSize), structBase)
@@ -1584,8 +1674,22 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			if err := ctx.compileExpr(buf, f.Val); err != nil {
 				return err
 			}
-			buf.WriteByte(0x36)
-			writeUleb128(buf, 2)
+			storeOp := byte(0x36)
+			storeAl := uint32(2)
+			if ft, ok := meta.fieldTypes[f.Name]; ok && ft != nil {
+				switch ft.String() {
+				case "f32":
+					storeOp = 0x38
+				case "f64":
+					storeOp = 0x39
+					storeAl = 3
+				case "i64":
+					storeOp = 0x37
+					storeAl = 3
+				}
+			}
+			buf.WriteByte(storeOp)
+			writeUleb128(buf, storeAl)
 			writeUleb128(buf, uint32(offset))
 		}
 
@@ -1687,6 +1791,16 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		writeUleb128(buf, 4)
 
 	case *OrElseExpr:
+		resWasm := byte(valTypeI32)
+		switch ctx.inferExprType(e.Fallback) {
+		case "f32":
+			resWasm = valTypeF32
+		case "f64":
+			resWasm = valTypeF64
+		case "i64":
+			resWasm = valTypeI64
+		}
+
 		optLocal := ctx.allocLocal(valTypeI32)
 		if err := ctx.compileExpr(buf, e.Primary); err != nil {
 			return err
@@ -1694,7 +1808,7 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		buf.WriteByte(0x21)
 		writeUleb128(buf, optLocal)
 
-		resLocal := ctx.allocLocal(valTypeI32)
+		resLocal := ctx.allocLocal(resWasm)
 
 		buf.WriteByte(0x20)
 		writeUleb128(buf, optLocal)
@@ -1709,6 +1823,15 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		buf.WriteByte(0x28)
 		writeUleb128(buf, 2)
 		writeUleb128(buf, 4)
+		switch resWasm {
+		case valTypeF32:
+			buf.WriteByte(0xbe)
+		case valTypeF64:
+			buf.WriteByte(0xad)
+			buf.WriteByte(0xbf)
+		case valTypeI64:
+			buf.WriteByte(0xad)
+		}
 		buf.WriteByte(0x21)
 		writeUleb128(buf, resLocal)
 
@@ -1798,8 +1921,22 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 								if err := ctx.compileExpr(buf, arg); err != nil {
 									return err
 								}
-								buf.WriteByte(0x36)
-								writeUleb128(buf, 2)
+								storeOp := byte(0x36)
+								storeAl := uint32(2)
+								if aIdx < len(v.Types) && v.Types[aIdx] != nil {
+									switch v.Types[aIdx].String() {
+									case "f32":
+										storeOp = 0x38
+									case "f64":
+										storeOp = 0x39
+										storeAl = 3
+									case "i64":
+										storeOp = 0x37
+										storeAl = 3
+									}
+								}
+								buf.WriteByte(storeOp)
+								writeUleb128(buf, storeAl)
 								writeUleb128(buf, uint32(4+aIdx*4))
 							}
 
@@ -2144,8 +2281,8 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			}
 
 			if target, isIdent := mem.Target.(*IdentExpr); isIdent {
-				if prefix, isModule := ctx.emitter.moduleAliases[target.Name]; isModule {
-					name := prefix + mem.Member
+				if canonical, isModule := ctx.emitter.moduleAliases[target.Name]; isModule {
+					name := canonical + "." + mem.Member
 					fnIdx, exists := ctx.emitter.fnIndices[name]
 					if !exists {
 						return fmt.Errorf("unknown function '%s' in module '%s' (expected '%s')", mem.Member, target.Name, name)
@@ -2161,13 +2298,6 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 				}
 			}
 
-			if mem.TargetType == nil {
-				if id, ok := mem.Target.(*IdentExpr); ok {
-					if lt, ok := ctx.localTypes[id.Name]; ok && lt != nil {
-						mem.TargetType = lt
-					}
-				}
-			}
 			if mem.TargetType == nil {
 				return fmt.Errorf("cannot resolve method call '%s' on untyped target", mem.Member)
 			}
@@ -2185,9 +2315,15 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 				writeUleb128(buf, methodIdx)
 				return nil
 			}
-			if strings.Contains(mem.TargetType.String(), "__") {
-				parts := strings.Split(mem.TargetType.String(), "__")
-				shortKey := parts[len(parts)-1] + "." + mem.Member
+			{
+				tt := mem.TargetType.String()
+				short := tt
+				if i := strings.LastIndexByte(tt, '.'); i >= 0 {
+					short = tt[i+1:]
+				} else if i := strings.LastIndex(tt, "__"); i >= 0 {
+					short = tt[i+2:]
+				}
+				shortKey := short + "." + mem.Member
 				if methodIdx, exists := ctx.emitter.methodIndices[shortKey]; exists {
 					if err := ctx.compileExpr(buf, mem.Target); err != nil {
 						return err
@@ -2202,23 +2338,6 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 					return nil
 				}
 			}
-			for _, prefix := range ctx.emitter.moduleAliases {
-				prefixedKey := prefix + mem.TargetType.String() + "." + mem.Member
-				if methodIdx, exists := ctx.emitter.methodIndices[prefixedKey]; exists {
-					if err := ctx.compileExpr(buf, mem.Target); err != nil {
-						return err
-					}
-					for _, arg := range e.Args {
-						if err := ctx.compileExpr(buf, arg); err != nil {
-							return err
-						}
-					}
-					buf.WriteByte(0x10)
-					writeUleb128(buf, methodIdx)
-					return nil
-				}
-			}
-			return fmt.Errorf("unknown method '%s' on type '%s'", mem.Member, mem.TargetType.String())
 		}
 
 		name := ""
@@ -2331,15 +2450,6 @@ func (ctx *fnContext) compilePrint(buf *bytes.Buffer, args []Expr, newline bool)
 			writeSleb128(buf, currentNL)
 			buf.WriteByte(0x10)
 			writeUleb128(buf, ctx.emitter.fnIndices["__print_bool"])
-		} else if argT == "f32" {
-			if err := ctx.compileExpr(buf, arg); err != nil {
-				return err
-			}
-			buf.WriteByte(0xa8) // i32.trunc_f32_s
-			buf.WriteByte(0x41)
-			writeSleb128(buf, currentNL)
-			buf.WriteByte(0x10)
-			writeUleb128(buf, ctx.emitter.fnIndices["__print_i32"])
 		} else {
 			if err := ctx.compileExpr(buf, arg); err != nil {
 				return err
@@ -2364,27 +2474,31 @@ func (ctx *fnContext) inferExprType(expr Expr) string {
 		if t, ok := ctx.localTypes[e.Name]; ok && t != nil {
 			return t.String()
 		}
-	case *StructInitExpr:
-		return e.Name
 	case *InterpolatedStringExpr:
 		return "string"
+	case *StructInitExpr:
+		return e.Name
+	case *MemberExpr:
+		if e.TargetType != nil {
+			if meta, ok := ctx.emitter.structs[e.TargetType.String()]; ok {
+				if ft, ok := meta.fieldTypes[e.Member]; ok && ft != nil {
+					return ft.String()
+				}
+			}
+		}
+	case *UnaryExpr:
+		if t := ctx.inferExprType(e.Operand); t != "" {
+			return t
+		}
 	case *BinaryExpr:
 		if e.Type != nil {
 			return e.Type.String()
 		}
-		if e.OperandType != nil {
-			return e.OperandType.String()
+		if lt := ctx.inferExprType(e.Left); lt != "" {
+			return lt
 		}
-		switch e.Op {
-		case "==", "!=", "<", "<=", ">", ">=":
-			return "bool"
-		default:
-			if lt := ctx.inferExprType(e.Left); lt != "" {
-				return lt
-			}
-			if rt := ctx.inferExprType(e.Right); rt != "" {
-				return rt
-			}
+		if rt := ctx.inferExprType(e.Right); rt != "" {
+			return rt
 		}
 	case *CallExpr:
 		if t := ctx.callReturnUbeType(e); t != nil {

@@ -2,6 +2,9 @@
 
 package compiler
 
+import (
+)
+
 func (p *Parser) parseBlock() *BlockStmt {
 	loc := p.expect(TokenLBrace, "Expected '{' to begin block").Loc
 	var stmts []Stmt

@@ -33,11 +33,11 @@ func integerType(t UbeType) bool {
 // used for an imported module. Unaliased imports map to the empty prefix, so
 // `wasi.fd_write(...)` and `fd_write(...)` resolve to the same declaration.
 func (tc *Typechecker) lookupModuleMember(alias, member string) (string, FuncSignature, bool) {
-	prefix, isModule := tc.ModuleAliases[alias]
+	canonical, isModule := tc.ModuleAliases[alias]
 	if !isModule {
 		return "", FuncSignature{}, false
 	}
-	key := prefix + member
+	key := canonical + "." + member
 	sig, ok := tc.Global.Funcs[key]
 	return key, sig, ok
 }
@@ -754,7 +754,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			}
 		}
 		if id, ok := e.Callee.(*IdentExpr); ok {
-			if sig, ok := tc.Global.Funcs[id.Name]; ok {
+			if sig, ok := tc.Global.Funcs[tc.canonicalName(id.Name)]; ok {
 				if env.CurFile != "" && sig.File != "" && env.CurFile != sig.File && !sig.IsPub {
 					return nil, fmt.Errorf("[%s] cannot access private function '%s' from another file", e.At, id.Name)
 				}
@@ -937,18 +937,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		return pool, tc.validateType(pool, e.At)
 
 	case *StructInitExpr:
-		structName := e.Name
-		if strings.Contains(structName, ".") {
-			parts := strings.SplitN(structName, ".", 2)
-			alias := parts[0]
-			base := parts[1]
-			if prefix, exists := tc.ModuleAliases[alias]; exists {
-				structName = prefix + base
-			} else {
-				structName = alias + "__" + base
-			}
-			e.Name = structName
-		}
+		e.Name = tc.canonicalName(e.Name)
 		meta, hasMeta := tc.Global.StructMeta[e.Name]
 		if hasMeta {
 			if env.CurFile != "" && meta.File != "" && env.CurFile != meta.File && !meta.IsPub {

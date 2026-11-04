@@ -1,3 +1,4 @@
+// File: pkg/compiler/types.go
 package compiler
 
 import (
@@ -303,13 +304,13 @@ type CustomType struct {
 	Reg  int
 }
 
-func (t CustomType) String() string                   { return t.Name }
-func (t CustomType) Region() int                      { return t.Reg }
-func (t CustomType) WithRegion(r int) UbeType         { return CustomType{Name: t.Name, Reg: r} }
-func (t CustomType) WasmType() wasm.ValType           { return wasm.ValI32 }
-func (t CustomType) ByteSize() int                    { return 4 }
-func (t CustomType) Align() int                       { return 4 }
-func (t CustomType) IsCopy() bool                     { return false }
+func (t CustomType) String() string           { return t.Name }
+func (t CustomType) Region() int              { return t.Reg }
+func (t CustomType) WithRegion(r int) UbeType { return CustomType{Name: t.Name, Reg: r} }
+func (t CustomType) WasmType() wasm.ValType   { return wasm.ValI32 }
+func (t CustomType) ByteSize() int            { return 4 }
+func (t CustomType) Align() int               { return 4 }
+func (t CustomType) IsCopy() bool             { return false }
 
 func (t CustomType) IsFlat(env *TypeEnvironment) bool {
 	return t.isFlatSeen(env, make(map[string]bool))

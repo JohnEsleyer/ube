@@ -1,3 +1,4 @@
+// File: pkg/compiler/parser.go
 package compiler
 
 import (
@@ -465,12 +466,12 @@ func (p *Parser) parseType() UbeType {
 		t = StringBuilderType{}
 	} else if tok.Type == TokenIdent {
 		idName := p.advance().Val
-		// Qualified type name: `module.Type`. Module imports with an alias
-		// prefix every declaration with `<alias>__`, so normalize the type
-		// reference to the same internal spelling.
+		// Qualified type name: `module.Type`. Preserve the dot as data; the
+		// typechecker resolves it through the alias map to a canonical
+		// symbol name. Do NOT splice into "__" here.
 		for p.check(TokenDot) {
 			p.advance()
-			idName += "__" + p.expect(TokenIdent, "Expected type name after '.'").Val
+			idName += "." + p.expect(TokenIdent, "Expected type name after '.'").Val
 		}
 		if p.check(TokenLBracket) {
 			p.advance()

@@ -458,7 +458,7 @@ func (ctx *fnContext) callReturnUbeType(call *CallExpr) UbeType {
 		}
 		if target, ok := mem.Target.(*IdentExpr); ok {
 			if prefix, ok := ctx.emitter.moduleAliases[target.Name]; ok {
-				if ret, ok := ctx.emitter.fnReturns[prefix+mem.Member]; ok {
+				if ret, ok := ctx.emitter.fnReturns[prefix+"."+mem.Member]; ok {
 					return ret
 				}
 			}
@@ -537,7 +537,16 @@ func (ctx *fnContext) compileDeferredCall(buf *bytes.Buffer, expr Expr) error {
 }
 
 func (ctx *fnContext) compileWrappedSuccess(buf *bytes.Buffer, value Expr) error {
-	valLocal := ctx.allocLocal(valTypeI32)
+	valLocalType := byte(valTypeI32)
+	switch ctx.inferExprType(value) {
+	case "f32":
+		valLocalType = valTypeF32
+	case "f64":
+		valLocalType = valTypeF64
+	case "i64":
+		valLocalType = valTypeI64
+	}
+	valLocal := ctx.allocLocal(valLocalType)
 	if err := ctx.compileExpr(buf, value); err != nil {
 		return err
 	}
@@ -548,9 +557,20 @@ func (ctx *fnContext) compileWrappedSuccess(buf *bytes.Buffer, value Expr) error
 	emitLocalGet(buf, resLocal)
 	emitI32Const(buf, 1)
 	emitI32Store(buf, 0, 2)
+
 	emitLocalGet(buf, resLocal)
 	emitLocalGet(buf, valLocal)
+	switch valLocalType {
+	case valTypeF32:
+		buf.WriteByte(0xbc) // i32.reinterpret_f32
+	case valTypeF64:
+		buf.WriteByte(0xbd) // i64.reinterpret_f64
+		buf.WriteByte(0xa7) // i32.wrap_i64
+	case valTypeI64:
+		buf.WriteByte(0xa7) // i32.wrap_i64
+	}
 	emitI32Store(buf, 4, 2)
+
 	emitLocalGet(buf, resLocal)
 	return nil
 }

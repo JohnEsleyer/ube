@@ -173,7 +173,7 @@ func (p *Parser) parsePostfix() Expr {
 					}
 				}
 				p.expect(TokenRBrace, "Expected '}' closing struct literal")
-				node = &StructInitExpr{At: loc, Name: id.Name + "__" + member, Fields: fields}
+				node = &StructInitExpr{At: loc, Name: id.Name + "." + member, Fields: fields}
 			} else {
 				node = &MemberExpr{At: loc, Target: node, Member: member}
 			}
@@ -406,7 +406,7 @@ func (p *Parser) parsePrimary() Expr {
 			savedPos := p.pos
 			p.advance()
 			member := p.advance().Val
-			qualified := idTok.Val + "__" + member
+			qualified := idTok.Val + "." + member
 			// A struct literal name starts with an uppercase letter. Requiring
 			// that here avoids mistaking `value.field { ... }` (a member lookup
 			// followed by an if/while block) for `module.Type { ... }`.
