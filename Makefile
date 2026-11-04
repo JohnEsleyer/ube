@@ -1,7 +1,8 @@
-.PHONY: all test build bin vsix install clean
+.PHONY: all test build vsix install clean
 
 GO      ?= go
 BIN_DIR ?= bin
+TARGET  := $(BIN_DIR)/ube
 
 # Default: run the test suite
 all: test
@@ -11,19 +12,11 @@ test:
 	@$(GO) test ./pkg/compiler/...
 	@$(GO) test ./cmd/...
 
-# Build into the working tree (for `go run`-style iteration)
+# Build the compiler binary into ./bin/ube (always overwrites)
 build:
-	@$(GO) build ./cmd/ube
-	@if [ -d ./cmd/ubec ]; then $(GO) build ./cmd/ubec; fi
-
-# Build into ./bin for distribution
-bin: $(BIN_DIR)/ube
-	@if [ -d ./cmd/ubec ]; then $(GO) build -o $(BIN_DIR)/ubec ./cmd/ubec; fi
-	@echo "Built binaries in ./$(BIN_DIR)"
-
-$(BIN_DIR)/ube:
 	@mkdir -p $(BIN_DIR)
-	@$(GO) build -o $(BIN_DIR)/ube ./cmd/ube
+	@$(GO) build -o $(TARGET) ./cmd/ube
+	@echo "Built and updated $(TARGET)"
 
 # Package the VS Code extension
 vsix:
