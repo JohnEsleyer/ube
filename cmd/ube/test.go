@@ -16,10 +16,13 @@ import (
 func runTests(args []string) error {
 	target := "."
 	runPattern := ""
+	ai := false
 	for i := 0; i < len(args); i++ {
 		if (args[i] == "-run" || args[i] == "--run") && i+1 < len(args) {
 			runPattern = args[i+1]
 			i++
+		} else if args[i] == "--ai" {
+			ai = true
 		} else if !strings.HasPrefix(args[i], "-") {
 			target = args[i]
 		}
@@ -39,7 +42,11 @@ func runTests(args []string) error {
 	for _, file := range files {
 		ast, _, err := loadAndCheck(file)
 		if err != nil {
-			fmt.Printf("• Testing %s ... %s\n%s\n", filepath.Base(file), paint("FAIL (check)", "\x1b[38;5;196m"), formatDiagnostic(err))
+			if ai {
+				fmt.Fprintln(os.Stderr, formatDiagnosticAI(err))
+			} else {
+				fmt.Printf("• Testing %s ... %s\n%s\n", filepath.Base(file), paint("FAIL (check)", "\x1b[38;5;196m"), formatDiagnostic(err))
+			}
 			totalFailed++
 			continue
 		}
