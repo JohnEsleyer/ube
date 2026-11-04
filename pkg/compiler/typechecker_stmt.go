@@ -1,3 +1,5 @@
+// File: pkg/compiler/typechecker_stmt.go
+
 package compiler
 
 import "fmt"

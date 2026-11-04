@@ -1,3 +1,5 @@
+// File: pkg/compiler/parser_stmt.go
+
 package compiler
 
 func (p *Parser) parseBlock() *BlockStmt {

@@ -940,7 +940,13 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		structName := e.Name
 		if strings.Contains(structName, ".") {
 			parts := strings.SplitN(structName, ".", 2)
-			structName = parts[0] + "__" + parts[1]
+			alias := parts[0]
+			base := parts[1]
+			if prefix, exists := tc.ModuleAliases[alias]; exists {
+				structName = prefix + base
+			} else {
+				structName = alias + "__" + base
+			}
 			e.Name = structName
 		}
 		meta, hasMeta := tc.Global.StructMeta[e.Name]

@@ -1,0 +1,28 @@
+// Helper module defining structs, value receivers, and mutable receivers
+pub struct Point {
+    pub x: i32,
+    pub y: i32
+}
+
+pub fn (p Point) sum() -> i32 {
+    return p.x + p.y
+}
+
+pub fn (mut p Point) translate(dx: i32, dy: i32) {
+    p.x += dx
+    p.y += dy
+}
+
+pub struct Rectangle {
+    pub top_left: Point,
+    pub width: i32,
+    pub height: i32
+}
+
+pub fn (r Rectangle) area() -> i32 {
+    return r.width * r.height
+}
+
+pub fn make_point(x: i32, y: i32) -> Point {
+    return Point{ x: x, y: y }
+}

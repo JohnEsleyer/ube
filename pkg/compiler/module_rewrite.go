@@ -1,3 +1,4 @@
+// File: pkg/compiler/module_rewrite.go
 package compiler
 
 // This file implements module namespace isolation for aliased imports.

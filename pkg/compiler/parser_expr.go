@@ -1,3 +1,4 @@
+// File: pkg/compiler/parser_expr.go
 package compiler
 
 import (
@@ -159,7 +160,23 @@ func (p *Parser) parsePostfix() Expr {
 			} else {
 				member = p.expect(TokenIdent, "Expected member name").Val
 			}
-			node = &MemberExpr{At: loc, Target: node, Member: member}
+			if id, ok := node.(*IdentExpr); ok && member[0] >= 'A' && member[0] <= 'Z' && p.check(TokenLBrace) {
+				p.advance() // consume '{'
+				var fields []FieldInit
+				for !p.check(TokenRBrace) && !p.check(TokenEOF) {
+					fName := p.expect(TokenIdent, "Expected field name").Val
+					p.expect(TokenColon, "Expected ':'")
+					fVal := p.parseExpr()
+					fields = append(fields, FieldInit{Name: fName, Val: fVal})
+					if p.check(TokenComma) {
+						p.advance()
+					}
+				}
+				p.expect(TokenRBrace, "Expected '}' closing struct literal")
+				node = &StructInitExpr{At: loc, Name: id.Name + "__" + member, Fields: fields}
+			} else {
+				node = &MemberExpr{At: loc, Target: node, Member: member}
+			}
 		} else if p.check(TokenLBracket) {
 			loc := p.advance().Loc
 			var idx Expr

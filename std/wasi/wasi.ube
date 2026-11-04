@@ -1,3 +1,5 @@
+// File: std/wasi/wasi.ube
+
 // std/wasi - raw WASI preview1 bindings and safe byte/runtime bridges.
 //
 // This is the lowest-level standard library layer. Application code should

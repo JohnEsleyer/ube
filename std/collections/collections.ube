@@ -1,3 +1,5 @@
+// File: std/collections/collections.ube
+
 // Ube standard library: slice-backed collections.
 //
 // Ube has no raw pointers or manual malloc/free. These collections therefore

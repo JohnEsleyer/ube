@@ -1,3 +1,5 @@
+// File: std/fs/fs.ube
+
 // std/fs - filesystem and path utilities for Ube.
 //
 // File I/O is backed by WASI preview1. The raw syscalls live in std/wasi;

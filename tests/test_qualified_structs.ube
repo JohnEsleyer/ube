@@ -1,0 +1,60 @@
+import "./helpers/geometry" as geo
+
+fn test_qualified_struct_instantiation() {
+    let p = geo.Point{ x: 10, y: 25 }
+    if p.x != 10 || p.y != 25 {
+        println("FAILED: field access on qualified struct")
+        return
+    }
+    println("PASS: qualified struct instantiation")
+}
+
+fn test_qualified_struct_value_method() {
+    let p = geo.Point{ x: 30, y: 12 }
+    let s = p.sum()
+    if s != 42 {
+        println(f"FAILED: expected sum 42, got {s}")
+        return
+    }
+    println("PASS: qualified struct value method")
+}
+
+fn test_qualified_struct_mut_method() {
+    let mut p = geo.Point{ x: 5, y: 5 }
+    p.translate(10, -3)
+    if p.x != 15 || p.y != 2 {
+        println(f"FAILED: translate expected (15, 2), got ({p.x}, {p.y})")
+        return
+    }
+    println("PASS: qualified struct mut method")
+}
+
+fn test_nested_qualified_struct() {
+    let r = geo.Rectangle{
+        top_left: geo.Point{ x: 0, y: 0 },
+        width: 8,
+        height: 6
+    }
+    if r.area() != 48 {
+        println(f"FAILED: expected area 48, got {r.area()}")
+        return
+    }
+    println("PASS: nested qualified struct")
+}
+
+fn test_helper_constructor_call() {
+    let p = geo.make_point(100, 200)
+    if p.sum() != 300 {
+        println(f"FAILED: expected sum 300, got {p.sum()}")
+        return
+    }
+    println("PASS: helper constructor call")
+}
+
+fn main() {
+    test_qualified_struct_instantiation()
+    test_qualified_struct_value_method()
+    test_qualified_struct_mut_method()
+    test_nested_qualified_struct()
+    test_helper_constructor_call()
+}

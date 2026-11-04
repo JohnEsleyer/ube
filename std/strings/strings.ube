@@ -1,11 +1,26 @@
+// File: std/strings/strings.ube
 // Ube standard library: string helpers.
-//
-// A number of these names are also available as compiler built-ins. Defining
-// them here keeps `import "std/strings"` self-describing and gives the
-// standard library a single home for the behaviour.
+
+pub fn str_index_of(haystack: string, needle: string) -> i32 {
+    if needle.len == 0 {
+        return 0
+    }
+    if needle.len > haystack.len {
+        return -1
+    }
+    let limit = haystack.len - needle.len
+    let mut i = 0
+    while i <= limit {
+        if haystack[i:i + needle.len] == needle {
+            return i
+        }
+        i += 1
+    }
+    return -1
+}
 
 pub fn str_contains(haystack: string, needle: string) -> bool {
-    return haystack.index_of(needle) >= 0
+    return str_index_of(haystack, needle) >= 0
 }
 
 pub fn str_starts_with(s: string, prefix: string) -> bool {
@@ -19,11 +34,59 @@ pub fn str_ends_with(s: string, suffix: string) -> bool {
 }
 
 pub fn str_trim(s: string) -> string {
-    return s.trim()
+    if s.len == 0 {
+        return s
+    }
+    let mut start = 0
+    while start < s.len {
+        let b = s[start]
+        // 32 = space, 9 = \t, 10 = \n, 13 = \r
+        if b != 32 && b != 9 && b != 10 && b != 13 {
+            break
+        }
+        start += 1
+    }
+    if start == s.len {
+        return ""
+    }
+    let mut end = s.len
+    while end > start {
+        let b = s[end - 1]
+        if b != 32 && b != 9 && b != 10 && b != 13 {
+            break
+        }
+        end -= 1
+    }
+    return s[start:end]
 }
 
 pub fn str_split(s: string, delim: string) -> []string {
-    return s.split(delim)
+    let mut result = []string{}
+    if s.len == 0 {
+        return result
+    }
+    if delim.len == 0 {
+        let mut i = 0
+        while i < s.len {
+            result.push(s[i:i + 1])
+            i += 1
+        }
+        return result
+    }
+    let mut start = 0
+    let mut i = 0
+    let limit = s.len - delim.len
+    while i <= limit {
+        if s[i:i + delim.len] == delim {
+            result.push(s[start:i])
+            i += delim.len
+            start = i
+        } else {
+            i += 1
+        }
+    }
+    result.push(s[start:s.len])
+    return result
 }
 
 pub fn str_repeat(s: string, count: i32) -> string {
