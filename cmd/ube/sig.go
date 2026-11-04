@@ -11,22 +11,12 @@ import (
 // runSig outputs high-level symbol declarations across the project without function bodies.
 func runSig(args []string) error {
 	var (
-		clipOut  bool
-		toStdout bool
-		target   = "."
+		target = "."
 	)
 
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		switch arg {
-		case "-c", "--clip":
-			clipOut = true
-		case "-s", "--stdout":
-			toStdout = true
-		default:
-			if !strings.HasPrefix(arg, "-") {
-				target = arg
-			}
+	for _, arg := range args {
+		if !strings.HasPrefix(arg, "-") {
+			target = arg
 		}
 	}
 
@@ -81,16 +71,7 @@ func runSig(args []string) error {
 	}
 
 	res := strings.TrimSpace(sb.String())
-	if clipOut {
-		if err := writeClipboard(res); err != nil {
-			return fmt.Errorf("copying to clipboard: %w", err)
-		}
-		fmt.Printf("✓ Signatures copied to clipboard (%d bytes)\n", len(res))
-	}
-
-	if toStdout || !clipOut {
-		fmt.Println(res)
-	}
+	fmt.Println(res)
 
 	return nil
 }

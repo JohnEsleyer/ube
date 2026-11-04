@@ -92,18 +92,10 @@ func execute(args []string) error {
 		return runDoc(args[1:])
 	case "flow":
 		return runFlow(args[1:])
-	case "context":
-		return runContext(args[1:])
-	case "guide":
-		return runGuide(args[1:])
+
 	case "sig", "signatures":
 		return runSig(args[1:])
-	case "load":
-		return runLoad(args[1:])
-	case "patch":
-		return runPatch(args[1:])
-	case "prompt":
-		return runPrompt(args[1:])
+
 	default:
 		if strings.HasSuffix(args[0], ".ube") {
 			return run(args)
