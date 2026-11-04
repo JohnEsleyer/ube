@@ -53,3 +53,24 @@ ube_guide.md
 
 # playground
 /_playground
+
+
+# Compiled C / C++ / Go / Rust binaries
+*.exe
+*.out
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+
+# Java / Scala
+*.class
+*.jar
+*.war
+
+# Python compiled bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd

@@ -1,3 +1,4 @@
+
 # The Ube Programming Language
 
 <div align="center">
@@ -39,6 +40,7 @@
   - [14. Sandboxed Host Imports](#14-sandboxed-host-imports)
 - [Standard Library & Module System](#standard-library--module-system)
 - [Developer CLI Toolchain](#developer-cli-toolchain)
+- [Working With LLMs](#working-with-llms)
 - [Editor Integration (VS Code & LSP)](#editor-integration-vs-code--lsp)
 - [Running the Test Suite](#running-the-test-suite)
 - [License](#license)
@@ -591,7 +593,40 @@ fn main() {
 | `ube fmt` | `ube fmt -w .` | Canonical formatter with automatic struct field columnar alignment. |
 | `ube doc` | `ube doc main.ube [sym]` | Prints signatures, fields, and method documentation. |
 | `ube flow` | `ube flow main.ube` | Renders a visual call tree showing memory scopes, tasks, and callees. |
+| `ube sig` | `ube sig` | Extracts a zero-body symbol map of the project. |
+| `ube build --ai` | `ube build --ai main.ube` | Compiles, but emits dense one-line diagnostics on error. |
+| `ube test --ai` | `ube test --ai tests/` | Runs tests, emitting dense one-line diagnostics for failing checks. |
 | `ube lsp` | `ube lsp` | Starts the Language Server Protocol for VS Code and Zed. |
+
+---
+
+## Working With LLMs
+
+Ube's compiler emits two things an LLM cannot infer from reading the code, and delegates everything else to [Textify](https://github.com/JohnEsleyer/textify).
+
+### What Ube provides
+
+- **`ube sig`** — a zero-body symbol map: structs, enums, traits, receiver methods, externs. No function bodies, no comments, no constants. Typically a few hundred tokens for an entire project. This is the orientation step for a model that has never seen the codebase.
+- **`--ai` on `build` and `test`** — dense one-line-per-error diagnostics in the form:
+
+  ```
+  ERR|file.ube:LINE:COL|class|k=v|k=v
+  ```
+
+  Example: `ERR|player.ube:45:12|type_mismatch|expected:i32|got:string`. Class and key-value fields are inferred from the compiler message; unrecognized messages fall back to `class=error`. Twenty to forty tokens replace a hundred-line trace dump.
+
+### What Textify provides
+
+Context extraction (`<trace>`, `<select>`, `<xref>`, `<feature-context>`), atomic multi-file patching with a two-pass VFS, clipboard I/O, and system prompts. These are language-agnostic text operations and belong in a separate tool.
+
+### The loop
+
+1. **Orient.** Run `ube sig`. Paste the output into the model's first message.
+2. **Request.** Let the model ask for context. Run `textify load -ci -c` to read the model's `<request>` block from the clipboard and copy the extracted context back.
+3. **Patch.** Run `textify patch -ci` to apply the model's edits atomically. If any anchor fails, no file is modified.
+4. **Verify.** Run `ube build --ai` or `ube test --ai`. The dense diagnostic goes back to the model in about twenty tokens and names the offending variable and the compiler's hint.
+
+The dense format is the one interface Ube promises to keep stable. Treat it as such: if a diagnostic is unrecognized, it degrades to `class=error` with no fields, which is worse than the verbose form for a model but still better than a raw stack trace.
 
 ---
 

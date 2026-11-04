@@ -1,3 +1,4 @@
+// File: cmd/ube/check.go
 package main
 
 import (
