@@ -8,7 +8,7 @@ import (
 
 func TestSimpleCalculatorCompiles(t *testing.T) {
 	loader := compiler.NewModuleLoader()
-	prog, err := loader.Load("../../_playground/simple_calculator/main.ube")
+	prog, err := loader.Load("testdata/simple_calculator/main.ube")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}

@@ -1,0 +1,93 @@
+// File: _playground/simple_calculator/main.ube
+import "std/io"
+import "std/math"
+import "std/strings"
+
+enum Operation{
+    Add(f32, f32),
+    Sub(f32, f32),
+    Mul(f32, f32),
+    Div(f32, f32),
+    Invalid
+}
+
+struct Calculator {
+    memory: f32,
+    operations_performed: i32
+}
+
+fn (mut c Calculator) compute(op: Operation) -> f32 ! string {
+    c.operations_performed += 1
+    match op {
+        Add(a, b) => {
+            let res = a + b
+            c.memory = res 
+            return res
+        }
+        Sub(a, b) => {
+            let res = a - b 
+            c.memory = res 
+            return res
+        }
+        Mul(a, b) => {
+            let res = a * b
+            c.memory = res
+            return res
+        }
+        Div(a, b) => {
+            if b == 0.0 {
+                return error("division by zero is forbidden")
+            }
+            let res = a / b
+            c.memory = res 
+            return res
+        }
+        Invalid => {
+            return error("unknown or invalid operation")
+        }
+    }
+}
+
+fn (c Calculator) summarize() {
+    println(f"--- Calculator Stats ---")
+    println(f"Last Memory Value : {c.memory}")
+    println(f"Total Operations Performed : {c.operations_performed}")
+}
+
+fn main(){
+    println("========================================")
+    println("    SWEET UBE INTERACTIVE CALCULATOR    ")
+    println("========================================")
+
+    let mut calc = Calculator{memory: 0.0, operations_performed: 0}
+
+    // Perform operations inside a regional bump arena scope
+    
+    arena {
+        let add_op = Operation.Add(150.5, 49.5)
+        if let val = calc.compute(add_op) {
+            println(f"150.5 + 49.5 = {val}")
+        } else {
+            println("Calculation failed")
+        }
+
+        let div_op = Operation.Div(1000.0, 8.0)
+        if let val = calc.compute(div_op) {
+            println(f"1000.0 / 8.0 = {val}")
+        } else {
+            println("Calculation failed")
+        }
+
+        let bad_div = Operation.Div(10.0, 0.0)
+        let safe_result = calc.compute(bad_div) or_else -999.0 
+
+        println(f"Division by zero fallback result: {safe_result}")
+        
+        calc.memory = math.clamp_f32(calc.memory, 0.0, 50.0)
+
+        println(f"Clamped memory to range [0.0, 50.0]: {calc.memory}")
+        
+    }
+    println("")
+    calc.summarize()
+}
