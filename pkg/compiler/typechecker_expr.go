@@ -1,3 +1,4 @@
+// File: pkg/compiler/typechecker_expr.go
 package compiler
 
 import (
@@ -303,11 +304,14 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			// Qualified module function call: math.min(a, b).
 			if id, ok := mem.Target.(*IdentExpr); ok {
 				if _, isVar := env.LookupVar(id.Name); !isVar {
-					if _, sig, found := tc.lookupModuleMember(id.Name, mem.Member); found {
-						if err := tc.checkCallArgs(e.Args, sig.Params, sig.Escaping, env, e.At); err != nil {
-							return nil, err
+					if _, isMod := tc.ModuleAliases[id.Name]; isMod {
+						if _, sig, found := tc.lookupModuleMember(id.Name, mem.Member); found {
+							if err := tc.checkCallArgs(e.Args, sig.Params, sig.Escaping, env, e.At); err != nil {
+								return nil, err
+							}
+							return sig.RetType, nil
 						}
-						return sig.RetType, nil
+						return nil, fmt.Errorf("[%s] module '%s' has no function '%s'", e.At, id.Name, mem.Member)
 					}
 				}
 			}
@@ -767,8 +771,11 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		if id, ok := e.Target.(*IdentExpr); ok {
 			// Qualified zero-argument module member: math.PI.
 			if _, isVar := env.LookupVar(id.Name); !isVar {
-				if _, sig, found := tc.lookupModuleMember(id.Name, e.Member); found && len(sig.Params) == 0 {
-					return sig.RetType, nil
+				if _, isMod := tc.ModuleAliases[id.Name]; isMod {
+					if _, sig, found := tc.lookupModuleMember(id.Name, e.Member); found && len(sig.Params) == 0 {
+						return sig.RetType, nil
+					}
+					return nil, fmt.Errorf("[%s] module '%s' has no member '%s'", e.At, id.Name, e.Member)
 				}
 			}
 			if variants, isEnum := tc.Global.Enums[id.Name]; isEnum {
