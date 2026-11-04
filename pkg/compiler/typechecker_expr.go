@@ -930,6 +930,12 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		return pool, tc.validateType(pool, e.At)
 
 	case *StructInitExpr:
+		structName := e.Name
+		if strings.Contains(structName, ".") {
+			parts := strings.SplitN(structName, ".", 2)
+			structName = parts[0] + "__" + parts[1]
+			e.Name = structName
+		}
 		meta, hasMeta := tc.Global.StructMeta[e.Name]
 		if hasMeta {
 			if env.CurFile != "" && meta.File != "" && env.CurFile != meta.File && !meta.IsPub {

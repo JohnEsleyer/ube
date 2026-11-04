@@ -1,3 +1,4 @@
+// File: pkg/lsp/hover.go
 package lsp
 
 import (

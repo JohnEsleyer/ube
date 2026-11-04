@@ -1,0 +1,726 @@
+// std/fs - filesystem and path utilities for Ube.
+//
+// File I/O is backed by WASI preview1. The raw syscalls live in std/wasi;
+// this module provides a safe, ergonomic, zero-copy streaming API on top.
+//
+// All paths are resolved relative to the runtime's preopened working
+// directory (WASI_AT_FDCWD).
+
+import "std/wasi" as wasi
+
+// ============================================================================
+// 1. Constants & Rights
+// ============================================================================
+
+pub fn SEEK_SET() -> i32 { return 0 }
+pub fn SEEK_CUR() -> i32 { return 1 }
+pub fn SEEK_END() -> i32 { return 2 }
+
+// Standard WASI file rights bitmasks, narrowed to i32 for the raw intrinsics.
+fn rights_read_i32() -> i32 { return 2097190 }
+fn rights_write_i32() -> i32 { return 2097268 }
+fn rights_all_i32() -> i32 { return 536870911 }
+
+// Translates WASI errno integers to descriptive error strings.
+fn wasi_error_to_string(code: i32, path: string) -> string {
+    if code == 2 {
+        return f"file or directory not found: '{path}' (ENOENT)"
+    }
+    if code == 19 {
+        return f"file already exists: '{path}' (EEXIST)"
+    }
+    if code == 28 {
+        return f"path is a directory: '{path}' (EISDIR)"
+    }
+    if code == 54 {
+        return f"not a directory: '{path}' (ENOTDIR)"
+    }
+    if code == 44 {
+        return f"permission denied: '{path}' (EACCES)"
+    }
+    if code == 76 {
+        return f"capabilities insufficient: '{path}' outside preopened directory (ENOTCAPABLE)"
+    }
+    return f"filesystem error (errno: {code}) on '{path}'"
+}
+
+// ============================================================================
+// 2. Path Manipulation
+// ============================================================================
+
+// Returns an independent copy of a string. Interpolation builds a fresh value,
+// which keeps callers from losing ownership of the source string.
+fn copy_str(s: string) -> string {
+    return f"{s}"
+}
+
+pub struct Path {
+    raw: string
+}
+
+pub fn path_new(s: string) -> Path {
+    return Path{ raw: copy_str(s) }
+}
+
+pub fn (p Path) str() -> string {
+    return copy_str(p.raw)
+}
+
+pub fn (p Path) is_empty() -> bool {
+    return p.raw.len == 0
+}
+
+pub fn (p Path) is_absolute() -> bool {
+    return path_is_absolute(p.raw)
+}
+
+pub fn (p Path) parent() -> string? {
+    return path_parent(p.raw)
+}
+
+pub fn (p Path) file_name() -> string? {
+    return path_file_name(p.raw)
+}
+
+pub fn (p Path) file_stem() -> string? {
+    return path_file_stem(p.raw)
+}
+
+pub fn (p Path) extension() -> string? {
+    return path_extension(p.raw)
+}
+
+pub fn (p Path) join(child: string) -> Path {
+    return Path{ raw: path_join(p.raw, child) }
+}
+
+pub fn (p Path) with_extension(ext: string) -> Path {
+    return Path{ raw: path_with_extension(p.raw, ext) }
+}
+
+pub fn path_is_absolute(p: string) -> bool {
+    if p.len == 0 {
+        return false
+    }
+    if p[0] == 47 || p[0] == 92 { // '/' or '\'
+        return true
+    }
+    // Windows drive letter: "C:/" or "C:\".
+    if p.len >= 3 && p[1] == 58 && (p[2] == 47 || p[2] == 92) {
+        return true
+    }
+    return false
+}
+
+pub fn path_join(base: string, child: string) -> string {
+    let b = Path{ raw: base }
+    let c = Path{ raw: child }
+    return path_join_paths(b, c)
+}
+
+fn path_join_paths(b: Path, c: Path) -> string {
+    if b.raw.len == 0 {
+        return copy_str(c.raw)
+    }
+    if c.raw.len == 0 {
+        return copy_str(b.raw)
+    }
+    if path_is_absolute(c.raw) {
+        return copy_str(c.raw)
+    }
+
+    let ends_with_slash = (b.raw[b.raw.len - 1] == 47 || b.raw[b.raw.len - 1] == 92)
+    let starts_with_slash = (c.raw[0] == 47 || c.raw[0] == 92)
+
+    if ends_with_slash && starts_with_slash {
+        return f"{b.raw}{c.raw[1:c.raw.len]}"
+    }
+    if !ends_with_slash && !starts_with_slash {
+        return f"{b.raw}/{c.raw}"
+    }
+    return f"{b.raw}{c.raw}"
+}
+
+pub fn path_parent(p: string) -> string? {
+    if p.len == 0 {
+        return none
+    }
+
+    let mut i = p.len - 1
+    if (p[i] == 47 || p[i] == 92) && i > 0 {
+        i -= 1
+    }
+
+    while i >= 0 {
+        if p[i] == 47 || p[i] == 92 {
+            if i == 0 {
+                return "/"
+            }
+            return copy_str(p[0:i])
+        }
+        i -= 1
+    }
+    return none
+}
+
+pub fn path_file_name(p: string) -> string? {
+    if p.len == 0 {
+        return none
+    }
+
+    let mut end = p.len
+    if p[end - 1] == 47 || p[end - 1] == 92 {
+        end -= 1
+    }
+    if end <= 0 {
+        return none
+    }
+
+    let mut i = end - 1
+    while i >= 0 {
+        if p[i] == 47 || p[i] == 92 {
+            return copy_str(p[i + 1:end])
+        }
+        i -= 1
+    }
+    return copy_str(p[0:end])
+}
+
+pub fn path_extension(p: string) -> string? {
+    let pp = Path{ raw: p }
+    let name = path_file_name(pp.raw) or_else ""
+    if name.len == 0 {
+        return none
+    }
+
+    let mut i = name.len - 1
+    while i >= 0 {
+        if name[i] == 46 { // '.'
+            if i == 0 || i == name.len - 1 {
+                return none
+            }
+            return copy_str(name[i + 1:name.len])
+        }
+        i -= 1
+    }
+    return none
+}
+
+pub fn path_file_stem(p: string) -> string? {
+    let pp = Path{ raw: p }
+    let name = path_file_name(pp.raw) or_else ""
+    if name.len == 0 {
+        return none
+    }
+
+    let mut i = name.len - 1
+    while i >= 0 {
+        if name[i] == 46 {
+            if i == 0 {
+                return copy_str(name)
+            }
+            return copy_str(name[0:i])
+        }
+        i -= 1
+    }
+    return copy_str(name)
+}
+
+pub fn path_with_extension(p: string, new_ext: string) -> string {
+    let pp = Path{ raw: p }
+    let stem = path_file_stem(pp.raw) or_else pp.raw
+    let parent = path_parent(pp.raw) or_else ""
+
+    let mut dot_ext = ""
+    if new_ext.len > 0 && new_ext[0] != 46 {
+        dot_ext = f".{new_ext}"
+    } else if new_ext.len > 0 {
+        dot_ext = new_ext
+    }
+
+    if parent.len > 0 {
+        return f"{parent}/{stem}{dot_ext}"
+    }
+    return f"{stem}{dot_ext}"
+}
+
+// Normalizes '.' and '..' path segments.
+pub fn path_clean(p: string) -> string {
+    if p.len == 0 {
+        return "."
+    }
+
+    let pp = Path{ raw: p }
+    let mut segments = []string{}
+    let mut start = 0
+    let mut i = 0
+
+    while i <= pp.raw.len {
+        let mut is_sep = false
+        if i == pp.raw.len {
+            is_sep = true
+        } else {
+            is_sep = pp.raw[i] == 47 || pp.raw[i] == 92
+        }
+        if is_sep {
+            if i > start {
+                let part = pp.raw[start:i]
+                if part == ".." {
+                    if segments.len > 0 && segments[segments.len - 1] != ".." {
+                        segments.pop()
+                    } else if !path_is_absolute(pp.raw) {
+                        segments.push(part)
+                    }
+                } else if part != "." {
+                    segments.push(copy_str(part))
+                }
+            }
+            start = i + 1
+        }
+        i += 1
+    }
+
+    if segments.len == 0 {
+        if path_is_absolute(pp.raw) {
+            return "/"
+        }
+        return "."
+    }
+
+    let mut result = ""
+    if path_is_absolute(pp.raw) {
+        result = "/"
+    }
+    let mut first = true
+    for seg in segments {
+        if !first || path_is_absolute(pp.raw) {
+            result = f"{result}/{seg}"
+        } else {
+            result = seg
+        }
+        first = false
+    }
+    return copy_str(result)
+}
+
+// ============================================================================
+// 3. OpenOptions & File Mode Builder
+// ============================================================================
+
+pub struct OpenOptions {
+    read_opt:       bool,
+    write_opt:      bool,
+    append_opt:     bool,
+    truncate_opt:   bool,
+    create_opt:     bool,
+    create_new_opt: bool
+}
+
+pub fn open_options() -> OpenOptions {
+    return OpenOptions{
+        read_opt:       true,
+        write_opt:      false,
+        append_opt:     false,
+        truncate_opt:   false,
+        create_opt:     false,
+        create_new_opt: false
+    }
+}
+
+pub fn (mut o OpenOptions) read(val: bool) {
+    o.read_opt = val
+}
+
+pub fn (mut o OpenOptions) write(val: bool) {
+    o.write_opt = val
+}
+
+pub fn (mut o OpenOptions) append(val: bool) {
+    o.append_opt = val
+    if val {
+        o.write_opt = true
+    }
+}
+
+pub fn (mut o OpenOptions) truncate(val: bool) {
+    o.truncate_opt = val
+    if val {
+        o.write_opt = true
+    }
+}
+
+pub fn (mut o OpenOptions) create(val: bool) {
+    o.create_opt = val
+    if val {
+        o.write_opt = true
+    }
+}
+
+pub fn (mut o OpenOptions) create_new(val: bool) {
+    o.create_new_opt = val
+    if val {
+        o.create_opt = true
+        o.write_opt = true
+    }
+}
+
+pub fn (o OpenOptions) open(path: string) -> File ! string {
+    let p = Path{ raw: copy_str(path) }
+
+    let mut oflags = 0
+    if o.create_new_opt {
+        oflags = oflags | wasi.WASI_O_CREAT() | wasi.WASI_O_EXCL()
+    } else if o.create_opt {
+        oflags = oflags | wasi.WASI_O_CREAT()
+    }
+    if o.truncate_opt {
+        oflags = oflags | wasi.WASI_O_TRUNC()
+    }
+
+    let mut fdflags = 0
+    if o.append_opt {
+        fdflags = fdflags | wasi.WASI_FDFLAGS_APPEND()
+    }
+
+    let mut rights_base = rights_read_i32()
+    if o.read_opt && o.write_opt {
+        rights_base = rights_all_i32()
+    } else if o.write_opt {
+        rights_base = rights_write_i32()
+    }
+
+    let fd = wasi.path_open_raw(p.raw, oflags, fdflags, rights_base, rights_base)
+    if fd < 0 {
+        return error(wasi_error_to_string(-fd, p.raw))
+    }
+
+    return File{
+        fd:      fd,
+        path:    p.raw,
+        is_open: true
+    }
+}
+
+// ============================================================================
+// 4. File Handle
+// ============================================================================
+
+pub struct File {
+    fd:      i32,
+    path:    string,
+    is_open: bool
+}
+
+pub fn (f File) read(mut buf: []u8) -> i32 ! string {
+    if !f.is_open {
+        return error("attempt to read from closed file")
+    }
+    let n = wasi.fd_read_raw(f.fd, mut buf)
+    if n < 0 {
+        return error(wasi_error_to_string(-n, f.path))
+    }
+    return n
+}
+
+pub fn (f File) read_all() -> []u8 ! string {
+    if !f.is_open {
+        return error("attempt to read from closed file")
+    }
+
+    let mut result = []u8{}
+    let mut chunk = []u8{}
+    let mut i = 0
+    while i < 1024 {
+        chunk.push(0)
+        i += 1
+    }
+
+    while true {
+        let bytes_read = f.read(mut chunk)?
+        if bytes_read <= 0 {
+            break
+        }
+        let mut j = 0
+        while j < bytes_read {
+            result.push(chunk[j])
+            j += 1
+        }
+    }
+    return result
+}
+
+pub fn (f File) read_to_string() -> string ! string {
+    let bytes_vec = f.read_all()?
+    return string.from_bytes(bytes_vec) or_else ""
+}
+
+pub fn (f File) write(data: []u8) -> i32 ! string {
+    if !f.is_open {
+        return error("attempt to write to closed file")
+    }
+    let n = wasi.fd_write_raw(f.fd, data)
+    if n < 0 {
+        return error(wasi_error_to_string(-n, f.path))
+    }
+    return n
+}
+
+pub fn (f File) write_string(s: string) -> i32 ! string {
+    return f.write(s.bytes())
+}
+
+pub fn (f File) write_line(s: string) -> i32 ! string {
+    let r1 = f.write_string(s)?
+    let mut nl = []u8{}
+    nl.push(10)
+    let r2 = f.write(nl)?
+    return r1 + r2
+}
+
+pub fn (f File) flush() -> bool ! string {
+    if !f.is_open {
+        return error("attempt to sync closed file")
+    }
+    let errno = wasi.fd_sync_raw(f.fd)
+    if errno != 0 {
+        return error(wasi_error_to_string(errno, f.path))
+    }
+    return true
+}
+
+pub fn (f File) seek(offset: i32, whence: i32) -> i32 ! string {
+    if !f.is_open {
+        return error("attempt to seek in closed file")
+    }
+    let pos = wasi.fd_seek_raw(f.fd, offset, whence)
+    if pos < 0 {
+        return error(wasi_error_to_string(-pos, f.path))
+    }
+    return pos
+}
+
+pub fn (f File) rewind() -> bool ! string {
+    f.seek(0, SEEK_SET())?
+    return true
+}
+
+pub fn (f File) size() -> i32 ! string {
+    if !f.is_open {
+        return error("attempt to query size of closed file")
+    }
+    // WASI filestat is 64 bytes. Size is the u64 at byte offset 32, which is
+    // the low word of element 8 in a [16]i32 buffer.
+    let mut stat_buf = [16]i32{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+    let errno = wasi.fd_filestat_raw(f.fd, mut stat_buf)
+    if errno != 0 {
+        return error(wasi_error_to_string(errno, f.path))
+    }
+    return stat_buf[8]
+}
+
+pub fn (mut f File) close() -> bool ! string {
+    if !f.is_open {
+        return true
+    }
+    f.is_open = false
+    let errno = wasi.fd_close_raw(f.fd)
+    if errno != 0 {
+        return error(wasi_error_to_string(errno, f.path))
+    }
+    return true
+}
+
+// ============================================================================
+// 5. Metadata & Inspection
+// ============================================================================
+
+pub struct Metadata {
+    size:       i32,
+    is_file:    bool,
+    is_dir:     bool,
+    is_symlink: bool
+}
+
+pub fn (m Metadata) len() -> i32 {
+    return m.size
+}
+
+pub fn (m Metadata) is_empty() -> bool {
+    return m.size == 0
+}
+
+pub fn metadata(path: string) -> Metadata ! string {
+    let p = Path{ raw: path }
+    let mut stat_buf = [16]i32{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+    let errno = wasi.path_filestat_raw(p.raw, mut stat_buf)
+    if errno != 0 {
+        return error(wasi_error_to_string(errno, p.raw))
+    }
+
+    // WASI filestat layout:
+    //   byte 16: file type (3 directory, 4 regular file, 7 symlink)
+    //   byte 32: size (u64)
+    let filetype_raw = stat_buf[4] & 255
+    return Metadata{
+        size:       stat_buf[8],
+        is_file:    filetype_raw == 4,
+        is_dir:     filetype_raw == 3,
+        is_symlink: filetype_raw == 7
+    }
+}
+
+pub fn exists(path: string) -> bool {
+    if let _meta = metadata(path) {
+        return true
+    }
+    return false
+}
+
+pub fn is_file(path: string) -> bool {
+    if let meta = metadata(path) {
+        return meta.is_file
+    }
+    return false
+}
+
+pub fn is_dir(path: string) -> bool {
+    if let meta = metadata(path) {
+        return meta.is_dir
+    }
+    return false
+}
+
+pub fn file_size(path: string) -> i32 ! string {
+    let meta = metadata(path)?
+    return meta.size
+}
+
+// ============================================================================
+// 6. Directory Operations
+// ============================================================================
+
+pub struct DirEntry {
+    name:    string,
+    path:    string,
+    is_dir:  bool,
+    is_file: bool
+}
+
+pub fn (d DirEntry) file_name() -> string {
+    return copy_str(d.name)
+}
+
+pub fn (d DirEntry) full_path() -> string {
+    return copy_str(d.path)
+}
+
+pub fn create_dir(dir_path: string) -> bool ! string {
+    let p = Path{ raw: dir_path }
+    let errno = wasi.path_create_dir_raw(p.raw)
+    if errno != 0 {
+        return error(wasi_error_to_string(errno, p.raw))
+    }
+    return true
+}
+
+pub fn create_dir_all(dir_path: string) -> bool ! string {
+    let p = Path{ raw: dir_path }
+    if exists(p.raw) {
+        if is_dir(p.raw) {
+            return true
+        }
+        return error(f"path exists but is not a directory: '{p.raw}'")
+    }
+
+    if let parent = path_parent(p.raw) {
+        let pp = Path{ raw: parent }
+        if pp.raw != "" && pp.raw != "." && pp.raw != "/" && !exists(pp.raw) {
+            create_dir_all(pp.raw)?
+        }
+    }
+    return create_dir(p.raw)
+}
+
+pub fn remove_file(path: string) -> bool ! string {
+    let p = Path{ raw: path }
+    let errno = wasi.path_unlink_raw(p.raw)
+    if errno != 0 {
+        return error(wasi_error_to_string(errno, p.raw))
+    }
+    return true
+}
+
+pub fn remove_dir(dir_path: string) -> bool ! string {
+    let p = Path{ raw: dir_path }
+    let errno = wasi.path_remove_dir_raw(p.raw)
+    if errno != 0 {
+        return error(wasi_error_to_string(errno, p.raw))
+    }
+    return true
+}
+
+// ============================================================================
+// 7. High-Level Convenience Functions
+// ============================================================================
+
+pub fn open(path: string) -> File ! string {
+    let mut opts = open_options()
+    opts.read(true)
+    return opts.open(path)
+}
+
+pub fn create(path: string) -> File ! string {
+    let mut opts = open_options()
+    opts.write(true)
+    opts.create(true)
+    opts.truncate(true)
+    return opts.open(path)
+}
+
+pub fn open_append(path: string) -> File ! string {
+    let mut opts = open_options()
+    opts.write(true)
+    opts.append(true)
+    opts.create(true)
+    return opts.open(path)
+}
+
+pub fn read_to_string(path: string) -> string ! string {
+    let mut file = open(path)?
+    defer file.close()
+    return file.read_to_string()
+}
+
+pub fn read_bytes(path: string) -> []u8 ! string {
+    let mut file = open(path)?
+    defer file.close()
+    return file.read_all()
+}
+
+pub fn write_string(path: string, content: string) -> bool ! string {
+    let mut file = create(path)?
+    defer file.close()
+    file.write_string(content)?
+    return true
+}
+
+pub fn write_bytes(path: string, data: []u8) -> bool ! string {
+    let mut file = create(path)?
+    defer file.close()
+    file.write(data)?
+    return true
+}
+
+pub fn append_string(path: string, content: string) -> bool ! string {
+    let mut file = open_append(path)?
+    defer file.close()
+    file.write_string(content)?
+    return true
+}
+
+pub fn copy_file(src: string, dst: string) -> i32 ! string {
+    let data = read_bytes(src)?
+    let n = data.len
+    write_bytes(dst, data)?
+    return n
+}

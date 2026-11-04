@@ -1,40 +1,30 @@
 package compiler
 
 import (
-	"embed"
-	"io/fs"
-	"path"
+	"fmt"
 	"strings"
+
+	"github.com/JohnEsleyer/ube/std"
 )
 
-// stdlibFS bundles the Ube standard library into the compiler binary. This is
-// what makes `import "std/..."` work out of the box, even when the CLI is
-// distributed without a source checkout.
-//
-//go:embed stdlib/std/*.ube
-var stdlibFS embed.FS
+// stdlibSource loads standard library source files from the embedded FS.
+// Standard libraries live at std/<name>/<name>.ube.
+func stdlibSource(key string) (string, bool) {
+	cleanKey := strings.TrimSuffix(key, ".ube")
 
-// StdlibSources maps a standard library module name ("math", "strings", ...)
-// to its Ube source. It is populated from the embedded filesystem at startup.
-var StdlibSources = map[string]string{}
-
-func init() {
-	entries, err := fs.Glob(stdlibFS, "stdlib/std/*.ube")
-	if err != nil {
-		return
+	// Priority 1: subdirectory layout (std/<lib>/<lib>.ube).
+	subPath := fmt.Sprintf("%s/%s.ube", cleanKey, cleanKey)
+	if data, err := std.Content.ReadFile(subPath); err == nil {
+		return string(data), true
 	}
-	for _, entry := range entries {
-		name := strings.TrimSuffix(path.Base(entry), ".ube")
-		data, err := stdlibFS.ReadFile(entry)
-		if err != nil {
-			continue
-		}
-		StdlibSources[name] = string(data)
-	}
-}
 
-// stdlibSource returns the embedded source for a standard library module.
-func stdlibSource(name string) (string, bool) {
-	src, ok := StdlibSources[name]
-	return src, ok
+	// Priority 2: direct path (e.g. key is already "fs/fs.ube").
+	if data, err := std.Content.ReadFile(key); err == nil {
+		return string(data), true
+	}
+	if data, err := std.Content.ReadFile(cleanKey + ".ube"); err == nil {
+		return string(data), true
+	}
+
+	return "", false
 }

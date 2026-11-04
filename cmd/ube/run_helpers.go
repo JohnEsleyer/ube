@@ -32,6 +32,9 @@ func runWasmtimeInProcess(wasmPath string, args []string) error {
 	wasiCfg.InheritStdin()
 	wasiCfg.InheritStdout()
 	wasiCfg.InheritStderr()
+	if err := wasiCfg.PreopenDir(".", ".", wasmtime.DIR_READ|wasmtime.DIR_WRITE, wasmtime.FILE_READ|wasmtime.FILE_WRITE); err != nil {
+		return err
+	}
 	store.SetWasi(wasiCfg)
 	instance, err := linker.Instantiate(store, module)
 	if err != nil {
@@ -66,6 +69,9 @@ func runWasmtimeCapture(wasmPath string, args []string) (string, error) {
 	wasiCfg.SetArgv(append([]string{wasmPath}, args...))
 	wasiCfg.SetStdoutFile(outFile)
 	wasiCfg.SetStderrFile(errFile)
+	if err := wasiCfg.PreopenDir(".", ".", wasmtime.DIR_READ|wasmtime.DIR_WRITE, wasmtime.FILE_READ|wasmtime.FILE_WRITE); err != nil {
+		return "", err
+	}
 	store.SetWasi(wasiCfg)
 	instance, err := linker.Instantiate(store, module)
 	if err != nil {

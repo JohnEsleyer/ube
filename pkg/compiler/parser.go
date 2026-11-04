@@ -432,6 +432,9 @@ func (p *Parser) parseType() UbeType {
 		p.advance()
 		p.advance()
 		elem := p.parseType()
+		if rt, ok := elem.(ResultType); ok {
+			return ResultType{Ok: SliceType{Elem: rt.Ok}, Err: rt.Err}
+		}
 		t = SliceType{Elem: elem}
 	} else if tok.Type == TokenLBracket && p.peek(1).Type == TokenInt {
 		p.advance()
@@ -440,7 +443,11 @@ func (p *Parser) parseType() UbeType {
 			p.errorAt(tok.Loc, "array size must be greater than 0")
 		}
 		p.expect(TokenRBracket, "Expected ']' after array size")
-		t = ArrayType{Elem: p.parseType(), Size: n}
+		elem := p.parseType()
+		if rt, ok := elem.(ResultType); ok {
+			return ResultType{Ok: ArrayType{Elem: rt.Ok, Size: n}, Err: rt.Err}
+		}
+		t = ArrayType{Elem: elem, Size: n}
 	} else if tok.Type == TokenIdent && tok.Val == "Chan" {
 		p.advance()
 		p.expect(TokenLBracket, "Expected '[' for Chan element type")

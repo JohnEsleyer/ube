@@ -70,7 +70,7 @@
       "patterns": [
         {
           "name": "keyword.control.ube",
-          "match": "\\b(if|else|while|for|in|match|return|break|continue|select|spawn|defer)\\b"
+          "match": "\\b(pub|fn|let|mut|struct|enum|match|if|else|while|for|in|return|break|continue|arena|promote|spawn|select|defer|or_else|extern|import|trait|as)\\b"
         },
         {
           "name": "keyword.declaration.ube",

@@ -1,0 +1,146 @@
+// std/wasi - raw WASI preview1 bindings and safe byte/runtime bridges.
+//
+// This is the lowest-level standard library layer. Application code should
+// prefer std/io and std/fs; these helpers exist so those modules can talk to
+// the host without unsafe pointers.
+
+pub fn WASI_STDIN() -> i32 { return 0 }
+pub fn WASI_STDOUT() -> i32 { return 1 }
+pub fn WASI_STDERR() -> i32 { return 2 }
+pub fn WASI_ESUCCESS() -> i32 { return 0 }
+
+pub fn wasi_stdin() -> i32 { return 0 }
+pub fn wasi_stdout() -> i32 { return 1 }
+pub fn wasi_stderr() -> i32 { return 2 }
+pub fn wasi_esuccess() -> i32 { return 0 }
+
+// Preopened working directory file descriptor in WASI runtimes.
+pub fn WASI_AT_FDCWD() -> i32 { return 3 }
+
+// WASI Open Flags (oflags).
+pub fn WASI_O_CREAT() -> i32     { return 1 }
+pub fn WASI_O_DIRECTORY() -> i32 { return 2 }
+pub fn WASI_O_EXCL() -> i32      { return 4 }
+pub fn WASI_O_TRUNC() -> i32     { return 8 }
+
+// WASI File Descriptor Flags (fdflags).
+pub fn WASI_FDFLAGS_APPEND() -> i32   { return 1 }
+pub fn WASI_FDFLAGS_DSYNC() -> i32    { return 2 }
+pub fn WASI_FDFLAGS_NONBLOCK() -> i32 { return 4 }
+pub fn WASI_FDFLAGS_RSYNC() -> i32    { return 8 }
+pub fn WASI_FDFLAGS_SYNC() -> i32     { return 16 }
+
+// WASI Seek Whence.
+pub fn WASI_SEEK_SET() -> i32 { return 0 }
+pub fn WASI_SEEK_CUR() -> i32 { return 1 }
+pub fn WASI_SEEK_END() -> i32 { return 2 }
+
+// Raw host syscall declarations. The compiler maps these to WASI imports.
+extern "wasi_snapshot_preview1" fn fd_write(fd: i32, iovs: i32, iovs_len: i32, nwritten: i32) -> i32
+extern "wasi_snapshot_preview1" fn fd_read(fd: i32, iovs: i32, iovs_len: i32, nread: i32) -> i32
+extern "wasi_snapshot_preview1" fn fd_close(fd: i32) -> i32
+extern "wasi_snapshot_preview1" fn fd_sync(fd: i32) -> i32
+extern "wasi_snapshot_preview1" fn fd_seek(fd: i32, offset: i64, whence: i32, out_pos_ptr: i32) -> i32
+extern "wasi_snapshot_preview1" fn fd_filestat_get(fd: i32, out_stat_ptr: i32) -> i32
+extern "wasi_snapshot_preview1" fn path_open(
+    dir_fd: i32,
+    dirflags: i32,
+    path_ptr: i32,
+    path_len: i32,
+    oflags: i32,
+    fs_rights_base: i64,
+    fs_rights_inheriting: i64,
+    fdflags: i32,
+    opened_fd_ptr: i32
+) -> i32
+extern "wasi_snapshot_preview1" fn path_create_directory(dir_fd: i32, path_ptr: i32, path_len: i32) -> i32
+extern "wasi_snapshot_preview1" fn path_unlink_file(dir_fd: i32, path_ptr: i32, path_len: i32) -> i32
+extern "wasi_snapshot_preview1" fn path_remove_directory(dir_fd: i32, path_ptr: i32, path_len: i32) -> i32
+extern "wasi_snapshot_preview1" fn path_filestat_get(dir_fd: i32, flags: i32, path_ptr: i32, path_len: i32, out_stat_ptr: i32) -> i32
+extern "wasi_snapshot_preview1" fn clock_time_get(id: i32, precision: i64, time: i32) -> i32
+extern "wasi_snapshot_preview1" fn random_get(buf: i32, buf_len: i32) -> i32
+extern "wasi_snapshot_preview1" fn environ_get(environ: i32, environ_buf: i32) -> i32
+extern "wasi_snapshot_preview1" fn args_get(argv: i32, argv_buf: i32) -> i32
+extern "wasi_snapshot_preview1" fn proc_exit(rval: i32)
+
+fn errno_message(errno: i32) -> string {
+    return f"WASI error (errno: {errno})"
+}
+
+// -------------------------------------------------------------
+// Compiler-backed safe bridges
+// -------------------------------------------------------------
+
+pub fn fd_write_bytes(fd: i32, data: []u8) -> i32 ! string {
+    let n = wasi_fd_write_raw(fd, data)
+    if n < 0 {
+        return error(errno_message(-n))
+    }
+    return n
+}
+
+pub fn fd_read_bytes(fd: i32, mut buf: []u8) -> i32 ! string {
+    let n = wasi_fd_read_raw(fd, mut buf)
+    if n < 0 {
+        return error(errno_message(-n))
+    }
+    return n
+}
+
+// -------------------------------------------------------------
+// Filesystem bridges used by std/fs
+// -------------------------------------------------------------
+
+pub fn fd_read_raw(fd: i32, mut buf: []u8) -> i32 {
+    return wasi_fd_read_raw(fd, mut buf)
+}
+
+pub fn fd_write_raw(fd: i32, data: []u8) -> i32 {
+    return wasi_fd_write_raw(fd, data)
+}
+
+pub fn fd_write_string_raw(fd: i32, s: string) -> i32 {
+    return wasi_fd_write_string_raw(fd, s)
+}
+
+pub fn path_open_raw(
+    path: string,
+    oflags: i32,
+    fdflags: i32,
+    rights_base: i32,
+    rights_inheriting: i32
+) -> i32 {
+    return wasi_path_open_raw(path, oflags, fdflags, rights_base, rights_inheriting)
+}
+
+pub fn fd_close_raw(fd: i32) -> i32 {
+    return wasi_fd_close_raw(fd)
+}
+
+pub fn fd_sync_raw(fd: i32) -> i32 {
+    return wasi_fd_sync_raw(fd)
+}
+
+pub fn fd_seek_raw(fd: i32, offset: i32, whence: i32) -> i32 {
+    return wasi_fd_seek_raw(fd, offset, whence)
+}
+
+pub fn path_create_dir_raw(path: string) -> i32 {
+    return wasi_path_create_dir_raw(path)
+}
+
+pub fn path_unlink_raw(path: string) -> i32 {
+    return wasi_path_unlink_raw(path)
+}
+
+pub fn path_remove_dir_raw(path: string) -> i32 {
+    return wasi_path_remove_dir_raw(path)
+}
+
+pub fn path_filestat_raw(path: string, mut buf: [16]i32) -> i32 {
+    return wasi_path_filestat_raw(path, mut buf)
+}
+
+pub fn fd_filestat_raw(fd: i32, mut buf: [16]i32) -> i32 {
+    return wasi_fd_filestat_raw(fd, mut buf)
+}

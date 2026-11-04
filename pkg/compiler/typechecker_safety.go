@@ -204,79 +204,77 @@ func (tc *Typechecker) callParamEscapes(call *CallExpr, argIndex int) bool {
 	return false
 }
 
-func (tc *Typechecker) exprEscapesParam(expr Expr, name string) bool {
+// escapeTracker follows a function parameter through local aliases so that a
+// plain `let p = path` or a short-lived wrapper struct such as
+// `Path{ raw: path }` does not force the caller to give up ownership. A value
+// only escapes when an alias is actually retained: returned, stored in an
+// aggregate that outlives the call, pushed into a collection owned elsewhere,
+// sent to a spawned task, or passed to another escaping parameter.
+type escapeTracker struct {
+	tc      *Typechecker
+	aliases map[string]bool
+}
+
+func newEscapeTracker(tc *Typechecker, name string) *escapeTracker {
+	return &escapeTracker{tc: tc, aliases: map[string]bool{name: true}}
+}
+
+func (t *escapeTracker) cloneAliases() map[string]bool {
+	out := make(map[string]bool, len(t.aliases))
+	for k, v := range t.aliases {
+		out[k] = v
+	}
+	return out
+}
+
+// isAliasExpr reports whether expr is a direct view of a tracked value. It is
+// intentionally structural: projections, aggregate literals, and trait/array
+// coercions preserve the reference, while calls and interpolation produce a
+// fresh value.
+func (t *escapeTracker) isAliasExpr(expr Expr) bool {
 	if expr == nil {
 		return false
 	}
 	switch e := expr.(type) {
-	case *CallExpr:
-		if m, ok := e.Callee.(*MemberExpr); ok && m.Member == "push" && len(e.Args) == 1 {
-			if assignmentRoot(m.Target) != name && exprRefRootAt(e.Args[0], name) {
-				return true
-			}
+	case *IdentExpr:
+		return t.aliases[e.Name]
+	case *MemberExpr:
+		return t.isAliasExpr(e.Target)
+	case *IndexExpr:
+		return t.isAliasExpr(e.Target)
+	case *SliceSubExpr:
+		return t.isAliasExpr(e.Target)
+	case *UnaryExpr:
+		if e.Op == "&" || e.Op == "mut" {
+			return t.isAliasExpr(e.Operand)
 		}
-		for i, arg := range e.Args {
-			if tc.callParamEscapes(e, i) && exprRefRootAt(arg, name) {
-				return true
-			}
-			if tc.exprEscapesParam(arg, name) {
-				return true
-			}
-		}
-		return tc.exprEscapesParam(e.Callee, name)
+	case *PromoteExpr:
+		return t.isAliasExpr(e.Value)
+	case *TraitCoerceExpr:
+		return t.isAliasExpr(e.Value)
+	case *ArrayToSliceExpr:
+		return t.isAliasExpr(e.Value)
 	case *StructInitExpr:
 		for _, f := range e.Fields {
-			if exprRefRootAt(f.Val, name) || tc.exprEscapesParam(f.Val, name) {
+			if t.isAliasExpr(f.Val) {
 				return true
 			}
 		}
 	case *SliceInitExpr:
 		for _, el := range e.Elements {
-			if exprRefRootAt(el, name) || tc.exprEscapesParam(el, name) {
+			if t.isAliasExpr(el) {
 				return true
 			}
 		}
 	case *ArrayInitExpr:
 		for _, el := range e.Elements {
-			if exprRefRootAt(el, name) || tc.exprEscapesParam(el, name) {
+			if t.isAliasExpr(el) {
 				return true
 			}
 		}
-	case *BinaryExpr:
-		return tc.exprEscapesParam(e.Left, name) || tc.exprEscapesParam(e.Right, name)
-	case *UnaryExpr:
-		return tc.exprEscapesParam(e.Operand, name)
-	case *MemberExpr:
-		return tc.exprEscapesParam(e.Target, name)
-	case *IndexExpr:
-		return tc.exprEscapesParam(e.Target, name) || tc.exprEscapesParam(e.Index, name)
-	case *SliceSubExpr:
-		return tc.exprEscapesParam(e.Target, name) || tc.exprEscapesParam(e.Start, name) || tc.exprEscapesParam(e.End, name)
-	case *TryExpr:
-		return tc.exprEscapesParam(e.Operand, name)
-	case *OrElseExpr:
-		return tc.exprEscapesParam(e.Primary, name) || tc.exprEscapesParam(e.Fallback, name)
-	case *ErrorExpr:
-		return tc.exprEscapesParam(e.Arg, name)
-	case *RangeExpr:
-		return tc.exprEscapesParam(e.Start, name) || tc.exprEscapesParam(e.End, name)
-	case *PromoteExpr:
-		return tc.exprEscapesParam(e.Value, name)
-	case *ArenaExpr:
-		return tc.stmtEscapesParam(e.Body, name)
-	case *TraitCoerceExpr:
-		return tc.exprEscapesParam(e.Value, name)
-	case *ArrayToSliceExpr:
-		return tc.exprEscapesParam(e.Value, name)
 	case *TupleExpr:
-		for _, elem := range e.Elems {
-			if exprRefRootAt(elem, name) || tc.exprEscapesParam(elem, name) {
-				return true
-			}
-		}
-	case *InterpolatedStringExpr:
-		for _, part := range e.Parts {
-			if tc.exprEscapesParam(part, name) {
+		for _, el := range e.Elems {
+			if t.isAliasExpr(el) {
 				return true
 			}
 		}
@@ -284,57 +282,300 @@ func (tc *Typechecker) exprEscapesParam(expr Expr, name string) bool {
 	return false
 }
 
-func (tc *Typechecker) stmtEscapesParam(stmt Stmt, name string) bool {
+// exprContainsAlias is like isAliasExpr but also looks through call arguments,
+// which is what a spawn or other unconditional hand-off needs to know.
+func (t *escapeTracker) exprContainsAlias(expr Expr) bool {
+	if t.isAliasExpr(expr) {
+		return true
+	}
+	if call, ok := expr.(*CallExpr); ok {
+		for _, arg := range call.Args {
+			if t.exprContainsAlias(arg) {
+				return true
+			}
+		}
+		if mem, ok := call.Callee.(*MemberExpr); ok && t.exprContainsAlias(mem.Target) {
+			return true
+		}
+	}
+	if interp, ok := expr.(*InterpolatedStringExpr); ok {
+		// Interpolation concatenates into a fresh string, so the parts do not
+		// escape, but nested calls may still hand a value off.
+		for _, part := range interp.Parts {
+			if t.exprEscapes(part) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (t *escapeTracker) exprEscapes(expr Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.(type) {
+	case *CallExpr:
+		if m, ok := e.Callee.(*MemberExpr); ok && m.Member == "push" && len(e.Args) == 1 {
+			if !t.isAliasExpr(m.Target) && t.isAliasExpr(e.Args[0]) {
+				return true
+			}
+		}
+		for i, arg := range e.Args {
+			if t.tc.callParamEscapes(e, i) && t.isAliasExpr(arg) {
+				return true
+			}
+			if t.exprEscapes(arg) {
+				return true
+			}
+		}
+		return t.exprEscapes(e.Callee)
+	case *StructInitExpr:
+		for _, f := range e.Fields {
+			if t.isAliasExpr(f.Val) || t.exprEscapes(f.Val) {
+				return true
+			}
+		}
+	case *SliceInitExpr:
+		for _, el := range e.Elements {
+			if t.isAliasExpr(el) || t.exprEscapes(el) {
+				return true
+			}
+		}
+	case *ArrayInitExpr:
+		for _, el := range e.Elements {
+			if t.isAliasExpr(el) || t.exprEscapes(el) {
+				return true
+			}
+		}
+	case *TupleExpr:
+		for _, el := range e.Elems {
+			if t.isAliasExpr(el) || t.exprEscapes(el) {
+				return true
+			}
+		}
+	case *BinaryExpr:
+		return t.exprEscapes(e.Left) || t.exprEscapes(e.Right)
+	case *UnaryExpr:
+		return t.exprEscapes(e.Operand)
+	case *MemberExpr:
+		return t.exprEscapes(e.Target)
+	case *IndexExpr:
+		return t.exprEscapes(e.Target) || t.exprEscapes(e.Index)
+	case *SliceSubExpr:
+		return t.exprEscapes(e.Target) || t.exprEscapes(e.Start) || t.exprEscapes(e.End)
+	case *TryExpr:
+		return t.exprEscapes(e.Operand)
+	case *OrElseExpr:
+		return t.exprEscapes(e.Primary) || t.exprEscapes(e.Fallback)
+	case *ErrorExpr:
+		return t.isAliasExpr(e.Arg) || t.exprEscapes(e.Arg)
+	case *RangeExpr:
+		return t.exprEscapes(e.Start) || t.exprEscapes(e.End)
+	case *PromoteExpr:
+		return t.exprEscapes(e.Value)
+	case *ArenaExpr:
+		return t.stmtEscapes(e.Body)
+	case *TraitCoerceExpr:
+		return t.exprEscapes(e.Value)
+	case *ArrayToSliceExpr:
+		return t.exprEscapes(e.Value)
+	case *InterpolatedStringExpr:
+		for _, part := range e.Parts {
+			if t.exprEscapes(part) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// exprLocalEscapes looks for escapes caused by the evaluation of expr while
+// excluding the value's own aggregate literal from being treated as retained.
+// It is used when the result is immediately bound to a local: the aggregate
+// only escapes if a later statement actually lets it outlive the call.
+func (t *escapeTracker) exprLocalEscapes(expr Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.(type) {
+	case *CallExpr:
+		if m, ok := e.Callee.(*MemberExpr); ok && m.Member == "push" && len(e.Args) == 1 {
+			if !t.isAliasExpr(m.Target) && t.isAliasExpr(e.Args[0]) {
+				return true
+			}
+		}
+		for i, arg := range e.Args {
+			if t.tc.callParamEscapes(e, i) && t.isAliasExpr(arg) {
+				return true
+			}
+			if t.exprLocalEscapes(arg) {
+				return true
+			}
+		}
+		return t.exprLocalEscapes(e.Callee)
+	case *StructInitExpr:
+		for _, f := range e.Fields {
+			if t.exprLocalEscapes(f.Val) {
+				return true
+			}
+		}
+	case *SliceInitExpr:
+		for _, el := range e.Elements {
+			if t.exprLocalEscapes(el) {
+				return true
+			}
+		}
+	case *ArrayInitExpr:
+		for _, el := range e.Elements {
+			if t.exprLocalEscapes(el) {
+				return true
+			}
+		}
+	case *TupleExpr:
+		for _, el := range e.Elems {
+			if t.exprLocalEscapes(el) {
+				return true
+			}
+		}
+	case *BinaryExpr:
+		return t.exprLocalEscapes(e.Left) || t.exprLocalEscapes(e.Right)
+	case *UnaryExpr:
+		return t.exprLocalEscapes(e.Operand)
+	case *MemberExpr:
+		return t.exprLocalEscapes(e.Target)
+	case *IndexExpr:
+		return t.exprLocalEscapes(e.Target) || t.exprLocalEscapes(e.Index)
+	case *SliceSubExpr:
+		return t.exprLocalEscapes(e.Target) || t.exprLocalEscapes(e.Start) || t.exprLocalEscapes(e.End)
+	case *TryExpr:
+		return t.exprLocalEscapes(e.Operand)
+	case *OrElseExpr:
+		return t.exprLocalEscapes(e.Primary) || t.exprLocalEscapes(e.Fallback)
+	case *ErrorExpr:
+		return t.exprLocalEscapes(e.Arg)
+	case *RangeExpr:
+		return t.exprLocalEscapes(e.Start) || t.exprLocalEscapes(e.End)
+	case *PromoteExpr:
+		return t.exprLocalEscapes(e.Value)
+	case *ArenaExpr:
+		return t.stmtEscapes(e.Body)
+	case *TraitCoerceExpr:
+		return t.exprLocalEscapes(e.Value)
+	case *ArrayToSliceExpr:
+		return t.exprLocalEscapes(e.Value)
+	case *InterpolatedStringExpr:
+		for _, part := range e.Parts {
+			if t.exprLocalEscapes(part) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (t *escapeTracker) stmtEscapes(stmt Stmt) bool {
 	if stmt == nil {
 		return false
 	}
 	switch s := stmt.(type) {
 	case *BlockStmt:
+		saved := t.cloneAliases()
+		escaped := false
 		for _, st := range s.Stmts {
-			if tc.stmtEscapesParam(st, name) {
-				return true
+			if t.stmtEscapes(st) {
+				escaped = true
 			}
 		}
+		t.aliases = saved
+		return escaped
 	case *LetStmt:
-		return exprRefRootAt(s.Value, name) || tc.exprEscapesParam(s.Value, name)
-	case *AssignStmt:
-		if exprRefRootAt(s.RHS, name) && assignmentRoot(s.LHS) != name {
-			return true
+		escaped := t.exprLocalEscapes(s.Value)
+		names := s.Names
+		if len(names) == 0 {
+			names = []string{s.Name}
 		}
-		return tc.exprEscapesParam(s.LHS, name) || tc.exprEscapesParam(s.RHS, name)
+		alias := t.isAliasExpr(s.Value)
+		for _, name := range names {
+			if alias {
+				t.aliases[name] = true
+			} else {
+				delete(t.aliases, name)
+			}
+		}
+		return escaped
+	case *AssignStmt:
+		rhsAlias := t.isAliasExpr(s.RHS)
+		root := assignmentRoot(s.LHS)
+		if _, plainVar := s.LHS.(*IdentExpr); plainVar && root != "" {
+			escaped := t.exprEscapes(s.LHS) || t.exprLocalEscapes(s.RHS)
+			if rhsAlias {
+				t.aliases[root] = true
+			} else {
+				delete(t.aliases, root)
+			}
+			return escaped
+		}
+		escaped := t.exprEscapes(s.LHS) || t.exprEscapes(s.RHS)
+		if rhsAlias && root != "" {
+			escaped = true
+		}
+		return escaped
 	case *ReturnStmt:
-		return exprRefRootAt(s.Value, name) || tc.exprEscapesParam(s.Value, name)
+		return t.isAliasExpr(s.Value) || t.exprEscapes(s.Value)
 	case *ExprStmt:
-		return tc.exprEscapesParam(s.Expr, name)
+		return t.exprEscapes(s.Expr)
 	case *DeferStmt:
-		return tc.exprEscapesParam(s.Call, name)
+		return t.exprEscapes(s.Call)
 	case *IfStmt:
-		return tc.exprEscapesParam(s.Cond, name) || tc.stmtEscapesParam(s.Then, name) || tc.stmtEscapesParam(s.Else, name)
+		return t.exprEscapes(s.Cond) || t.stmtEscapes(s.Then) || t.stmtEscapes(s.Else)
 	case *IfLetStmt:
-		return tc.exprEscapesParam(s.Expr, name) || tc.stmtEscapesParam(s.Then, name) || tc.stmtEscapesParam(s.Else, name)
+		escaped := t.exprEscapes(s.Expr)
+		delete(t.aliases, s.VarName)
+		if t.stmtEscapes(s.Then) {
+			escaped = true
+		}
+		if t.stmtEscapes(s.Else) {
+			escaped = true
+		}
+		return escaped
 	case *WhileStmt:
-		return tc.exprEscapesParam(s.Cond, name) || tc.stmtEscapesParam(s.Body, name)
+		return t.exprEscapes(s.Cond) || t.stmtEscapes(s.Body)
 	case *WhileLetStmt:
-		return tc.exprEscapesParam(s.Call, name) || tc.stmtEscapesParam(s.Body, name)
+		escaped := t.exprEscapes(s.Call)
+		delete(t.aliases, s.VarName)
+		if t.stmtEscapes(s.Body) {
+			escaped = true
+		}
+		return escaped
 	case *ForStmt:
-		return tc.exprEscapesParam(s.Iter, name) || tc.stmtEscapesParam(s.Body, name)
+		escaped := t.exprEscapes(s.Iter)
+		delete(t.aliases, s.ItemName)
+		if t.stmtEscapes(s.Body) {
+			escaped = true
+		}
+		return escaped
 	case *ArenaStmt:
-		return tc.stmtEscapesParam(s.Body, name)
+		return t.stmtEscapes(s.Body)
 	case *SpawnStmt:
-		return tc.exprEscapesParam(s.Call, name)
+		return t.exprContainsAlias(s.Call)
 	case *SelectStmt:
 		for _, c := range s.Cases {
-			if tc.exprEscapesParam(c.Chan, name) || tc.stmtEscapesParam(c.Body, name) {
+			delete(t.aliases, c.VarName)
+			if t.exprEscapes(c.Chan) || t.stmtEscapes(c.Body) {
 				return true
 			}
 		}
-		return tc.stmtEscapesParam(s.Default, name)
+		return t.stmtEscapes(s.Default)
 	case *MatchStmt:
-		if tc.exprEscapesParam(s.Expr, name) {
+		if t.exprEscapes(s.Expr) {
 			return true
 		}
 		for _, a := range s.Arms {
-			if tc.stmtEscapesParam(a.Body, name) {
+			for _, b := range a.Bindings {
+				delete(t.aliases, b)
+			}
+			if t.stmtEscapes(a.Body) {
 				return true
 			}
 		}
@@ -372,7 +613,8 @@ func (tc *Typechecker) computeEscapingParams(prog *Program) {
 				if sig.Escaping[i] {
 					continue
 				}
-				if tc.stmtEscapesParam(fn.Body, fn.Params[i].Name) {
+				tracker := newEscapeTracker(tc, fn.Params[i].Name)
+				if tracker.stmtEscapes(fn.Body) {
 					sig.Escaping[i] = true
 					changed = true
 				}

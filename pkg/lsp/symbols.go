@@ -1,3 +1,5 @@
+// File: pkg/lsp/symbols.go
+
 package lsp
 
 import (

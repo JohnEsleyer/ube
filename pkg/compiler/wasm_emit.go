@@ -7,6 +7,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"os"
+	"sort"
 )
 
 // EmitWasm compiles an AST program directly into WebAssembly binary bytecode (.wasm)
@@ -66,6 +68,8 @@ type wasmEmitter struct {
 	dataOffset    uint32
 	fnIndices     map[string]uint32
 	methodIndices map[string]uint32
+	fnReturns     map[string]UbeType
+	wasiImports   map[string]uint32
 	fdWriteIdx    uint32
 	clockTimeIdx  uint32
 	structs       map[string]structMeta
@@ -82,6 +86,8 @@ func newWasmEmitter() *wasmEmitter {
 		typeMap:       make(map[string]uint32),
 		fnIndices:     make(map[string]uint32),
 		methodIndices: make(map[string]uint32),
+		fnReturns:     make(map[string]UbeType),
+		wasiImports:   make(map[string]uint32),
 		structs:       make(map[string]structMeta),
 		enums:         make(map[string][]VariantDecl),
 		traits:        make(map[string]*TraitDecl),
@@ -158,34 +164,66 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 		name:    "clock_time_get",
 		typeIdx: clockTimeType,
 	})
+	e.wasiImports["fd_write"] = e.fdWriteIdx
+	e.wasiImports["clock_time_get"] = e.clockTimeIdx
+
+	// Additional WASI preview1 imports used by std/fs and std/io. Registering
+	// them up-front keeps the emitter's raw syscall intrinsics simple.
+	e.registerWasiImport("fd_read", []byte{valTypeI32, valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
+	e.registerWasiImport("fd_close", []byte{valTypeI32}, []byte{valTypeI32})
+	e.registerWasiImport("fd_sync", []byte{valTypeI32}, []byte{valTypeI32})
+	e.registerWasiImport("fd_seek", []byte{valTypeI32, valTypeI64, valTypeI32, valTypeI32}, []byte{valTypeI32})
+	e.registerWasiImport("fd_filestat_get", []byte{valTypeI32, valTypeI32}, []byte{valTypeI32})
+	e.registerWasiImport("path_open", []byte{valTypeI32, valTypeI32, valTypeI32, valTypeI32, valTypeI32, valTypeI64, valTypeI64, valTypeI32, valTypeI32}, []byte{valTypeI32})
+	e.registerWasiImport("path_create_directory", []byte{valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
+	e.registerWasiImport("path_unlink_file", []byte{valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
+	e.registerWasiImport("path_remove_directory", []byte{valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
+	e.registerWasiImport("path_filestat_get", []byte{valTypeI32, valTypeI32, valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
 
 	// Register user host imports (extern fn)
 	for _, decl := range prog.Decls {
 		if ext, ok := decl.(*ExternFnDecl); ok {
+			modName := ext.Module
+			if modName == "" {
+				modName = "env"
+			}
+			if modName == "wasi_snapshot_preview1" {
+				if idx, exists := e.wasiImports[ext.Name]; exists {
+					e.fnIndices[ext.Name] = idx
+					e.fnReturns[ext.Name] = ext.RetType
+					continue
+				}
+			}
 			var params []byte
-			for range ext.Params {
-				params = append(params, valTypeI32)
+			for _, p := range ext.Params {
+				if p.Type != nil && p.Type.String() == "i64" {
+					params = append(params, valTypeI64)
+				} else {
+					params = append(params, valTypeI32)
+				}
 			}
 			var results []byte
 			if ext.RetType != nil && ext.RetType.String() != "void" {
-				if ext.RetType.String() == "f32" {
+				switch ext.RetType.String() {
+				case "f32":
 					results = append(results, valTypeF32)
-				} else {
+				case "f64":
+					results = append(results, valTypeF64)
+				case "i64":
+					results = append(results, valTypeI64)
+				default:
 					results = append(results, valTypeI32)
 				}
 			}
 			tIdx := e.registerType(params, results)
 			extIdx := uint32(len(e.imports))
-			modName := ext.Module
-			if modName == "" {
-				modName = "env"
-			}
 			e.imports = append(e.imports, importMeta{
 				module:  modName,
 				name:    ext.Name,
 				typeIdx: tIdx,
 			})
 			e.fnIndices[ext.Name] = extIdx
+			e.fnReturns[ext.Name] = ext.RetType
 		}
 	}
 
@@ -232,8 +270,10 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 			if fn.Receiver != nil {
 				key := fn.Receiver.Type.String() + "." + fn.Name
 				e.methodIndices[key] = fnIdx
+				e.fnReturns[key] = fn.RetType
 			} else {
 				e.fnIndices[fn.Name] = fnIdx
+				e.fnReturns[fn.Name] = fn.RetType
 				if fn.Name == "main" {
 					mainFn = fn
 				}
@@ -243,6 +283,24 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 
 	if mainFn == nil {
 		return nil, fmt.Errorf("no 'main' function found in program")
+	}
+
+	if os.Getenv("UBE_DEBUG_FNS") != "" {
+		type kv struct {
+			name string
+			idx  uint32
+		}
+		var list []kv
+		for name, idx := range e.fnIndices {
+			list = append(list, kv{name, idx})
+		}
+		for name, idx := range e.methodIndices {
+			list = append(list, kv{name, idx})
+		}
+		sort.Slice(list, func(i, j int) bool { return list[i].idx < list[j].idx })
+		for _, it := range list {
+			fmt.Fprintf(os.Stderr, "FN %d %s\n", it.idx, it.name)
+		}
 	}
 
 	// Register helper function indices
@@ -261,7 +319,10 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 	strEqIdx := strConcatIdx + 1
 	e.fnIndices["__str_eq"] = strEqIdx
 
-	startIdx := strEqIdx + 1
+	intToStrIdx := strEqIdx + 1
+	e.fnIndices["__i32_to_str"] = intToStrIdx
+
+	startIdx := intToStrIdx + 1
 	e.fnIndices["_start"] = startIdx
 
 	// Register types for defined functions
@@ -294,6 +355,7 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{}))
 	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{valTypeI32}))
 	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{valTypeI32}))
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32}, []byte{valTypeI32}))
 	e.funcs = append(e.funcs, e.registerType([]byte{}, []byte{}))
 
 	// Compile user function bodies
@@ -311,6 +373,7 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 	e.codeBodies = append(e.codeBodies, e.buildPrintBoolFunc())
 	e.codeBodies = append(e.codeBodies, e.buildStrConcatFunc())
 	e.codeBodies = append(e.codeBodies, e.buildStrEqFunc())
+	e.codeBodies = append(e.codeBodies, e.buildIntToStrFunc())
 	e.codeBodies = append(e.codeBodies, e.buildStartFunc(e.fnIndices["main"]))
 
 	return e.assembleBinary()
@@ -353,7 +416,7 @@ func (e *wasmEmitter) compileFunction(fn *FnDecl) ([]byte, error) {
 	}
 
 	for i := len(ctx.defers) - 1; i >= 0; i-- {
-		_ = ctx.compileExpr(&bodyBuf, ctx.defers[i])
+		_ = ctx.compileDeferredCall(&bodyBuf, ctx.defers[i])
 	}
 	bodyBuf.WriteByte(0x0b)
 
@@ -394,7 +457,11 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 	case *LetStmt:
 		valIdx := ctx.allocLocal(valTypeI32)
 		ctx.locals[s.Name] = valIdx
-		ctx.localTypes[s.Name] = s.Type
+		if s.Type != nil {
+			ctx.localTypes[s.Name] = s.Type
+		} else {
+			ctx.localTypes[s.Name] = s.ValueType
+		}
 		if s.Value != nil {
 			if err := ctx.compileExpr(buf, s.Value); err != nil {
 				return err
@@ -496,19 +563,35 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		if err := ctx.compileExpr(buf, s.Expr); err != nil {
 			return err
 		}
-		if call, ok := s.Expr.(*CallExpr); ok {
-			if ident, ok := call.Callee.(*IdentExpr); ok && (ident.Name == "print" || ident.Name == "println") {
-				return nil
-			}
+		if ctx.exprLeavesValue(s.Expr) {
 			buf.WriteByte(0x1a)
 		}
 
 	case *ReturnStmt:
 		for i := len(ctx.defers) - 1; i >= 0; i-- {
-			_ = ctx.compileExpr(buf, ctx.defers[i])
+			_ = ctx.compileDeferredCall(buf, ctx.defers[i])
 		}
 		if s.Value != nil {
-			if err := ctx.compileExpr(buf, s.Value); err != nil {
+			wrap := false
+			switch ctx.fn.RetType.(type) {
+			case ResultType, OptionalType:
+				wrap = true
+			}
+			if _, isErr := s.Value.(*ErrorExpr); isErr {
+				wrap = false
+			}
+			if lit, isLit := s.Value.(*LiteralExpr); isLit && lit.Val == "none" {
+				wrap = false
+			}
+			switch s.ValueType.(type) {
+			case ResultType, OptionalType:
+				wrap = false
+			}
+			if wrap {
+				if err := ctx.compileWrappedSuccess(buf, s.Value); err != nil {
+					return err
+				}
+			} else if err := ctx.compileExpr(buf, s.Value); err != nil {
 				return err
 			}
 		}
@@ -741,6 +824,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 
 		varLocal := ctx.allocLocal(valTypeI32)
 		ctx.locals[s.VarName] = varLocal
+		ctx.localTypes[s.VarName] = unwrapBindingType(ctx.exprStaticType(s.Expr))
 		buf.WriteByte(0x20)
 		writeUleb128(buf, optLocal)
 		buf.WriteByte(0x28)
@@ -791,6 +875,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 
 		varLocal := ctx.allocLocal(valTypeI32)
 		ctx.locals[s.VarName] = varLocal
+		ctx.localTypes[s.VarName] = unwrapBindingType(ctx.exprStaticType(s.Call))
 		buf.WriteByte(0x20)
 		writeUleb128(buf, optLocal)
 		buf.WriteByte(0x28)
@@ -1537,7 +1622,7 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		buf.WriteByte(valTypeVoid)
 
 		for i := len(ctx.defers) - 1; i >= 0; i-- {
-			_ = ctx.compileExpr(buf, ctx.defers[i])
+			_ = ctx.compileDeferredCall(buf, ctx.defers[i])
 		}
 
 		buf.WriteByte(0x20)
@@ -1625,7 +1710,7 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		for _, p := range e.Parts {
 			buf.WriteByte(0x20)
 			writeUleb128(buf, resHdr)
-			if err := ctx.compileExpr(buf, p); err != nil {
+			if err := ctx.compileStringPart(buf, p); err != nil {
 				return err
 			}
 			buf.WriteByte(0x10)
@@ -1637,6 +1722,9 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		writeUleb128(buf, resHdr)
 
 	case *CallExpr:
+		if handled, err := ctx.compileSpecialCall(buf, e); handled {
+			return err
+		}
 		if mem, ok := e.Callee.(*MemberExpr); ok {
 			if targetId, ok := mem.Target.(*IdentExpr); ok {
 				if variants, ok := ctx.emitter.enums[targetId.Name]; ok {
@@ -2079,8 +2167,16 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 }
 
 func (ctx *fnContext) emitAlloc(buf *bytes.Buffer, size int32, resultLocal uint32) {
+	// Keep all heap allocations 8-byte aligned. WASI writes u64 fields (for
+	// example in filestat) and requires the destination pointer to be aligned.
 	buf.WriteByte(0x23)
 	writeUleb128(buf, 0)
+	buf.WriteByte(0x41)
+	writeSleb128(buf, 7)
+	buf.WriteByte(0x6a)
+	buf.WriteByte(0x41)
+	writeSleb128(buf, -8)
+	buf.WriteByte(0x71)
 	buf.WriteByte(0x21)
 	writeUleb128(buf, resultLocal)
 
@@ -2170,6 +2266,34 @@ func (ctx *fnContext) inferExprType(expr Expr) string {
 		if e.Type != nil {
 			return e.Type.String()
 		}
+	case *CallExpr:
+		if t := ctx.callReturnUbeType(e); t != nil {
+			return t.String()
+		}
+	case *TryExpr:
+		if call, ok := e.Operand.(*CallExpr); ok {
+			if t := ctx.callReturnUbeType(call); t != nil {
+				if res, ok := t.(ResultType); ok {
+					return res.Ok.String()
+				}
+			}
+		}
+		if id, ok := e.Operand.(*IdentExpr); ok {
+			if t, ok := ctx.localTypes[id.Name]; ok && t != nil {
+				if res, ok := t.(ResultType); ok {
+					return res.Ok.String()
+				}
+			}
+		}
+	case *OrElseExpr:
+		if e.PrimaryType != nil {
+			switch pt := e.PrimaryType.(type) {
+			case ResultType:
+				return pt.Ok.String()
+			case OptionalType:
+				return pt.Inner.String()
+			}
+		}
 	}
 	return ""
 }
@@ -2209,6 +2333,15 @@ func (e *wasmEmitter) buildPrintStrFunc() []byte {
 	writeUleb128(&body, 2)
 	body.WriteByte(0x04)
 	body.WriteByte(valTypeVoid)
+
+	// Write a newline byte into the scratch buffer.
+	body.WriteByte(0x41)
+	writeSleb128(&body, scratchCiovec+48)
+	body.WriteByte(0x41)
+	writeSleb128(&body, 10)
+	body.WriteByte(0x3a)
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 0)
 
 	body.WriteByte(0x41)
 	writeSleb128(&body, scratchCiovec)
@@ -2291,6 +2424,144 @@ func (e *wasmEmitter) buildPrintBoolFunc() []byte {
 	var full bytes.Buffer
 	writeUleb128(&full, 0)
 	full.Write(body.Bytes())
+
+	var res bytes.Buffer
+	writeUleb128(&res, uint32(full.Len()))
+	res.Write(full.Bytes())
+	return res.Bytes()
+}
+
+// buildIntToStrFunc converts an i32 into a freshly allocated string header.
+// Locals: 1 = base, 2 = write position, 3 = negative flag.
+func (e *wasmEmitter) buildIntToStrFunc() []byte {
+	var body bytes.Buffer
+
+	// base = align8(global0)
+	body.WriteByte(0x23)
+	writeUleb128(&body, 0)
+	emitI32Const(&body, 7)
+	body.WriteByte(0x6a)
+	emitI32Const(&body, -8)
+	body.WriteByte(0x71)
+	emitLocalSet(&body, 1)
+
+	// global0 = base + 40
+	emitLocalGet(&body, 1)
+	emitI32Const(&body, 40)
+	body.WriteByte(0x6a)
+	body.WriteByte(0x24)
+	writeUleb128(&body, 0)
+
+	// pos = base + 40
+	emitLocalGet(&body, 1)
+	emitI32Const(&body, 40)
+	body.WriteByte(0x6a)
+	emitLocalSet(&body, 2)
+
+	// neg = 0
+	emitI32Const(&body, 0)
+	emitLocalSet(&body, 3)
+
+	emitLocalGet(&body, 0)
+	emitI32Eqz(&body)
+	body.WriteByte(0x04)
+	body.WriteByte(valTypeVoid)
+
+	// Zero: write '0'.
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 1)
+	body.WriteByte(0x6b)
+	emitLocalSet(&body, 2)
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 48)
+	body.WriteByte(0x3a)
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 0)
+
+	body.WriteByte(0x05) // else
+
+	// Negative?
+	emitLocalGet(&body, 0)
+	emitI32Const(&body, 0)
+	body.WriteByte(0x48) // i32.lt_s
+	body.WriteByte(0x04)
+	body.WriteByte(valTypeVoid)
+	emitI32Const(&body, 1)
+	emitLocalSet(&body, 3)
+	emitI32Const(&body, 0)
+	emitLocalGet(&body, 0)
+	body.WriteByte(0x6b)
+	emitLocalSet(&body, 0)
+	body.WriteByte(0x0b)
+
+	// loop: write digits backwards.
+	body.WriteByte(0x03)
+	body.WriteByte(valTypeVoid)
+
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 1)
+	body.WriteByte(0x6b)
+	body.WriteByte(0x22) // local.tee
+	writeUleb128(&body, 2)
+	emitLocalGet(&body, 0)
+	emitI32Const(&body, 10)
+	body.WriteByte(0x6f) // i32.rem_s
+	emitI32Const(&body, 48)
+	body.WriteByte(0x6a)
+	body.WriteByte(0x3a) // i32.store8
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 0)
+
+	emitLocalGet(&body, 0)
+	emitI32Const(&body, 10)
+	body.WriteByte(0x6d) // i32.div_s
+	body.WriteByte(0x22) // local.tee
+	writeUleb128(&body, 0)
+	emitI32Eqz(&body)
+	emitI32Eqz(&body)
+	body.WriteByte(0x0d) // br_if
+	writeUleb128(&body, 0)
+	body.WriteByte(0x0b) // end loop
+
+	// Sign.
+	emitLocalGet(&body, 3)
+	body.WriteByte(0x04)
+	body.WriteByte(valTypeVoid)
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 1)
+	body.WriteByte(0x6b)
+	body.WriteByte(0x22) // local.tee
+	writeUleb128(&body, 2)
+	emitI32Const(&body, 45)
+	body.WriteByte(0x3a)
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 0)
+	body.WriteByte(0x0b)
+
+	body.WriteByte(0x0b) // end zero if
+
+	// header.ptr = pos
+	emitLocalGet(&body, 1)
+	emitLocalGet(&body, 2)
+	emitI32Store(&body, 0, 2)
+	// header.len = base + 40 - pos
+	emitLocalGet(&body, 1)
+	emitLocalGet(&body, 1)
+	emitI32Const(&body, 40)
+	body.WriteByte(0x6a)
+	emitLocalGet(&body, 2)
+	body.WriteByte(0x6b)
+	emitI32Store(&body, 4, 2)
+	emitLocalGet(&body, 1)
+
+	var full bytes.Buffer
+	writeUleb128(&full, 3) // three i32 locals
+	for i := 0; i < 3; i++ {
+		writeUleb128(&full, 1)
+		full.WriteByte(valTypeI32)
+	}
+	full.Write(body.Bytes())
+	full.WriteByte(0x0b)
 
 	var res bytes.Buffer
 	writeUleb128(&res, uint32(full.Len()))

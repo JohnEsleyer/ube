@@ -1,3 +1,5 @@
+// File: pkg/lsp/signature.go
+
 package lsp
 
 import (

@@ -23,6 +23,10 @@ pub trait Seeker {
     fn seek(offset: i32, whence: i32) -> i32 ! string
 }
 
+pub trait Flusher {
+    fn flush() -> bool ! string
+}
+
 pub trait ByteReader {
     fn read_byte() -> i32 ! string
 }
@@ -56,16 +60,16 @@ pub struct Stdin {
 }
 
 pub fn io_stdin() -> Stdin {
-    return Stdin { fd: wasi_stdin() }
+    return Stdin { fd: 0 }
 }
 
 pub fn (s Stdin) read(mut buf: []u8) -> i32 ! string {
-    return fd_read_bytes(s.fd, buf)
+    return wasi.fd_read_bytes(s.fd, buf)
 }
 
 pub fn (s Stdin) read_byte() -> i32 ! string {
     let mut b = []u8{0}
-    let res = fd_read_bytes(s.fd, b)
+    let res = wasi.fd_read_bytes(s.fd, b)
     if let n = res {
         if n <= 0 {
             return -1
@@ -77,29 +81,43 @@ pub fn (s Stdin) read_byte() -> i32 ! string {
     return -1
 }
 
+pub fn (s Stdin) read_line() -> string ! string {
+    let mut br = buf_reader_new(s.fd)
+    return br.read_line()
+}
+
 pub struct Stdout {
     pub fd: i32
 }
 
 pub fn io_stdout() -> Stdout {
-    return Stdout { fd: wasi_stdout() }
+    return Stdout { fd: 1 }
 }
 
 pub fn (s Stdout) write(data: []u8) -> i32 ! string {
-    return fd_write_bytes(s.fd, data)
+    return wasi.fd_write_bytes(s.fd, data)
+}
+
+pub fn (s Stdout) write_byte(val: u8) -> i32 ! string {
+    let mut b = []u8{val}
+    return wasi.fd_write_bytes(s.fd, b)
 }
 
 pub fn (s Stdout) write_string(str: string) -> i32 ! string {
-    return fd_write_bytes(s.fd, str.bytes())
+    return wasi.fd_write_bytes(s.fd, str.bytes())
 }
 
 pub fn (s Stdout) write_line(str: string) -> i32 ! string {
     let mut b = str.bytes()
     b.push(10)
-    return fd_write_bytes(s.fd, b)
+    return wasi.fd_write_bytes(s.fd, b)
 }
 
 pub fn (s Stdout) flush() -> bool ! string {
+    let res = wasi.fd_sync_raw(s.fd)
+    if res != 0 {
+        return error("failed to flush stdout")
+    }
     return true
 }
 
@@ -108,24 +126,33 @@ pub struct Stderr {
 }
 
 pub fn io_stderr() -> Stderr {
-    return Stderr { fd: wasi_stderr() }
+    return Stderr { fd: 2 }
 }
 
 pub fn (s Stderr) write(data: []u8) -> i32 ! string {
-    return fd_write_bytes(s.fd, data)
+    return wasi.fd_write_bytes(s.fd, data)
+}
+
+pub fn (s Stderr) write_byte(val: u8) -> i32 ! string {
+    let mut b = []u8{val}
+    return wasi.fd_write_bytes(s.fd, b)
 }
 
 pub fn (s Stderr) write_string(str: string) -> i32 ! string {
-    return fd_write_bytes(s.fd, str.bytes())
+    return wasi.fd_write_bytes(s.fd, str.bytes())
 }
 
 pub fn (s Stderr) write_line(str: string) -> i32 ! string {
     let mut b = str.bytes()
     b.push(10)
-    return fd_write_bytes(s.fd, b)
+    return wasi.fd_write_bytes(s.fd, b)
 }
 
 pub fn (s Stderr) flush() -> bool ! string {
+    let res = wasi.fd_sync_raw(s.fd)
+    if res != 0 {
+        return error("failed to flush stderr")
+    }
     return true
 }
 
@@ -142,29 +169,97 @@ pub fn file_from_fd(fd: i32) -> File {
 }
 
 pub fn (f File) read(mut buf: []u8) -> i32 ! string {
-    return fd_read_bytes(f.fd, buf)
+    if f.fd < 0 {
+        return error("read on closed file descriptor")
+    }
+    return wasi.fd_read_bytes(f.fd, buf)
+}
+
+pub fn (f File) read_byte() -> i32 ! string {
+    if f.fd < 0 {
+        return error("read on closed file descriptor")
+    }
+    let mut b = []u8{0}
+    let res = wasi.fd_read_bytes(f.fd, b)
+    if let n = res {
+        if n <= 0 {
+            return -1
+        }
+        let mut val = 0
+        val += b[0]
+        return val
+    }
+    return -1
 }
 
 pub fn (f File) write(data: []u8) -> i32 ! string {
-    return fd_write_bytes(f.fd, data)
+    if f.fd < 0 {
+        return error("write on closed file descriptor")
+    }
+    return wasi.fd_write_bytes(f.fd, data)
+}
+
+pub fn (f File) write_byte(val: u8) -> i32 ! string {
+    if f.fd < 0 {
+        return error("write on closed file descriptor")
+    }
+    let mut b = []u8{val}
+    return wasi.fd_write_bytes(f.fd, b)
 }
 
 pub fn (f File) write_string(s: string) -> i32 ! string {
-    return fd_write_bytes(f.fd, s.bytes())
+    return f.write(s.bytes())
 }
 
 pub fn (f File) write_line(s: string) -> i32 ! string {
     let mut b = s.bytes()
     b.push(10)
-    return fd_write_bytes(f.fd, b)
+    return f.write(b)
 }
 
-pub fn (f File) close() -> bool ! string {
+pub fn (f File) flush() -> bool ! string {
+    if f.fd < 0 {
+        return true
+    }
+    let res = wasi.fd_sync_raw(f.fd)
+    if res != 0 {
+        return error("failed to flush file descriptor")
+    }
+    return true
+}
+
+pub fn (f File) seek(offset: i32, whence: i32) -> i32 ! string {
+    if f.fd < 0 {
+        return error("seek on closed file descriptor")
+    }
+    let res = wasi.fd_seek_raw(f.fd, offset, whence)
+    if res < 0 {
+        return error("failed to seek file")
+    }
+    return res
+}
+
+pub fn (f File) rewind() -> bool ! string {
+    let res = f.seek(0, io_seek_set())
+    if let _ = res {
+        return true
+    }
+    return error("failed to rewind file")
+}
+
+pub fn (mut f File) close() -> bool ! string {
+    if f.fd >= 0 {
+        let res = wasi.fd_close_raw(f.fd)
+        f.fd = -1
+        if res != 0 {
+            return error("failed to close file descriptor")
+        }
+    }
     return true
 }
 
 // -------------------------------------------------------------
-// In-Memory Streams
+// In-Memory Streams (BytesReader & BytesWriter)
 // -------------------------------------------------------------
 
 pub struct BytesReader {
@@ -203,6 +298,16 @@ pub fn (mut r BytesReader) read_byte() -> i32 ! string {
     return val
 }
 
+pub fn (r BytesReader) peek_byte() -> i32 ! string {
+    if r.pos >= r.data.len {
+        return -1
+    }
+    let b = r.data[r.pos]
+    let mut val = 0
+    val += b
+    return val
+}
+
 pub fn (mut r BytesReader) read_line() -> string ! string {
     if r.pos >= r.data.len {
         return error("EOF")
@@ -225,6 +330,14 @@ pub fn (mut r BytesReader) read_line() -> string ! string {
     return error("invalid utf8 in line")
 }
 
+pub fn (mut r BytesReader) next() -> string? {
+    let res = r.read_line()
+    if let line = res {
+        return line
+    }
+    return none
+}
+
 pub fn (mut r BytesReader) seek(offset: i32, whence: i32) -> i32 ! string {
     let mut new_pos = r.pos
     if whence == 0 {
@@ -244,12 +357,42 @@ pub fn (mut r BytesReader) seek(offset: i32, whence: i32) -> i32 ! string {
     return r.pos
 }
 
+pub fn (mut r BytesReader) skip(n: i32) -> i32 ! string {
+    if n < 0 {
+        return error("negative skip count")
+    }
+    let mut new_pos = r.pos + n
+    if new_pos > r.data.len {
+        new_pos = r.data.len
+    }
+    let skipped = new_pos - r.pos
+    r.pos = new_pos
+    return skipped
+}
+
+pub fn (mut r BytesReader) read_exact(mut buf: []u8) -> bool ! string {
+    let mut read_count = 0
+    while read_count < buf.len {
+        if r.pos >= r.data.len {
+            return error("unexpected EOF before filling buffer")
+        }
+        buf[read_count] = r.data[r.pos]
+        r.pos += 1
+        read_count += 1
+    }
+    return true
+}
+
 pub fn (r BytesReader) remaining() -> i32 {
     let rem = r.data.len - r.pos
     if rem < 0 {
         return 0
     }
     return rem
+}
+
+pub fn (r BytesReader) is_empty() -> bool {
+    return r.pos >= r.data.len
 }
 
 pub fn (r BytesReader) len() -> i32 {
@@ -265,12 +408,18 @@ pub fn (mut r BytesReader) reset() {
 }
 
 pub struct BytesWriter {
-    pub buf: ByteBuffer
+    pub buf: bytes.ByteBuffer
 }
 
 pub fn bytes_writer_new() -> BytesWriter {
     return BytesWriter {
-        buf: buffer_new(0)
+        buf: bytes.buffer_new(0)
+    }
+}
+
+pub fn bytes_writer_with_capacity(capacity: i32) -> BytesWriter {
+    return BytesWriter {
+        buf: bytes.buffer_new(capacity)
     }
 }
 
@@ -295,6 +444,10 @@ pub fn (mut w BytesWriter) write_line(s: string) -> i32 ! string {
     return w.write(b)
 }
 
+pub fn (w BytesWriter) flush() -> bool ! string {
+    return true
+}
+
 pub fn (w BytesWriter) to_slice() -> []u8 {
     return w.buf.to_slice()
 }
@@ -310,8 +463,145 @@ pub fn (w BytesWriter) len() -> i32 {
     return w.buf.len()
 }
 
+pub fn (w BytesWriter) is_empty() -> bool {
+    return w.buf.is_empty()
+}
+
 pub fn (mut w BytesWriter) reset() {
     w.buf.reset()
+}
+
+// -------------------------------------------------------------
+// In-Memory String Reader
+// -------------------------------------------------------------
+
+pub struct StringReader {
+    pub s: string,
+    pub pos: i32
+}
+
+pub fn string_reader_new(s: string) -> StringReader {
+    return StringReader {
+        s: s,
+        pos: 0
+    }
+}
+
+pub fn (mut r StringReader) read(mut buf: []u8) -> i32 ! string {
+    if r.pos >= r.s.len {
+        return 0
+    }
+    let mut n = 0
+    while r.pos < r.s.len && n < buf.len {
+        buf[n] = r.s[r.pos]
+        r.pos += 1
+        n += 1
+    }
+    return n
+}
+
+pub fn (mut r StringReader) read_byte() -> i32 ! string {
+    if r.pos >= r.s.len {
+        return -1
+    }
+    let b = r.s[r.pos]
+    r.pos += 1
+    let mut val = 0
+    val += b
+    return val
+}
+
+pub fn (r StringReader) peek_byte() -> i32 ! string {
+    if r.pos >= r.s.len {
+        return -1
+    }
+    let b = r.s[r.pos]
+    let mut val = 0
+    val += b
+    return val
+}
+
+pub fn (mut r StringReader) read_line() -> string ! string {
+    if r.pos >= r.s.len {
+        return error("EOF")
+    }
+    let start = r.pos
+    while r.pos < r.s.len {
+        let b = r.s[r.pos]
+        r.pos += 1
+        if b == 10 { // '\n'
+            let mut end = r.pos - 1
+            if end > start && r.s[end - 1] == 13 { // '\r'
+                end -= 1
+            }
+            return r.s[start:end]
+        }
+    }
+    return r.s[start:r.pos]
+}
+
+pub fn (mut r StringReader) next() -> string? {
+    let res = r.read_line()
+    if let line = res {
+        return line
+    }
+    return none
+}
+
+pub fn (mut r StringReader) seek(offset: i32, whence: i32) -> i32 ! string {
+    let mut new_pos = r.pos
+    if whence == 0 {
+        new_pos = offset
+    } else if whence == 1 {
+        new_pos = r.pos + offset
+    } else if whence == 2 {
+        new_pos = r.s.len + offset
+    } else {
+        return error("invalid whence")
+    }
+
+    if new_pos < 0 {
+        return error("negative seek offset")
+    }
+    r.pos = new_pos
+    return r.pos
+}
+
+pub fn (mut r StringReader) skip(n: i32) -> i32 ! string {
+    if n < 0 {
+        return error("negative skip count")
+    }
+    let mut new_pos = r.pos + n
+    if new_pos > r.s.len {
+        new_pos = r.s.len
+    }
+    let skipped = new_pos - r.pos
+    r.pos = new_pos
+    return skipped
+}
+
+pub fn (r StringReader) remaining() -> i32 {
+    let rem = r.s.len - r.pos
+    if rem < 0 {
+        return 0
+    }
+    return rem
+}
+
+pub fn (r StringReader) is_empty() -> bool {
+    return r.pos >= r.s.len
+}
+
+pub fn (r StringReader) len() -> i32 {
+    return r.s.len
+}
+
+pub fn (r StringReader) position() -> i32 {
+    return r.pos
+}
+
+pub fn (mut r StringReader) reset() {
+    r.pos = 0
 }
 
 // -------------------------------------------------------------
@@ -326,9 +616,17 @@ pub struct BufReader {
 }
 
 pub fn buf_reader_new(fd: i32) -> BufReader {
+    return buf_reader_new_with_capacity(fd, 1024)
+}
+
+pub fn buf_reader_new_with_capacity(fd: i32, capacity: i32) -> BufReader {
+    let mut cap = capacity
+    if cap <= 0 {
+        cap = 1024
+    }
     let mut b = []u8{}
     let mut i = 0
-    while i < 1024 {
+    while i < cap {
         b.push(0)
         i += 1
     }
@@ -343,7 +641,7 @@ pub fn buf_reader_new(fd: i32) -> BufReader {
 pub fn (mut b BufReader) read_byte() -> i32 ! string {
     if b.pos >= b.limit {
         let fd = b.fd
-        let n = fd_read_bytes(fd, b.buf)
+        let n = wasi.fd_read_bytes(fd, b.buf)
         if let read_len = n {
             if read_len <= 0 {
                 return -1
@@ -369,7 +667,7 @@ pub fn (mut b BufReader) read(mut dst: []u8) -> i32 ! string {
     while total < dst.len {
         if b.pos >= b.limit {
             let fd = b.fd
-            let n = fd_read_bytes(fd, b.buf)
+            let n = wasi.fd_read_bytes(fd, b.buf)
             if let read_len = n {
                 if read_len <= 0 {
                     break
@@ -418,6 +716,22 @@ pub fn (mut b BufReader) read_line() -> string ! string {
     return error("invalid utf8 in line")
 }
 
+pub fn (mut b BufReader) next() -> string? {
+    let res = b.read_line()
+    if let line = res {
+        return line
+    }
+    return none
+}
+
+pub fn (b BufReader) buffered() -> i32 {
+    let rem = b.limit - b.pos
+    if rem < 0 {
+        return 0
+    }
+    return rem
+}
+
 pub struct BufWriter {
     pub fd: i32,
     pub buf: []u8,
@@ -425,9 +739,17 @@ pub struct BufWriter {
 }
 
 pub fn buf_writer_new(fd: i32) -> BufWriter {
+    return buf_writer_new_with_capacity(fd, 1024)
+}
+
+pub fn buf_writer_new_with_capacity(fd: i32, capacity: i32) -> BufWriter {
+    let mut cap = capacity
+    if cap <= 0 {
+        cap = 1024
+    }
     let mut b = []u8{}
     let mut i = 0
-    while i < 1024 {
+    while i < cap {
         b.push(0)
         i += 1
     }
@@ -448,7 +770,7 @@ pub fn (mut w BufWriter) flush() -> bool ! string {
         to_write.push(w.buf[i])
         i += 1
     }
-    let res = fd_write_bytes(w.fd, to_write)
+    let res = wasi.fd_write_bytes(w.fd, to_write)
     if let written = res {
         w.count = 0
         return true
@@ -466,7 +788,7 @@ pub fn (mut w BufWriter) write(data: []u8) -> i32 ! string {
             if let ok = fl {
                 // flushed ok
             } else {
-                return written
+                return error("failed to flush buffer during write")
             }
         }
         w.buf[w.count] = data[i]
@@ -499,6 +821,31 @@ pub fn (mut w BufWriter) write_line(s: string) -> i32 ! string {
     let mut b = s.bytes()
     b.push(10)
     return w.write(b)
+}
+
+pub fn (w BufWriter) buffered() -> i32 {
+    return w.count
+}
+
+pub fn (w BufWriter) available() -> i32 {
+    return w.buf.len - w.count
+}
+
+pub fn (mut w BufWriter) close() -> bool ! string {
+    let fl = w.flush()
+    if let ok = fl {
+        // flush succeeded
+    } else {
+        return error("failed to flush buffer during close")
+    }
+    if w.fd >= 0 {
+        let res = wasi.fd_close_raw(w.fd)
+        w.fd = -1
+        if res != 0 {
+            return error("failed to close file descriptor")
+        }
+    }
+    return true
 }
 
 // -------------------------------------------------------------
@@ -547,7 +894,7 @@ pub fn read_all_fd(fd: i32) -> []u8 {
         i += 1
     }
     while true {
-        let res = fd_read_bytes(fd, chunk)
+        let res = wasi.fd_read_bytes(fd, chunk)
         if let n = res {
             if n <= 0 {
                 break
@@ -562,6 +909,40 @@ pub fn read_all_fd(fd: i32) -> []u8 {
         }
     }
     return out
+}
+
+pub fn read_all_fd_string(fd: i32) -> string ! string {
+    let bytes = read_all_fd(fd)
+    if let s = string.from_bytes(bytes) {
+        return s
+    }
+    return error("invalid utf8 data")
+}
+
+pub fn write_all_bytes(fd: i32, data: []u8) -> bool ! string {
+    let mut offset = 0
+    while offset < data.len {
+        let mut chunk = []u8{}
+        let mut i = offset
+        while i < data.len {
+            chunk.push(data[i])
+            i += 1
+        }
+        let res = wasi.fd_write_bytes(fd, chunk)
+        if let n = res {
+            if n <= 0 {
+                return error("zero bytes written to fd")
+            }
+            offset += n
+        } else {
+            return error("failed writing chunk to fd")
+        }
+    }
+    return true
+}
+
+pub fn write_all_string(fd: i32, s: string) -> bool ! string {
+    return write_all_bytes(fd, s.bytes())
 }
 
 pub fn copy(mut dst: BytesWriter, mut src: BytesReader) -> i32 {
@@ -604,7 +985,7 @@ pub fn copy_fd(dst_fd: i32, src_fd: i32) -> i32 {
         i += 1
     }
     while true {
-        let res = fd_read_bytes(src_fd, chunk)
+        let res = wasi.fd_read_bytes(src_fd, chunk)
         if let n = res {
             if n <= 0 {
                 break
@@ -615,7 +996,7 @@ pub fn copy_fd(dst_fd: i32, src_fd: i32) -> i32 {
                 slice_to_write.push(chunk[j])
                 j += 1
             }
-            let w_res = fd_write_bytes(dst_fd, slice_to_write)
+            let w_res = wasi.fd_write_bytes(dst_fd, slice_to_write)
             if let written = w_res {
                 total += written
             } else {

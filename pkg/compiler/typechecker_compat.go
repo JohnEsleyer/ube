@@ -87,11 +87,14 @@ func (tc *Typechecker) checkCallArgsWithReceiver(receiver Expr, receiverMut bool
 		if err := tc.assertCompat(paramType, actual, arg.Loc()); err != nil {
 			return err
 		}
-		// Mutable parameters are loans, not moves. Every other affine
-		// argument is linearly consumed by the call.
+		// Mutable parameters and non-escaping parameters are loans. Affine
+		// values are only consumed when the callee can retain them.
 		if !paramMut {
-			if err := tc.markMovedIfAffine(arg, env); err != nil {
-				return err
+			escapes := i < len(escaping) && escaping[i]
+			if escapes {
+				if err := tc.markMovedIfAffine(arg, env); err != nil {
+					return err
+				}
 			}
 		}
 	}

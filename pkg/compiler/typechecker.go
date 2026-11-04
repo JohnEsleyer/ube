@@ -178,6 +178,49 @@ func NewTypechecker() *Typechecker {
 		RetType: ResultType{Ok: i32, Err: str},
 	}
 
+	// Low-level WASI intrinsics implemented directly by the Wasm emitter.
+	// They return raw results (bytes transferred, fd, or a negative errno) so
+	// the Ube standard library owns all error formatting.
+	tc.Global.Funcs["wasi_fd_write_raw"] = FuncSignature{
+		Params:  []FieldDecl{{Name: "fd", Type: i32}, {Name: "data", Type: u8Slice}},
+		RetType: i32,
+	}
+	tc.Global.Funcs["wasi_fd_read_raw"] = FuncSignature{
+		Params:  []FieldDecl{{Name: "fd", Type: i32}, {Name: "buf", Type: u8Slice, IsMut: true}},
+		RetType: i32,
+	}
+	tc.Global.Funcs["wasi_fd_write_string_raw"] = FuncSignature{
+		Params:  []FieldDecl{{Name: "fd", Type: i32}, {Name: "s", Type: str}},
+		RetType: i32,
+	}
+	tc.Global.Funcs["wasi_path_open_raw"] = FuncSignature{
+		Params: []FieldDecl{
+			{Name: "path", Type: str},
+			{Name: "oflags", Type: i32},
+			{Name: "fdflags", Type: i32},
+			{Name: "rights_base", Type: i32},
+			{Name: "rights_inheriting", Type: i32},
+		},
+		RetType: i32,
+	}
+	tc.Global.Funcs["wasi_fd_close_raw"] = FuncSignature{Params: []FieldDecl{{Name: "fd", Type: i32}}, RetType: i32}
+	tc.Global.Funcs["wasi_fd_sync_raw"] = FuncSignature{Params: []FieldDecl{{Name: "fd", Type: i32}}, RetType: i32}
+	tc.Global.Funcs["wasi_fd_seek_raw"] = FuncSignature{
+		Params:  []FieldDecl{{Name: "fd", Type: i32}, {Name: "offset", Type: i32}, {Name: "whence", Type: i32}},
+		RetType: i32,
+	}
+	tc.Global.Funcs["wasi_path_create_dir_raw"] = FuncSignature{Params: []FieldDecl{{Name: "path", Type: str}}, RetType: i32}
+	tc.Global.Funcs["wasi_path_unlink_raw"] = FuncSignature{Params: []FieldDecl{{Name: "path", Type: str}}, RetType: i32}
+	tc.Global.Funcs["wasi_path_remove_dir_raw"] = FuncSignature{Params: []FieldDecl{{Name: "path", Type: str}}, RetType: i32}
+	tc.Global.Funcs["wasi_path_filestat_raw"] = FuncSignature{
+		Params:  []FieldDecl{{Name: "path", Type: str}, {Name: "buf", Type: ArrayType{Elem: i32, Size: 16}, IsMut: true}},
+		RetType: i32,
+	}
+	tc.Global.Funcs["wasi_fd_filestat_raw"] = FuncSignature{
+		Params:  []FieldDecl{{Name: "fd", Type: i32}, {Name: "buf", Type: ArrayType{Elem: i32, Size: 16}, IsMut: true}},
+		RetType: i32,
+	}
+
 	// StringBuilder receiver methods
 	tc.Global.Funcs["format"] = FuncSignature{RetType: str}
 	tc.Global.Funcs["StringBuilder.append"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}}, RetType: void}

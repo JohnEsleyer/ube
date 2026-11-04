@@ -1,3 +1,5 @@
+// File: pkg/lsp/server.go
+
 package lsp
 
 import (
@@ -295,23 +297,29 @@ func cancelAnalysis(uri string) {
 	analysisMu.Unlock()
 }
 
+func uriToPath(uri string) string {
+	p := strings.TrimPrefix(uri, "file://")
+	if len(p) >= 3 && p[0] == '/' && p[2] == ':' {
+		p = p[1:]
+	}
+	return p
+}
+
 // publish runs the full compiler pipeline and emits publishDiagnostics.
 // It respects ctx so that a newer didChange can pre-empt an in-flight run.
 func publish(ctx context.Context, uri, source string) {
 	var diags []map[string]any
 
-	tokens, err := compiler.NewLexer(uri, source).Tokenize()
+	filePath := uriToPath(uri)
+	loader := compiler.NewModuleLoader()
+	prog, err := loader.LoadSource(filePath, source)
 
 	// Check for cancellation after each heavy stage.
 	if err == nil && ctx.Err() == nil {
-		var prog *compiler.Program
-		prog, err = compiler.NewParser(tokens).ParseProgram()
-		if err == nil && ctx.Err() == nil {
-			err = compiler.Monomorphize(prog)
-		}
-		if err == nil && ctx.Err() == nil {
-			err = compiler.NewTypechecker().Check(prog)
-		}
+		err = compiler.Monomorphize(prog)
+	}
+	if err == nil && ctx.Err() == nil {
+		err = compiler.NewTypechecker().Check(prog)
 	}
 
 	// If a newer run superseded us, discard results — don't publish stale data.
@@ -327,6 +335,11 @@ func publish(ctx context.Context, uri, source string) {
 			}
 			line, col, msg := 0, 0, errLine
 			if m := locRE.FindStringSubmatch(errLine); len(m) > 0 {
+				errFile := m[1]
+				// Only report diagnostics that belong to this document
+				if errFile != "" && errFile != uri && errFile != filePath && !strings.HasSuffix(filePath, errFile) {
+					continue
+				}
 				fmt.Sscanf(m[2], "%d", &line)
 				fmt.Sscanf(m[3], "%d", &col)
 				msg = strings.TrimSpace(strings.TrimPrefix(errLine, m[0]))

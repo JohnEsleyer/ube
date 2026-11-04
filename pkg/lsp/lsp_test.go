@@ -1,3 +1,4 @@
+// File: pkg/lsp/lsp_test.go
 package lsp
 
 import (
