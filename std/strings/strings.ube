@@ -1,3 +1,5 @@
+package strings
+
 // File: std/strings/strings.ube
 // Ube standard library: string helpers.
 

@@ -1,3 +1,5 @@
+package bytes
+
 // File: std/bytes/bytes.ube
 
 // Ube standard library: byte buffers and byte slices.

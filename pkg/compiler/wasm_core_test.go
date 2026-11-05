@@ -91,6 +91,8 @@ func runWasm(t *testing.T, wasmBytes []byte) string {
 
 func TestWasmCore_MagicHeader(t *testing.T) {
 	source := `
+package main
+
 fn main() {
 }
 `
@@ -105,6 +107,8 @@ fn main() {
 
 func TestWasmCore_SimpleArithmetic(t *testing.T) {
 	source := `
+package main
+
 fn add(a: i32, b: i32) -> i32 {
     return a + b
 }
@@ -123,6 +127,8 @@ fn main() {
 
 func TestWasmCore_WhileLoop(t *testing.T) {
 	source := `
+package main
+
 fn main() {
     let mut sum = 0
     let mut i = 1
@@ -142,6 +148,8 @@ fn main() {
 
 func TestWasmCore_Conditionals(t *testing.T) {
 	source := `
+package main
+
 fn max(a: i32, b: i32) -> i32 {
     if a > b {
         return a
@@ -163,6 +171,8 @@ fn main() {
 
 func TestWasmCore_StructsAndReceivers(t *testing.T) {
 	source := `
+package main
+
 struct Point {
     x: i32,
     y: i32
@@ -192,6 +202,8 @@ fn main() {
 
 func TestWasmCore_DynamicSlices(t *testing.T) {
 	source := `
+package main
+
 fn main() {
     let mut s = []i32{}
     s.push(10)
@@ -210,6 +222,8 @@ fn main() {
 
 func TestWasmCore_TaggedEnumsAndMatch(t *testing.T) {
 	source := `
+package main
+
 enum Shape {
     Circle(i32),
     Rect(i32, i32)
@@ -242,6 +256,8 @@ fn main() {
 
 func TestWasmCore_RegionalArena(t *testing.T) {
 	source := `
+package main
+
 fn main() {
     let mut val = 0
     arena {
@@ -261,6 +277,8 @@ fn main() {
 
 func TestWasmCore_MonomorphizedGenerics(t *testing.T) {
 	source := `
+package main
+
 struct Box[T] {
     val: T
 }
@@ -288,6 +306,8 @@ fn main() {
 
 func TestWasmCore_DynamicTraitDispatch(t *testing.T) {
 	source := `
+package main
+
 trait Speaker {
     fn speak() -> i32
 }
@@ -318,6 +338,8 @@ fn main() {
 
 func TestWasmCore_StringInterpolation(t *testing.T) {
 	source := `
+package main
+
 fn main() {
     let name = "Ube"
     println(f"Hello {name}!")
@@ -332,6 +354,8 @@ fn main() {
 
 func TestWasmCore_FixedArrayCoercion(t *testing.T) {
 	source := `
+package main
+
 fn sum_items(items: []i32) -> i32 {
     let mut total = 0
     for x in items {
@@ -354,6 +378,8 @@ fn main() {
 
 func TestWasmCore_StringBuilder(t *testing.T) {
 	source := `
+package main
+
 fn main() {
     let mut sb = StringBuilder.new(4)
     sb.append_str("Ube")

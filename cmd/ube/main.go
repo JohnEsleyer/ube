@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const version = "1.1.0"
+const version = "1.2.0"
 
 const (
 	colorReset      = "\x1b[0m"
@@ -98,6 +98,9 @@ func execute(args []string) error {
 
 	default:
 		if strings.HasSuffix(args[0], ".ube") {
+			return run(args)
+		}
+		if info, err := os.Stat(args[0]); err == nil && info.IsDir() {
 			return run(args)
 		}
 		return fmt.Errorf("unknown command %q (run 'ube help' for usage)", args[0])

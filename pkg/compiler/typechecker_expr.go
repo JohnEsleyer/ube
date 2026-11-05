@@ -151,11 +151,14 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			}
 			return v.Type, nil
 		}
-		if _, ok := tc.Global.Enums[e.Name]; ok {
-			return CustomType{Name: e.Name}, nil
+		canonical := tc.canonicalName(e.Name)
+		if _, ok := tc.Global.Enums[canonical]; ok {
+			e.Name = canonical
+			return CustomType{Name: canonical}, nil
 		}
-		if _, ok := tc.Global.Traits[e.Name]; ok {
-			return TraitType{Name: e.Name}, nil
+		if _, ok := tc.Global.Traits[canonical]; ok {
+			e.Name = canonical
+			return TraitType{Name: canonical}, nil
 		}
 		if strings.HasPrefix(e.Name, "Chan[") && strings.HasSuffix(e.Name, "]") {
 			elemName := e.Name[5 : len(e.Name)-1]
@@ -306,6 +309,9 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				if _, isVar := env.LookupVar(id.Name); !isVar {
 					if _, isMod := tc.ModuleAliases[id.Name]; isMod {
 						if _, sig, found := tc.lookupModuleMember(id.Name, mem.Member); found {
+							if sig.Package != "" && env.CurModule != "" && sig.Package != env.CurModule && !sig.IsPub {
+								return nil, fmt.Errorf("[%s] cannot access unexported function '%s' from package '%s'", e.At, mem.Member, sig.Package)
+							}
 							if err := tc.checkCallArgs(e.Args, sig.Params, sig.Escaping, env, e.At); err != nil {
 								return nil, err
 							}
@@ -392,10 +398,12 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			}
 
 			if id, ok := mem.Target.(*IdentExpr); ok {
-				if variants, ok := tc.Global.Enums[id.Name]; ok {
-					if meta, hasMeta := tc.Global.EnumMeta[id.Name]; hasMeta {
-						if env.CurFile != "" && meta.File != "" && env.CurFile != meta.File && !meta.IsPub {
-							return nil, fmt.Errorf("[%s] cannot access private enum '%s'", e.At, id.Name)
+				enumName := tc.canonicalName(id.Name)
+				if variants, ok := tc.Global.Enums[enumName]; ok {
+					id.Name = enumName
+					if meta, hasMeta := tc.Global.EnumMeta[enumName]; hasMeta {
+						if env.CurModule != "" && meta.Package != "" && meta.Package != env.CurModule && !meta.IsPub {
+							return nil, fmt.Errorf("[%s] cannot access unexported enum '%s' from package '%s'", e.At, enumName, meta.Package)
 						}
 					}
 					for _, variant := range variants {
@@ -555,8 +563,8 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			if tr, isTrait := tgtT.(TraitType); isTrait {
 				e.ReceiverType = tgtT
 				if meta, hasMeta := tc.Global.TraitMeta[tr.Name]; hasMeta {
-					if env.CurFile != "" && meta.File != "" && env.CurFile != meta.File && !meta.IsPub {
-						return nil, fmt.Errorf("[%s] cannot access private trait '%s'", e.At, tr.Name)
+					if env.CurModule != "" && meta.Package != "" && meta.Package != env.CurModule && !meta.IsPub {
+						return nil, fmt.Errorf("[%s] cannot access unexported trait '%s' from package '%s'", e.At, tr.Name, meta.Package)
 					}
 				}
 				if tDecl, ok := tc.Global.Traits[tr.Name]; ok {
@@ -754,8 +762,8 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			}
 			methodKey := fmt.Sprintf("%s.%s", tgtT, mem.Member)
 			if sig, ok := tc.Global.Funcs[methodKey]; ok {
-				if env.CurFile != "" && sig.File != "" && env.CurFile != sig.File && !sig.IsPub {
-					return nil, fmt.Errorf("[%s] cannot access private method '%s' on '%s'", e.At, mem.Member, tgtT)
+				if env.CurModule != "" && sig.Package != "" && sig.Package != env.CurModule && !sig.IsPub {
+					return nil, fmt.Errorf("[%s] cannot access unexported method '%s' on '%s' from package '%s'", e.At, mem.Member, tgtT, sig.Package)
 				}
 				e.ReceiverType = tgtT
 				if sig.ReceiverMut {
@@ -772,10 +780,15 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			}
 		}
 		if id, ok := e.Callee.(*IdentExpr); ok {
-			if sig, ok := tc.Global.Funcs[tc.canonicalName(id.Name)]; ok {
-				if env.CurFile != "" && sig.File != "" && env.CurFile != sig.File && !sig.IsPub {
-					return nil, fmt.Errorf("[%s] cannot access private function '%s' from another file", e.At, id.Name)
+			canonical := tc.canonicalName(id.Name)
+			if sig, ok := tc.Global.Funcs[canonical]; ok {
+				if env.CurModule != "" && sig.Package != "" && sig.Package != env.CurModule && !sig.IsPub {
+					return nil, fmt.Errorf("[%s] cannot access unexported function '%s' from package '%s'", e.At, id.Name, sig.Package)
 				}
+				// Pin the call to its canonical package symbol so the Wasm
+				// emitter never has to guess between short names in different
+				// packages.
+				id.Name = canonical
 				if err := tc.checkCallArgs(e.Args, sig.Params, sig.Escaping, env, e.At); err != nil {
 					return nil, err
 				}
@@ -791,20 +804,25 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			if _, isVar := env.LookupVar(id.Name); !isVar {
 				if _, isMod := tc.ModuleAliases[id.Name]; isMod {
 					if _, sig, found := tc.lookupModuleMember(id.Name, e.Member); found && len(sig.Params) == 0 {
+						if sig.Package != "" && env.CurModule != "" && sig.Package != env.CurModule && !sig.IsPub {
+							return nil, fmt.Errorf("[%s] cannot access unexported member '%s' from package '%s'", e.At, e.Member, sig.Package)
+						}
 						return sig.RetType, nil
 					}
 					return nil, fmt.Errorf("[%s] module '%s' has no member '%s'", e.At, id.Name, e.Member)
 				}
 			}
-			if variants, isEnum := tc.Global.Enums[id.Name]; isEnum {
-				if meta, hasMeta := tc.Global.EnumMeta[id.Name]; hasMeta {
-					if env.CurFile != "" && meta.File != "" && env.CurFile != meta.File && !meta.IsPub {
-						return nil, fmt.Errorf("[%s] cannot access private enum '%s'", e.At, id.Name)
+			enumName := tc.canonicalName(id.Name)
+			if variants, isEnum := tc.Global.Enums[enumName]; isEnum {
+				id.Name = enumName
+				if meta, hasMeta := tc.Global.EnumMeta[enumName]; hasMeta {
+					if env.CurModule != "" && meta.Package != "" && meta.Package != env.CurModule && !meta.IsPub {
+						return nil, fmt.Errorf("[%s] cannot access unexported enum '%s' from package '%s'", e.At, enumName, meta.Package)
 					}
 				}
 				for _, variant := range variants {
 					if variant.Name == e.Member && len(variant.Types) == 0 {
-						return CustomType{Name: id.Name}, nil
+						return CustomType{Name: enumName}, nil
 					}
 				}
 			}
@@ -837,8 +855,8 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			if len(matches) == 1 {
 				match := matches[0]
 				if meta, ok := tc.Global.StructMeta[match.Owner]; ok {
-					if env.CurFile != "" && meta.File != "" && env.CurFile != meta.File && !match.Field.IsPub {
-						return nil, fmt.Errorf("[%s] cannot access private field '%s' on struct '%s'", e.At, e.Member, match.Owner)
+					if env.CurModule != "" && meta.Package != "" && meta.Package != env.CurModule && !match.Field.IsPub {
+						return nil, fmt.Errorf("[%s] cannot access unexported field '%s' on struct '%s' from package '%s'", e.At, e.Member, match.Owner, meta.Package)
 					}
 				}
 				e.EmbedPath = match.Path
@@ -958,8 +976,8 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		e.Name = tc.canonicalName(e.Name)
 		meta, hasMeta := tc.Global.StructMeta[e.Name]
 		if hasMeta {
-			if env.CurFile != "" && meta.File != "" && env.CurFile != meta.File && !meta.IsPub {
-				return nil, fmt.Errorf("[%s] cannot instantiate private struct '%s'", e.At, e.Name)
+			if env.CurModule != "" && meta.Package != "" && meta.Package != env.CurModule && !meta.IsPub {
+				return nil, fmt.Errorf("[%s] cannot instantiate unexported struct '%s' from package '%s'", e.At, e.Name, meta.Package)
 			}
 		}
 		fields, ok := tc.Global.Structs[e.Name]
@@ -981,8 +999,8 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			if provided[init.Name] {
 				return nil, fmt.Errorf("[%s] duplicate field '%s' in struct '%s' initialization", init.Val.Loc(), init.Name, e.Name)
 			}
-			if hasMeta && env.CurFile != "" && meta.File != "" && env.CurFile != meta.File && !fieldPubMap[init.Name] {
-				return nil, fmt.Errorf("[%s] cannot initialize private field '%s' on struct '%s'", init.Val.Loc(), init.Name, e.Name)
+			if hasMeta && env.CurModule != "" && meta.Package != "" && meta.Package != env.CurModule && !fieldPubMap[init.Name] {
+				return nil, fmt.Errorf("[%s] cannot initialize unexported field '%s' on struct '%s' from package '%s'", init.Val.Loc(), init.Name, e.Name, meta.Package)
 			}
 			provided[init.Name] = true
 			valT, err := tc.inferExpr(init.Val, env)

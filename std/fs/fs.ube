@@ -1,3 +1,5 @@
+package fs
+
 // File: std/fs/fs.ube
 
 // std/fs - filesystem and path utilities for Ube.

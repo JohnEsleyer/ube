@@ -18,6 +18,7 @@ type Monomorphizer struct {
 	concreteFunc   map[string]*FnDecl
 	allMethods     map[string][]*FnDecl
 	instantiated   map[string]bool
+	aliases        map[string]string
 }
 
 func NewMonomorphizer() *Monomorphizer {
@@ -30,7 +31,24 @@ func NewMonomorphizer() *Monomorphizer {
 		concreteFunc:   make(map[string]*FnDecl),
 		allMethods:     make(map[string][]*FnDecl),
 		instantiated:   make(map[string]bool),
+		aliases:        make(map[string]string),
 	}
+}
+
+// canonicalName resolves a module alias prefix to the target package's declared
+// name. It is idempotent and leaves plain (package-local) names alone.
+func (m *Monomorphizer) canonicalName(name string) string {
+	if m == nil || name == "" {
+		return name
+	}
+	i := strings.IndexByte(name, '.')
+	if i <= 0 {
+		return name
+	}
+	if canonical, ok := m.aliases[name[:i]]; ok {
+		return canonical + name[i:]
+	}
+	return name
 }
 
 // Monomorphize is the entry point used by the driver and the LSP.
@@ -42,6 +60,11 @@ func Monomorphize(prog *Program) error {
 }
 
 func (m *Monomorphizer) Process(prog *Program) error {
+	if prog != nil {
+		for alias, canonical := range prog.ModuleAliases {
+			m.aliases[alias] = canonical
+		}
+	}
 	var concreteDecls []Decl
 
 	// First pass: register every declaration kind before resolving receiver
@@ -547,9 +570,14 @@ func (m *Monomorphizer) Process(prog *Program) error {
 // specializeStruct creates (once) a concrete struct declaration for the given
 // type arguments, along with all of its receiver methods.
 func (m *Monomorphizer) specializeStruct(base string, args []UbeType, pending *[]Decl) (string, bool, error) {
+	base = m.canonicalName(base)
 	tmpl, exists := m.genericStructs[base]
 	if !exists {
-		tmpl, exists = m.lookupGenericStructByShortName(base)
+		if canonicalBase, found, ok := m.lookupGenericStructByShortName(base); ok {
+			base = canonicalBase
+			tmpl = found
+			exists = true
+		}
 	}
 	if !exists {
 		return "", false, fmt.Errorf("unknown generic struct '%s'", base)
@@ -564,7 +592,7 @@ func (m *Monomorphizer) specializeStruct(base string, args []UbeType, pending *[
 		for _, tr := range strings.Split(p.Constraint, "+") {
 			tr = strings.TrimSpace(tr)
 			if tr != "" {
-				if err := m.checkTraitConstraint(args[i], tr, tmpl.At); err != nil {
+				if err := m.checkTraitConstraint(args[i], tr, tmpl.At, tmpl.Package); err != nil {
 					return "", false, err
 				}
 			}
@@ -593,10 +621,11 @@ func (m *Monomorphizer) specializeStruct(base string, args []UbeType, pending *[
 	}
 
 	specDecl := &StructDecl{
-		At:     tmpl.At,
-		Name:   specName,
-		IsPub:  tmpl.IsPub,
-		Fields: fields,
+		At:      tmpl.At,
+		Name:    specName,
+		Package: tmpl.Package,
+		IsPub:   tmpl.IsPub,
+		Fields:  fields,
 	}
 	m.concreteStruct[specName] = specDecl
 	*pending = append(*pending, specDecl)
@@ -610,9 +639,14 @@ func (m *Monomorphizer) specializeStruct(base string, args []UbeType, pending *[
 }
 
 func (m *Monomorphizer) specializeFunc(name string, args []UbeType, pending *[]Decl) (string, bool, error) {
+	name = m.canonicalName(name)
 	tmpl, exists := m.genericFuncs[name]
 	if !exists {
-		tmpl, exists = m.lookupGenericFuncByShortName(name)
+		if canonicalName, found, ok := m.lookupGenericFuncByShortName(name); ok {
+			name = canonicalName
+			tmpl = found
+			exists = true
+		}
 	}
 	if !exists {
 		return "", false, fmt.Errorf("unknown generic function '%s'", name)
@@ -626,7 +660,7 @@ func (m *Monomorphizer) specializeFunc(name string, args []UbeType, pending *[]D
 			for _, tr := range strings.Split(p.Constraint, "+") {
 				tr = strings.TrimSpace(tr)
 				if tr != "" {
-					if err := m.checkTraitConstraint(args[i], tr, tmpl.At); err != nil {
+					if err := m.checkTraitConstraint(args[i], tr, tmpl.At, tmpl.Package); err != nil {
 						return "", false, err
 					}
 				}
@@ -656,6 +690,7 @@ func (m *Monomorphizer) specializeFunc(name string, args []UbeType, pending *[]D
 	specDecl := &FnDecl{
 		At:      tmpl.At,
 		Name:    specName,
+		Package: tmpl.Package,
 		IsPub:   tmpl.IsPub,
 		Params:  params,
 		RetType: substituteType(tmpl.RetType, subMap),
@@ -682,6 +717,7 @@ func (m *Monomorphizer) specializeMethod(tmpl *FnDecl, specializedStruct string,
 	return &FnDecl{
 		At:       tmpl.At,
 		Name:     tmpl.Name,
+		Package:  tmpl.Package,
 		IsPub:    tmpl.IsPub,
 		Receiver: receiver,
 		Params:   params,
@@ -700,11 +736,12 @@ func (m *Monomorphizer) specializeMethod(tmpl *FnDecl, specializedStruct string,
 // substitution it reaches specializeStruct as bare `Stack`, while the
 // template itself is registered as `collections.Stack`. Both spellings
 // must resolve to the same template.
-func (m *Monomorphizer) lookupGenericStructByShortName(want string) (*StructDecl, bool) {
+func (m *Monomorphizer) lookupGenericStructByShortName(want string) (string, *StructDecl, bool) {
 	short := want
 	if i := strings.LastIndex(short, "."); i >= 0 {
 		short = short[i+1:]
 	}
+	foundName := ""
 	var found *StructDecl
 	matches := 0
 	for name, tmpl := range m.genericStructs {
@@ -713,21 +750,23 @@ func (m *Monomorphizer) lookupGenericStructByShortName(want string) (*StructDecl
 			s = s[i+1:]
 		}
 		if s == short {
+			foundName = name
 			found = tmpl
 			matches++
 		}
 	}
 	if matches == 1 {
-		return found, true
+		return foundName, found, true
 	}
-	return nil, false
+	return "", nil, false
 }
 
-func (m *Monomorphizer) lookupGenericFuncByShortName(want string) (*FnDecl, bool) {
+func (m *Monomorphizer) lookupGenericFuncByShortName(want string) (string, *FnDecl, bool) {
 	short := want
 	if i := strings.LastIndex(short, "."); i >= 0 {
 		short = short[i+1:]
 	}
+	foundName := ""
 	var found *FnDecl
 	matches := 0
 	for name, tmpl := range m.genericFuncs {
@@ -736,23 +775,24 @@ func (m *Monomorphizer) lookupGenericFuncByShortName(want string) (*FnDecl, bool
 			s = s[i+1:]
 		}
 		if s == short {
+			foundName = name
 			found = tmpl
 			matches++
 		}
 	}
 	if matches == 1 {
-		return found, true
+		return foundName, found, true
 	}
-	return nil, false
+	return "", nil, false
 }
 
-func (m *Monomorphizer) checkTraitConstraint(t UbeType, traitName string, loc SourceLocation) error {
+func (m *Monomorphizer) checkTraitConstraint(t UbeType, traitName string, loc SourceLocation, pkg string) error {
 	trait, exists := m.traits[traitName]
 	if !exists {
 		return fmt.Errorf("[%s] unknown trait '%s'", loc, traitName)
 	}
-	if loc.File != "" && trait.At.File != "" && loc.File != trait.At.File && !trait.IsPub {
-		return fmt.Errorf("[%s] cannot access private trait '%s'", loc, traitName)
+	if pkg != "" && trait.Package != "" && pkg != trait.Package && !trait.IsPub {
+		return fmt.Errorf("[%s] cannot access unexported trait '%s' from package '%s'", loc, traitName, trait.Package)
 	}
 	base := typeBaseName(t)
 	methods := m.allMethods[base]

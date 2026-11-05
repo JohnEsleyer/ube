@@ -8,7 +8,7 @@
 **The sweet, grounded language for games, apps, and high-throughput backends.**
 *100% WebAssembly Native • Zero External Toolchains • Zero GC • Clean like Go*
 
-[![Version](https://img.shields.io/badge/version-1.1.0-9333ea.svg)](https://github.com/JohnEsleyer/ube/releases)
+[![Version](https://img.shields.io/badge/version-1.2.0-9333ea.svg)](https://github.com/JohnEsleyer/ube/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Target](https://img.shields.io/badge/target-wasm32--wasi-654ff0.svg)](https://wasi.dev)
 [![Architecture](https://img.shields.io/badge/architecture-direct%20wasm%20binary-9333ea.svg)](https://github.com/JohnEsleyer/ube)
@@ -38,7 +38,7 @@
   - [12. Generics & Trait Bounds](#12-generics--trait-bounds)
   - [13. Traits & Dynamic Dispatch](#13-traits--dynamic-dispatch)
   - [14. Sandboxed Host Imports](#14-sandboxed-host-imports)
-- [Standard Library & Module System](#standard-library--module-system)
+- [Packages, Standard Library & Imports](#packages-standard-library--imports)
 - [Developer CLI Toolchain](#developer-cli-toolchain)
 - [Working With LLMs](#working-with-llms)
 - [Editor Integration (VS Code & LSP)](#editor-integration-vs-code--lsp)
@@ -145,6 +145,8 @@ ube version
 Bindings are **strictly immutable by default**. Use `let mut` for mutable bindings:
 
 ```ube
+package main
+
 fn main() {
     // Immutable by default
     let year: i32 = 2026
@@ -180,6 +182,8 @@ The literal `null` is forbidden — use `none` for optionals. The keyword `unsaf
 Non-copy types (`string`, `[]T`, `Pool[T]`, and structs holding them) move ownership on assignment:
 
 ```ube
+package main
+
 fn main() {
     let a = "Sweet Roots"
     let b = a         // Ownership of string is moved to 'b'
@@ -206,6 +210,8 @@ The complete rule set:
 ### 3. Functions, Receivers & Methods
 
 ```ube
+package main
+
 struct Rectangle {
     width: i32,
     height: i32
@@ -241,6 +247,8 @@ fn main() {
 ### 4. Anonymous Struct Embedding
 
 ```ube
+package main
+
 struct Position {
     x: f32,
     y: f32
@@ -272,6 +280,8 @@ Promoted field access works through arbitrary embedding depth and is resolved st
 Enums are tagged unions carrying arbitrary payloads. Pattern matching is verified for exhaustiveness at compile time:
 
 ```ube
+package main
+
 enum Action {
     Move(f32, f32),
     Attack(i32),
@@ -296,6 +306,8 @@ fn handle_action(act: Action) {
 No exceptions and no hidden runtime panics. Errors and absence are both first-class values:
 
 ```ube
+package main
+
 // Result type: T ! E
 fn parse_port(code: i32) -> i32 ! string {
     if code < 1024 || code > 65535 {
@@ -336,6 +348,8 @@ fn main() {
 ### 7. Strings, Slicing & StringBuilder
 
 ```ube
+package main
+
 fn main() {
     let title = "WebAssembly"
     let slice = title[0:4] // "WebA"
@@ -365,6 +379,8 @@ fn main() {
 - **Coercion**: fixed arrays coerce automatically to dynamic slice parameters.
 
 ```ube
+package main
+
 fn sum_slice(vals: []i32) -> i32 {
     let mut total = 0
     for v in vals {
@@ -396,6 +412,8 @@ fn main() {
 Allocations inside an `arena` block are wiped instantly by unwinding the arena pointer on scope exit:
 
 ```ube
+package main
+
 fn main() {
     let mut persistent = []i32{}
 
@@ -420,6 +438,8 @@ Assigning `scratch` directly to `persistent` without `promote` is a compile erro
 ### 10. Generational Entity Pools
 
 ```ube
+package main
+
 struct Enemy {
     id: i32,
     hp: i32
@@ -444,6 +464,8 @@ Handles carry a generation counter, so a stale handle can never read a recycled 
 ### 11. Concurrency, Tasks & Channels
 
 ```ube
+package main
+
 struct Packet {
     id: i32,
     code: i32
@@ -482,6 +504,8 @@ Note the flat invariant: `Packet` here contains only `i32` fields, so it is lega
 Compile-time monomorphization into zero-overhead specialized Wasm code:
 
 ```ube
+package main
+
 struct Pair[A, B] {
     first: A,
     second: B
@@ -505,6 +529,8 @@ Each distinct combination of type arguments produces a concrete specialized func
 ### 13. Traits & Dynamic Dispatch
 
 ```ube
+package main
+
 trait Speaker {
     fn speak() -> string
 }
@@ -532,6 +558,8 @@ Trait values are fat pointers `{vtable_ptr, data_ptr}` dispatched via `call_indi
 ### 14. Sandboxed Host Imports
 
 ```ube
+package main
+
 extern fn time_now_ms() -> i64
 extern fn host_print(s: string)
 
@@ -546,11 +574,65 @@ All host access is capability-driven and must be declared as a typed `extern fn`
 
 ---
 
-## Standard Library & Module System
+## Packages, Standard Library & Imports
 
-The standard library is bundled directly into the compiler binary and resolved with the priority order `$UBE_PATH` → `./std/` → `std/` next to the entry file → embedded.
+Ube uses Go's package model: **one directory is one package**, and every `.ube` file declares that package on its first line.
 
 ```ube
+package main
+
+fn main() {
+    println("hello from the main package")
+}
+```
+
+The rules are deliberately explicit:
+
+- Every `.ube` file must declare `package <name>`. Comments and blank lines may come before the clause, but it is mandatory.
+- Every `.ube` file in a directory must use the same package name. Mixing package names in one directory is a compile error.
+- Files in the same package share one scope. Declarations do not need imports to see each other, and unexported declarations are visible across the whole package.
+- `pub` exports a declaration outside its package. Unexported structs, fields, enums, traits, functions, and methods are private to the package.
+- `package main` is the executable package. It must define `fn main()`. Importing a package that declares `package main` is rejected.
+- Imports reference package directories, not files. `import "../geometry"` is valid; `import "../geometry/geometry.ube"` is rejected.
+- The default qualifier is the imported package's declared name. `as` changes only the local alias. Relative imports resolve from the importing package's directory.
+
+A library package and its consumer:
+
+```ube
+// geometry/geometry.ube
+package geometry
+
+pub struct Rect {
+    pub width: i32,
+    pub height: i32
+}
+
+pub fn area(r: Rect) -> i32 {
+    return r.width * r.height
+}
+
+fn hidden_helper() -> i32 {
+    return 0 // visible to every file in package geometry, invisible outside it
+}
+```
+
+```ube
+// main.ube
+package main
+
+import "../geometry" as geo
+
+fn main() {
+    let r = geo.Rect{ width: 10, height: 5 }
+    println(geo.area(r)) // 50
+}
+```
+
+The standard library uses the same rules. It is bundled directly into the compiler binary and resolved with the priority order `$UBE_PATH` → `./std/` → `std/` next to the entry file → embedded. Each `std/<name>` directory declares `package <name>`.
+
+```ube
+package main
+
 import "std/math" as math
 import "std/strings" as str
 import "std/collections"
@@ -586,10 +668,10 @@ fn main() {
 
 | Command | Example | Description |
 | :--- | :--- | :--- |
-| `ube build` | `ube build main.ube` | Compiles directly into a standalone WebAssembly module (`main.wasm`). |
-| `ube run` | `ube run main.ube` | Compiles in memory and executes via the embedded Wasmtime runtime. |
-| `ube check` | `ube check main.ube` | Static audit of syntax, types, affine moves, and arena invariants. |
-| `ube test` | `ube test tests/` | Runs `test_*` functions and files, injecting harnesses and executing via Wasmtime. |
+| `ube build` | `ube build` / `ube build -o app.wasm` | Compiles the current package (or a directory/file target) into a standalone WebAssembly module. Directory targets default to `<dirname>.wasm`; file targets default to `<stem>.wasm`. |
+| `ube run` | `ube run` / `ube run path/to/pkg` | Compiles and executes a `package main` via the embedded Wasmtime runtime. Bare `ube <dir>` is shorthand for `ube run <dir>`. |
+| `ube check` | `ube check` / `ube check path/to/pkg` | Static audit of syntax, types, affine moves, package imports, and arena invariants. Defaults to the current directory. |
+| `ube test` | `ube test` / `ube test ./...` | Runs `test_*` functions per package directory, including all `_test.ube` files in that package. `./...` walks nested packages. |
 | `ube fmt` | `ube fmt -w .` | Canonical formatter with automatic struct field columnar alignment. |
 | `ube doc` | `ube doc main.ube [sym]` | Prints signatures, fields, and method documentation. |
 | `ube flow` | `ube flow main.ube` | Renders a visual call tree showing memory scopes, tasks, and callees. |

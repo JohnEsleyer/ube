@@ -1,3 +1,5 @@
+package main
+
 
 fn main(){
     // Primitive Copy Types (i32, f32, bool)

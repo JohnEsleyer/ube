@@ -5,112 +5,326 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
+// ModuleLoader implements Ube's Go-style package model:
+//
+//   - one directory is one package;
+//   - every .ube file in that directory must declare the same package name;
+//   - all files in the package share one merged declaration scope;
+//   - imports name package directories, never individual files.
+//
+// Declarations from non-root packages are qualified once, at package load time,
+// using the package's declared name. That gives the rest of the compiler a
+// canonical, unambiguous symbol: `<package>.<Symbol>`.
 type ModuleLoader struct {
-	visited, visiting map[string]bool
-	allDecls          []Decl
-	entryDir          string
-	moduleAliases     map[string]string
+	visitingDirs  map[string]bool
+	dirPackages   map[string]string
+	allDecls      []Decl
+	entryDir      string
+	moduleAliases map[string]string
 }
 
 func NewModuleLoader() *ModuleLoader {
 	return &ModuleLoader{
-		visited:       map[string]bool{},
-		visiting:      map[string]bool{},
+		visitingDirs:  map[string]bool{},
+		dirPackages:   map[string]string{},
 		moduleAliases: map[string]string{},
 	}
 }
 
-func (m *ModuleLoader) Load(entry string) (*Program, error) {
-	abs, err := filepath.Abs(entry)
+func (m *ModuleLoader) reset(entryDir string) {
+	m.visitingDirs = map[string]bool{}
+	m.dirPackages = map[string]string{}
+	m.allDecls = nil
+	m.entryDir = entryDir
+	m.moduleAliases = map[string]string{}
+}
+
+// Load builds a program from a package directory, or from the directory that
+// contains the supplied entry file.
+func (m *ModuleLoader) Load(target string) (*Program, error) {
+	return m.load(target, false)
+}
+
+// LoadTests is like Load but also includes `*_test.ube` files from the target
+// package directory.
+func (m *ModuleLoader) LoadTests(target string) (*Program, error) {
+	return m.load(target, true)
+}
+
+func (m *ModuleLoader) load(target string, includeTests bool) (*Program, error) {
+	abs, err := filepath.Abs(target)
 	if err != nil {
 		return nil, err
 	}
-	b, err := os.ReadFile(abs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read %s: %w", abs, err)
+
+	info, statErr := os.Stat(abs)
+	if statErr != nil {
+		// Accept an entry file without the .ube suffix.
+		if !strings.HasSuffix(abs, ".ube") {
+			if fileInfo, err2 := os.Stat(abs + ".ube"); err2 == nil {
+				abs = abs + ".ube"
+				info = fileInfo
+				statErr = nil
+			}
+		}
+		if statErr != nil {
+			return nil, fmt.Errorf("failed to read %s: %w", abs, statErr)
+		}
 	}
-	return m.LoadSource(abs, string(b))
+
+	dir := abs
+	if !info.IsDir() {
+		dir = filepath.Dir(abs)
+		if strings.HasSuffix(filepath.Base(abs), "_test.ube") {
+			includeTests = true
+		}
+	}
+
+	m.reset(dir)
+	pkgName, err := m.loadPackageDir(dir, true, includeTests)
+	if err != nil {
+		return nil, err
+	}
+	return &Program{
+		At:            SourceLocation{File: dir, Line: 1, Col: 1},
+		Package:       pkgName,
+		Decls:         m.allDecls,
+		ModuleAliases: m.moduleAliases,
+		EntryModule:   pkgName,
+	}, nil
 }
 
+// LoadSource parses an explicit source buffer (used by the language server and
+// tests). Imports are still resolved as package-directory imports relative to
+// the entry file's directory.
 func (m *ModuleLoader) LoadSource(entry, source string) (*Program, error) {
-	m.visited = map[string]bool{}
-	m.visiting = map[string]bool{}
-	m.allDecls = nil
-	m.moduleAliases = map[string]string{}
 	abs, err := filepath.Abs(entry)
 	if err != nil {
 		abs = entry
 	}
-	m.entryDir = filepath.Dir(abs)
+	dir := filepath.Dir(abs)
+	m.reset(dir)
 
 	toks, err := NewLexer(abs, source).Tokenize()
 	if err != nil {
 		return nil, err
 	}
-	prog, err := NewParser(toks).ParseProgram()
+	fileProg, err := NewParser(toks).ParseProgram()
 	if err != nil {
 		return nil, err
 	}
 
-	entryModule := strings.TrimSuffix(filepath.Base(abs), ".ube")
-	m.visited[abs] = true
+	pkgName := fileProg.Package
 
-	for _, d := range prog.Decls {
-		if imp, ok := d.(*ImportDecl); ok {
-			var importPath string
-			if _, ok := isStdImport(imp.Path); ok {
-				importPath = imp.Path
-			} else {
-				importPath = filepath.Join(filepath.Dir(abs), imp.Path)
-			}
-			if err := m.loadModule(importPath); err != nil {
-				return nil, err
-			}
-			m.registerImportAlias(imp)
-		} else {
-			m.allDecls = append(m.allDecls, d)
+	var decls []Decl
+	var imports []*ImportDecl
+	for _, d := range fileProg.Decls {
+		switch d := d.(type) {
+		case *PackageDecl:
+			// already captured in fileProg.Package
+		case *ImportDecl:
+			imports = append(imports, d)
+		default:
+			decls = append(decls, d)
+		}
+	}
+
+	// Match how this package would look when imported by someone else.
+	if pkgName != "main" {
+		qualifyPackageDecls(decls, pkgName)
+	}
+	m.allDecls = append(m.allDecls, decls...)
+
+	for _, imp := range imports {
+		if _, err := m.resolveAndLoadImport(imp, dir); err != nil {
+			return nil, err
 		}
 	}
 
 	return &Program{
 		At:            SourceLocation{File: abs, Line: 1, Col: 1},
+		Package:       pkgName,
 		Decls:         m.allDecls,
 		ModuleAliases: m.moduleAliases,
-		EntryModule:   entryModule,
+		EntryModule:   pkgName,
 	}, nil
 }
 
-func moduleBaseName(path string) string {
-	if key, ok := isStdImport(path); ok {
-		parts := strings.Split(key, "/")
-		return parts[len(parts)-1]
+// loadPackageDir parses every source file in dir as one package and returns the
+// declared package name. The package's declarations are appended to the
+// loader-wide declaration list exactly once.
+func (m *ModuleLoader) loadPackageDir(dir string, isRoot, includeTests bool) (string, error) {
+	cleanDir := filepath.Clean(dir)
+
+	// Check the in-progress set first so cycles are reported correctly.
+	if m.visitingDirs[cleanDir] {
+		return "", fmt.Errorf("cyclic package import detected: %s", cleanDir)
 	}
-	base := filepath.Base(path)
-	return strings.TrimSuffix(base, ".ube")
+	if name, ok := m.dirPackages[cleanDir]; ok {
+		return name, nil
+	}
+
+	m.visitingDirs[cleanDir] = true
+	defer delete(m.visitingDirs, cleanDir)
+
+	files, err := ubePackageFiles(cleanDir, includeTests)
+	if err != nil {
+		return "", fmt.Errorf("reading package directory %s: %w", cleanDir, err)
+	}
+	if len(files) == 0 {
+		return "", fmt.Errorf("no .ube source files found in package directory %s", cleanDir)
+	}
+
+	pkgName := ""
+	firstFile := ""
+	var pkgDecls []Decl
+	var imports []*ImportDecl
+
+	for _, file := range files {
+		src, err := os.ReadFile(file)
+		if err != nil {
+			return "", fmt.Errorf("reading %s: %w", file, err)
+		}
+		toks, err := NewLexer(file, string(src)).Tokenize()
+		if err != nil {
+			return "", err
+		}
+		fileProg, err := NewParser(toks).ParseProgram()
+		if err != nil {
+			return "", err
+		}
+
+		if pkgName == "" {
+			pkgName = fileProg.Package
+			firstFile = file
+		} else if fileProg.Package != pkgName {
+			return "", fmt.Errorf(
+				"found packages '%s' (%s) and '%s' (%s) in directory '%s' (all files in a folder must share the same package)",
+				pkgName, filepath.Base(firstFile), fileProg.Package, filepath.Base(file), cleanDir,
+			)
+		}
+
+		for _, d := range fileProg.Decls {
+			switch d := d.(type) {
+			case *PackageDecl:
+				// Package clauses are metadata, not declarations to emit.
+			case *ImportDecl:
+				imports = append(imports, d)
+			default:
+				pkgDecls = append(pkgDecls, d)
+			}
+		}
+	}
+
+	if !isRoot {
+		qualifyPackageDecls(pkgDecls, pkgName)
+	}
+
+	m.allDecls = append(m.allDecls, pkgDecls...)
+
+	for _, imp := range imports {
+		if _, err := m.resolveAndLoadImport(imp, cleanDir); err != nil {
+			return "", err
+		}
+	}
+
+	m.dirPackages[cleanDir] = pkgName
+	return pkgName, nil
 }
 
-func (m *ModuleLoader) registerImportAlias(imp *ImportDecl) {
-	canonical := moduleBaseName(imp.Path)
-	if canonical == "" || canonical == "." || canonical == ".." {
-		return
+func ubePackageFiles(dir string, includeTests bool) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
 	}
-	local := imp.Alias
-	if local == "" {
-		local = canonical
+	var files []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".ube") {
+			continue
+		}
+		if !includeTests && strings.HasSuffix(name, "_test.ube") {
+			continue
+		}
+		files = append(files, filepath.Join(dir, name))
 	}
-	m.moduleAliases[local] = canonical
+	sort.Strings(files)
+	return files, nil
+}
+
+// resolveAndLoadImport loads one imported package and registers its local alias.
+// Relative imports are resolved against the importing package directory, which
+// keeps nested packages predictable.
+func (m *ModuleLoader) resolveAndLoadImport(imp *ImportDecl, fromDir string) (string, error) {
+	if stdKey, ok := isStdImport(imp.Path); ok {
+		pkgName, err := m.loadStdPackage(stdKey)
+		if err != nil {
+			return "", err
+		}
+		if pkgName == "main" {
+			return "", fmt.Errorf("cannot import %q: package main is the executable package, not an importable library", imp.Path)
+		}
+		if err := m.registerImportAlias(imp, pkgName); err != nil {
+			return "", err
+		}
+		return pkgName, nil
+	}
+
+	if strings.HasSuffix(imp.Path, ".ube") {
+		return "", fmt.Errorf("import %q targets a file; imports must name package directories, not .ube files", imp.Path)
+	}
+
+	targetDir := imp.Path
+	if !filepath.IsAbs(targetDir) {
+		targetDir = filepath.Join(fromDir, targetDir)
+	}
+	targetDir = filepath.Clean(targetDir)
+
+	info, statErr := os.Stat(targetDir)
+	if statErr != nil || !info.IsDir() {
+		return "", fmt.Errorf("cannot find imported package %q (looked for directory %s)", imp.Path, targetDir)
+	}
+
+	pkgName, err := m.loadPackageDir(targetDir, false, false)
+	if err != nil {
+		return "", err
+	}
+	if pkgName == "main" {
+		return "", fmt.Errorf("cannot import %q: package main is the executable package, not an importable library", imp.Path)
+	}
+	if err := m.registerImportAlias(imp, pkgName); err != nil {
+		return "", err
+	}
+	return pkgName, nil
+}
+
+func (m *ModuleLoader) registerImportAlias(imp *ImportDecl, pkgName string) error {
+	alias := imp.Alias
+	if alias == "" {
+		alias = pkgName
+	}
+	if alias == "" || alias == "." || alias == ".." {
+		return fmt.Errorf("invalid import alias for %q", imp.Path)
+	}
+	if prev, ok := m.moduleAliases[alias]; ok && prev != pkgName {
+		return fmt.Errorf("import alias %q refers to both package %q and package %q", alias, prev, pkgName)
+	}
+	m.moduleAliases[alias] = pkgName
+	return nil
 }
 
 func isStdImport(p string) (string, bool) {
-	if !strings.HasPrefix(p, "std/") {
+	if !strings.HasPrefix(p, "std/") || strings.HasSuffix(p, ".ube") {
 		return "", false
 	}
-	key := strings.TrimPrefix(p, "std/")
-	key = strings.TrimSuffix(key, ".ube")
-	return key, true
+	return strings.TrimPrefix(p, "std/"), true
 }
 
 func validStdKey(key string) bool {
@@ -125,142 +339,96 @@ func validStdKey(key string) bool {
 	return true
 }
 
-func (m *ModuleLoader) resolveStdSource(key string) (string, error) {
+// loadStdPackage loads every file of a standard library package from the
+// embedded std FS (with an optional on-disk override for development).
+func (m *ModuleLoader) loadStdPackage(key string) (string, error) {
 	if !validStdKey(key) {
-		return "", fmt.Errorf("invalid standard library module 'std/%s'", key)
+		return "", fmt.Errorf("invalid standard library package 'std/%s'", key)
 	}
-	clean := strings.TrimSuffix(key, ".ube")
-	subPath := filepath.Join(clean, clean+".ube")
-	flatPath := clean + ".ube"
-	candidates := []string{
-		filepath.Join("std", subPath),
-		filepath.Join("std", flatPath),
+	cacheKey := "std:" + key
+	if m.visitingDirs[cacheKey] {
+		return "", fmt.Errorf("cyclic standard library import detected: std/%s", key)
 	}
-	if m.entryDir != "" {
-		candidates = append(candidates,
-			filepath.Join(m.entryDir, "std", subPath),
-			filepath.Join(m.entryDir, "std", flatPath),
-		)
+	if name, ok := m.dirPackages[cacheKey]; ok {
+		return name, nil
 	}
-	for _, root := range filepath.SplitList(os.Getenv("UBE_PATH")) {
-		if root == "" {
-			continue
-		}
-		candidates = append(candidates,
-			filepath.Join(root, "std", subPath),
-			filepath.Join(root, "std", flatPath),
-			filepath.Join(root, flatPath),
-		)
-	}
-	for _, candidate := range candidates {
-		if src, err := os.ReadFile(candidate); err == nil {
-			return string(src), nil
-		}
-	}
-	if src, ok := stdlibSource(clean); ok {
-		return src, nil
-	}
-	return "", fmt.Errorf("unknown standard library module 'std/%s'", key)
-}
+	m.visitingDirs[cacheKey] = true
+	defer delete(m.visitingDirs, cacheKey)
 
-func (m *ModuleLoader) loadRecursive(path string) error {
-	return m.loadModule(path)
-}
-
-func (m *ModuleLoader) loadModule(path string) error {
-	var (
-		abs string
-		src string
-	)
-	stdKey, fromStd := isStdImport(path)
-	if fromStd {
-		abs = "std:" + stdKey
-	} else {
-		var err error
-		abs, err = filepath.Abs(path)
-		if err != nil {
-			return err
-		}
-		abs = filepath.Clean(abs)
-		if _, err := os.Stat(abs); os.IsNotExist(err) && !strings.HasSuffix(abs, ".ube") {
-			if _, err2 := os.Stat(abs + ".ube"); err2 == nil {
-				abs = abs + ".ube"
-			}
-		}
-	}
-
-	if m.visited[abs] {
-		return nil
-	}
-	if m.visiting[abs] {
-		return fmt.Errorf("cyclic import detected: %s", path)
-	}
-	m.visiting[abs] = true
-
-	if fromStd {
-		moduleSrc, err := m.resolveStdSource(stdKey)
-		if err != nil {
-			return err
-		}
-		src = moduleSrc
-	} else {
-		b, err := os.ReadFile(abs)
-		if err != nil {
-			return fmt.Errorf("failed to read %s: %w", abs, err)
-		}
-		src = string(b)
-	}
-
-	toks, err := NewLexer(abs, src).Tokenize()
+	files, err := stdlibPackageSources(key, m.entryDir)
 	if err != nil {
-		return err
-	}
-	prog, err := NewParser(toks).ParseProgram()
-	if err != nil {
-		return err
+		return "", err
 	}
 
-	canonical := moduleBaseName(abs)
-	if fromStd {
-		canonical = stdKey
-	}
-	qualifyDecls(prog, canonical)
+	pkgName := ""
+	firstFile := ""
+	var pkgDecls []Decl
+	var imports []*ImportDecl
 
-	for _, d := range prog.Decls {
-		if imp, ok := d.(*ImportDecl); ok {
-			var importPath string
-			if _, ok := isStdImport(imp.Path); ok {
-				importPath = imp.Path
-			} else if fromStd {
-				return fmt.Errorf("standard library module '%s' may only import other 'std/...' modules (got %q)", abs, imp.Path)
-			} else {
-				importPath = filepath.Join(filepath.Dir(abs), imp.Path)
+	for _, file := range files {
+		toks, err := NewLexer(file.name, file.source).Tokenize()
+		if err != nil {
+			return "", err
+		}
+		fileProg, err := NewParser(toks).ParseProgram()
+		if err != nil {
+			return "", err
+		}
+		if pkgName == "" {
+			pkgName = fileProg.Package
+			firstFile = file.name
+		} else if fileProg.Package != pkgName {
+			return "", fmt.Errorf(
+				"found packages '%s' (%s) and '%s' (%s) in standard library directory 'std/%s'",
+				pkgName, firstFile, fileProg.Package, file.name, key,
+			)
+		}
+		for _, d := range fileProg.Decls {
+			switch d := d.(type) {
+			case *PackageDecl:
+			case *ImportDecl:
+				imports = append(imports, d)
+			default:
+				pkgDecls = append(pkgDecls, d)
 			}
-			if err := m.loadModule(importPath); err != nil {
-				return err
-			}
-			m.registerImportAlias(imp)
-		} else {
-			m.allDecls = append(m.allDecls, d)
 		}
 	}
-	delete(m.visiting, abs)
-	m.visited[abs] = true
-	return nil
+
+	expected := key
+	if i := strings.LastIndexByte(expected, '/'); i >= 0 {
+		expected = expected[i+1:]
+	}
+	if pkgName != expected {
+		return "", fmt.Errorf("standard library package 'std/%s' must declare 'package %s' (found 'package %s')", key, expected, pkgName)
+	}
+
+	qualifyPackageDecls(pkgDecls, pkgName)
+	m.allDecls = append(m.allDecls, pkgDecls...)
+
+	for _, imp := range imports {
+		if _, ok := isStdImport(imp.Path); !ok {
+			return "", fmt.Errorf("standard library package 'std/%s' may only import other 'std/...' packages (got %q)", key, imp.Path)
+		}
+		if _, err := m.resolveAndLoadImport(imp, "std:"+key); err != nil {
+			return "", err
+		}
+	}
+
+	m.dirPackages[cacheKey] = pkgName
+	return pkgName, nil
 }
 
-func qualifyDecls(prog *Program, canonical string) {
-	if canonical == "" {
+// qualifyPackageDecls rewrites a package's own declared names into canonical
+// `<package>.<Symbol>` form. Imported names (which contain a dot) are left
+// untouched; the typechecker resolves those through the alias table.
+func qualifyPackageDecls(decls []Decl, canonical string) {
+	if canonical == "" || canonical == "main" {
 		return
 	}
-	// Collect the names this module itself declares. Only those get
-	// qualified. References to imported names must be left untouched so
-	// that the typechecker's canonicalName (which has ModuleAliases and
-	// the full symbol table) resolves them correctly. Qualifying a bare
-	// reference like `Stack` to `main.Stack` when `Stack` actually lives
-	// in `collections` is the "unknown generic struct 'Stack'" bug.
+
 	local := map[string]bool{}
-	for _, decl := range prog.Decls {
+	localTraits := map[string]bool{}
+	for _, decl := range decls {
 		switch d := decl.(type) {
 		case *StructDecl:
 			local[d.Name] = true
@@ -268,22 +436,46 @@ func qualifyDecls(prog *Program, canonical string) {
 			local[d.Name] = true
 		case *TraitDecl:
 			local[d.Name] = true
+			localTraits[d.Name] = true
 		case *FnDecl:
 			if d.Receiver == nil {
 				local[d.Name] = true
 			}
 		}
 	}
+
 	qualify := func(name string) string {
 		if name == "" || strings.Contains(name, ".") || !local[name] {
 			return name
 		}
 		return canonical + "." + name
 	}
-	for _, decl := range prog.Decls {
+	qualifyConstraint := func(constraint string) string {
+		if constraint == "" {
+			return constraint
+		}
+		parts := strings.Split(constraint, "+")
+		for i, part := range parts {
+			trimmed := strings.TrimSpace(part)
+			if localTraits[trimmed] {
+				parts[i] = canonical + "." + trimmed
+			} else {
+				parts[i] = trimmed
+			}
+		}
+		return strings.Join(parts, "+")
+	}
+	qualifyTypeParams := func(params []TypeParam) {
+		for i := range params {
+			params[i].Constraint = qualifyConstraint(params[i].Constraint)
+		}
+	}
+
+	for _, decl := range decls {
 		switch d := decl.(type) {
 		case *StructDecl:
 			d.Name = qualify(d.Name)
+			qualifyTypeParams(d.TypeParams)
 			for i := range d.Fields {
 				d.Fields[i].Type = qualifyType(d.Fields[i].Type, qualify)
 			}
@@ -306,9 +498,9 @@ func qualifyDecls(prog *Program, canonical string) {
 				d.Methods[i].RetType = qualifyType(d.Methods[i].RetType, qualify)
 			}
 		case *FnDecl:
-			if d.Receiver == nil {
-				d.Name = qualify(d.Name)
-			} else {
+			d.Name = qualify(d.Name)
+			qualifyTypeParams(d.TypeParams)
+			if d.Receiver != nil {
 				d.Receiver.Type = qualifyType(d.Receiver.Type, qualify)
 			}
 			for i := range d.Params {

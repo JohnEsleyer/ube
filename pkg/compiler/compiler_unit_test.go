@@ -71,6 +71,8 @@ func TestLexer_ForbiddenUnsafe(t *testing.T) {
 
 func TestParser_Declarations(t *testing.T) {
 	source := `
+package main
+
 struct Point {
     x: i32,
     y: i32
@@ -101,33 +103,40 @@ fn (p Point) sum() -> i32 {
 		t.Fatalf("parser error: %v", err)
 	}
 
-	if len(prog.Decls) != 4 {
-		t.Fatalf("expected 4 declarations, got %d", len(prog.Decls))
+	if len(prog.Decls) != 5 {
+		t.Fatalf("expected 5 declarations, got %d", len(prog.Decls))
 	}
 
-	st, ok := prog.Decls[0].(*compiler.StructDecl)
-	if !ok || st.Name != "Point" || len(st.Fields) != 2 {
-		t.Errorf("first decl should be Point struct with 2 fields, got: %T", prog.Decls[0])
+	pkg, ok := prog.Decls[0].(*compiler.PackageDecl)
+	if !ok || pkg.Name != "main" || prog.Package != "main" {
+		t.Fatalf("first decl should be 'package main', got: %T", prog.Decls[0])
 	}
 
-	en, ok := prog.Decls[1].(*compiler.EnumDecl)
-	if !ok || en.Name != "State" || len(en.Variants) != 2 {
-		t.Errorf("second decl should be State enum with 2 variants, got: %T", prog.Decls[1])
+	st, ok := prog.Decls[1].(*compiler.StructDecl)
+	if !ok || st.Name != "Point" || len(st.Fields) != 2 || st.Package != "main" {
+		t.Errorf("second decl should be Point struct with 2 fields, got: %T", prog.Decls[1])
 	}
 
-	tr, ok := prog.Decls[2].(*compiler.TraitDecl)
-	if !ok || tr.Name != "Speaker" {
-		t.Errorf("third decl should be Speaker trait, got: %T", prog.Decls[2])
+	en, ok := prog.Decls[2].(*compiler.EnumDecl)
+	if !ok || en.Name != "State" || len(en.Variants) != 2 || en.Package != "main" {
+		t.Errorf("third decl should be State enum with 2 variants, got: %T", prog.Decls[2])
 	}
 
-	fn, ok := prog.Decls[3].(*compiler.FnDecl)
-	if !ok || fn.Name != "sum" || fn.Receiver == nil {
-		t.Errorf("fourth decl should be receiver method 'sum', got: %T", prog.Decls[3])
+	tr, ok := prog.Decls[3].(*compiler.TraitDecl)
+	if !ok || tr.Name != "Speaker" || tr.Package != "main" {
+		t.Errorf("fourth decl should be Speaker trait, got: %T", prog.Decls[3])
+	}
+
+	fn, ok := prog.Decls[4].(*compiler.FnDecl)
+	if !ok || fn.Name != "sum" || fn.Receiver == nil || fn.Package != "main" {
+		t.Errorf("fifth decl should be receiver method 'sum', got: %T", prog.Decls[4])
 	}
 }
 
 func TestTypechecker_TypeMismatch(t *testing.T) {
 	source := `
+package main
+
 fn main() {
     let x: i32 = "hello"
 }
@@ -148,6 +157,8 @@ fn main() {
 
 func TestTypechecker_AffineMoveSemantics(t *testing.T) {
 	source := `
+package main
+
 fn main() {
     let a = "resource"
     let b = a
@@ -170,6 +181,8 @@ fn main() {
 
 func TestTypechecker_ImmutableReassignment(t *testing.T) {
 	source := `
+package main
+
 fn main() {
     let x = 10
     x = 20
@@ -191,6 +204,8 @@ fn main() {
 
 func TestTypechecker_ArenaUpwardInvariant(t *testing.T) {
 	source := `
+package main
+
 fn main() {
     let mut outer = []i32{}
     arena {

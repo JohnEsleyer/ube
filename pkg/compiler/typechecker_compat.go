@@ -219,8 +219,8 @@ func (tc *Typechecker) validateType(t UbeType, loc SourceLocation) error {
 		return nil
 	case TraitType:
 		if meta, ok := tc.Global.TraitMeta[v.Name]; ok {
-			if loc.File != "" && meta.File != "" && loc.File != meta.File && !meta.IsPub {
-				return fmt.Errorf("[%s] cannot access private trait '%s'", loc, v.Name)
+			if tc.Global.CurModule != "" && meta.Package != "" && meta.Package != tc.Global.CurModule && !meta.IsPub {
+				return fmt.Errorf("[%s] cannot access unexported trait '%s' from package '%s'", loc, v.Name, meta.Package)
 			}
 		}
 		if _, ok := tc.Global.Traits[v.Name]; !ok {
@@ -272,18 +272,18 @@ func (tc *Typechecker) validateType(t UbeType, loc SourceLocation) error {
 		return nil
 	case CustomType:
 		if meta, ok := tc.Global.StructMeta[v.Name]; ok {
-			if loc.File != "" && meta.File != "" && loc.File != meta.File && !meta.IsPub {
-				return fmt.Errorf("[%s] cannot access private struct '%s'", loc, v.Name)
+			if tc.Global.CurModule != "" && meta.Package != "" && meta.Package != tc.Global.CurModule && !meta.IsPub {
+				return fmt.Errorf("[%s] cannot access unexported struct '%s' from package '%s'", loc, v.Name, meta.Package)
 			}
 		}
 		if meta, ok := tc.Global.EnumMeta[v.Name]; ok {
-			if loc.File != "" && meta.File != "" && loc.File != meta.File && !meta.IsPub {
-				return fmt.Errorf("[%s] cannot access private enum '%s'", loc, v.Name)
+			if tc.Global.CurModule != "" && meta.Package != "" && meta.Package != tc.Global.CurModule && !meta.IsPub {
+				return fmt.Errorf("[%s] cannot access unexported enum '%s' from package '%s'", loc, v.Name, meta.Package)
 			}
 		}
 		if meta, ok := tc.Global.TraitMeta[v.Name]; ok {
-			if loc.File != "" && meta.File != "" && loc.File != meta.File && !meta.IsPub {
-				return fmt.Errorf("[%s] cannot access private trait '%s'", loc, v.Name)
+			if tc.Global.CurModule != "" && meta.Package != "" && meta.Package != tc.Global.CurModule && !meta.IsPub {
+				return fmt.Errorf("[%s] cannot access unexported trait '%s' from package '%s'", loc, v.Name, meta.Package)
 			}
 		}
 		return nil

@@ -1,3 +1,5 @@
+package main
+
 struct Enemy{
     id: i32,
     hp: i32

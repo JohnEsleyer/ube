@@ -8,13 +8,17 @@ import (
 )
 
 func TestFormatter_BasicIndentation(t *testing.T) {
-	input := `fn main() {
+	input := `package main
+
+fn main() {
 let x = 10
 if x > 5 {
 println(x)
 }
 }`
-	expected := `fn main() {
+	expected := `package main
+
+fn main() {
     let x = 10
     if x > 5 {
         println(x)
@@ -32,7 +36,9 @@ println(x)
 }
 
 func TestFormatter_StructFieldAlignment(t *testing.T) {
-	input := `struct Player {
+	input := `package main
+
+struct Player {
 name: string
 level: i32
 health: i32
@@ -56,7 +62,9 @@ health: i32
 }
 
 func TestFormatter_OperatorSpacing(t *testing.T) {
-	input := `fn calc() -> i32 {
+	input := `package main
+
+fn calc() -> i32 {
     let a=1+2*3
     return a
 }`
@@ -70,7 +78,9 @@ func TestFormatter_OperatorSpacing(t *testing.T) {
 }
 
 func TestFormatter_SyntaxErrorRejection(t *testing.T) {
-	broken := `fn broken( {`
+	broken := `package main
+
+fn broken( {`
 	_, err := formatter.Format("test.ube", broken)
 	if err == nil {
 		t.Fatal("expected syntax error when formatting invalid source, got nil")

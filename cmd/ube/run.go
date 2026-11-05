@@ -5,21 +5,30 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/JohnEsleyer/ube/pkg/compiler"
 )
 
 func run(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: ube run <file.ube> [program args...]")
+	target := "."
+	programArgs := args
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		target = args[0]
+		programArgs = args[1:]
 	}
-	fileName := filepath.Base(args[0])
+
+	fileName := targetLabel(target)
 	stopAnim := startSpinner("compiling " + fileName + "...")
 	start := time.Now()
 
-	ast, _, err := loadAndCheck(args[0])
+	ast, _, err := loadAndCheck(target)
 	if err != nil {
+		stopAnim()
+		return err
+	}
+	if err := requireExecutablePackage(ast); err != nil {
 		stopAnim()
 		return err
 	}
@@ -45,9 +54,9 @@ func run(args []string) error {
 	fmt.Printf("%s %s %s\n", paint("◆", colorPurpleBold), paint("Compiled", colorPurple), paint(fmt.Sprintf("%s (%s)", fileName, elapsed), colorDim))
 
 	// Run in-process via embedded Wasmtime (Cranelift JIT).
-	if runErr := runWasmtimeInProcess(wasmPath, args[1:]); runErr != nil {
+	if runErr := runWasmtimeInProcess(wasmPath, programArgs); runErr != nil {
 		// In-process execution failed; fall back to an external runtime or native binary.
-		if cmd, cmdErr := wasmRuntimeCommand(wasmPath, args[1:]); cmdErr == nil {
+		if cmd, cmdErr := wasmRuntimeCommand(wasmPath, programArgs); cmdErr == nil {
 			cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 			if execErr := cmd.Run(); execErr != nil {
 				if e, ok := execErr.(*exec.ExitError); ok {

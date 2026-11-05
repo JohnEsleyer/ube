@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -140,7 +139,8 @@ func loadAndCheck(file string) (*compiler.Program, purityReport, error) {
 }
 
 func check(args []string) error {
-	formatJSON, strict, file := false, false, ""
+	formatJSON, strict, file := false, false, "."
+	targetSet := false
 	for _, arg := range args {
 		switch arg {
 		case "--format=json":
@@ -151,14 +151,12 @@ func check(args []string) error {
 			if strings.HasPrefix(arg, "-") {
 				return fmt.Errorf("unknown check option %s", arg)
 			}
-			if file != "" {
-				return fmt.Errorf("check accepts one source file")
+			if targetSet {
+				return fmt.Errorf("check accepts one package directory or source file")
 			}
 			file = arg
+			targetSet = true
 		}
-	}
-	if file == "" {
-		return fmt.Errorf("usage: ube check <file.ube> [--strict] [--format=json]")
 	}
 	start := time.Now()
 	_, report, err := loadAndCheck(file)
@@ -173,7 +171,7 @@ func check(args []string) error {
 		printSafetyJSON(reportJSON(file, report, true, policyName(strict), ""))
 		return nil
 	}
-	fmt.Printf("%s %s (%s)\n", paint("✓ Checked", colorGreen), filepath.Base(file), paint(time.Since(start).Round(time.Millisecond).String(), colorDim))
+	fmt.Printf("%s %s (%s)\n", paint("✓ Checked", colorGreen), targetLabel(file), paint(time.Since(start).Round(time.Millisecond).String(), colorDim))
 	printPurity(report)
 	return nil
 }

@@ -60,7 +60,22 @@ func (p *Parser) expect(t TokenType, msg string) Token {
 
 func (p *Parser) ParseProgram() (*Program, error) {
 	loc := p.peek(0).Loc
-	var decls []Decl
+	if !p.check(TokenPackage) {
+		found := p.peek(0)
+		foundText := found.Val
+		if found.Type == TokenEOF {
+			foundText = "end of file"
+		} else if foundText == "" {
+			foundText = string(found.Type)
+		}
+		return nil, fmt.Errorf("[%s] Syntax Error: expected 'package <name>' at beginning of file, found '%s'", loc, foundText)
+	}
+
+	pkgLoc := p.advance().Loc
+	pkgName := p.expect(TokenIdent, "Expected package name after 'package'").Val
+	pkgDecl := &PackageDecl{At: pkgLoc, Name: pkgName}
+
+	decls := []Decl{pkgDecl}
 	for !p.check(TokenEOF) {
 		before := p.pos
 		d, perr := p.parseDeclSafe()
@@ -68,6 +83,7 @@ func (p *Parser) ParseProgram() (*Program, error) {
 			p.errors = append(p.errors, *perr)
 			p.synchronizeDecl()
 		} else if d != nil {
+			setDeclPackage(d, pkgName)
 			decls = append(decls, d)
 		}
 		if p.pos == before && !p.check(TokenEOF) {
@@ -81,13 +97,34 @@ func (p *Parser) ParseProgram() (*Program, error) {
 		}
 		return nil, fmt.Errorf("%s", strings.Join(msgs, "\n"))
 	}
-	return &Program{At: loc, Decls: decls}, nil
+	return &Program{
+		At:            loc,
+		Package:       pkgName,
+		Decls:         decls,
+		ModuleAliases: map[string]string{},
+		EntryModule:   pkgName,
+	}, nil
+}
+
+func setDeclPackage(d Decl, pkg string) {
+	switch decl := d.(type) {
+	case *StructDecl:
+		decl.Package = pkg
+	case *EnumDecl:
+		decl.Package = pkg
+	case *TraitDecl:
+		decl.Package = pkg
+	case *FnDecl:
+		decl.Package = pkg
+	case *ExternFnDecl:
+		decl.Package = pkg
+	}
 }
 
 func (p *Parser) synchronizeDecl() {
 	for !p.check(TokenEOF) {
 		switch p.peek(0).Type {
-		case TokenPub, TokenFn, TokenStruct, TokenEnum, TokenExtern, TokenImport, TokenTrait:
+		case TokenPackage, TokenPub, TokenFn, TokenStruct, TokenEnum, TokenExtern, TokenImport, TokenTrait:
 			return
 		}
 		p.advance()
@@ -117,6 +154,9 @@ func (p *Parser) parseDecl() Decl {
 
 	tok := p.peek(0)
 	switch tok.Type {
+	case TokenPackage:
+		p.errorAt(tok.Loc, "multiple package declarations or misplaced 'package' clause; 'package' must appear exactly once on the first line")
+		return nil
 	case TokenImport:
 		if isPub {
 			p.errorAt(tok.Loc, "'pub' cannot be applied to 'import'")

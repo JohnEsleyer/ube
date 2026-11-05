@@ -1,3 +1,5 @@
+package main
+
 // Optional return (value or null)
 fn find_user(id: i32) -> string? {
     if id == 1 {

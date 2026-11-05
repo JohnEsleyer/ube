@@ -1,3 +1,5 @@
+package main
+
 
 pub struct Player {
     pub name: string

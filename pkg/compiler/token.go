@@ -14,6 +14,7 @@ const (
 	TokenNone   TokenType = "NONE"
 
 	// Keywords
+	TokenPackage  TokenType = "package"
 	TokenPub      TokenType = "pub"
 	TokenFn       TokenType = "fn"
 	TokenLet      TokenType = "let"

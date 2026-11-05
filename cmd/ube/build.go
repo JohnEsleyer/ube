@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,11 +16,10 @@ func build(args []string) error {
 	}
 
 	if output == "" {
-		base := strings.TrimSuffix(filepath.Base(file), filepath.Ext(file))
-		output = base + ".wasm"
+		output = defaultWasmOutput(file)
 	}
 
-	fileName := filepath.Base(file)
+	fileName := targetLabel(file)
 	stopAnim := startSpinner("compiling " + fileName + "...")
 	start := time.Now()
 
@@ -31,6 +29,10 @@ func build(args []string) error {
 		if ai {
 			return fmt.Errorf("%s", formatDiagnosticAI(err))
 		}
+		return err
+	}
+	if err := requireExecutablePackage(ast); err != nil {
+		stopAnim()
 		return err
 	}
 
@@ -53,10 +55,8 @@ func build(args []string) error {
 }
 
 func parseBuildArgs(args []string) (file, output string, ai bool, err error) {
-	if len(args) == 0 {
-		return "", "", false, fmt.Errorf("usage: ube build <file.ube> [-o app.wasm]")
-	}
-	file = ""
+	file = "."
+	targetSet := false
 	output = ""
 	for i := 0; i < len(args); i++ {
 		switch {
@@ -75,14 +75,12 @@ func parseBuildArgs(args []string) (file, output string, ai bool, err error) {
 		case strings.HasPrefix(args[i], "-"):
 			return "", "", false, fmt.Errorf("unknown or unsupported build option %s", args[i])
 		default:
-			if file != "" {
-				return "", "", false, fmt.Errorf("multiple source files are not supported")
+			if targetSet {
+				return "", "", false, fmt.Errorf("build accepts one package directory or source file")
 			}
 			file = args[i]
+			targetSet = true
 		}
-	}
-	if file == "" {
-		return "", "", false, fmt.Errorf("specify a .ube source file")
 	}
 	return file, output, ai, nil
 }

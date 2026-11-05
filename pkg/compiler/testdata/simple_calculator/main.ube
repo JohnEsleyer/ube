@@ -1,3 +1,5 @@
+package main
+
 // File: _playground/simple_calculator/main.ube
 import "std/io"
 import "std/math"

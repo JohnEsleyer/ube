@@ -7,10 +7,12 @@ import (
 )
 
 func TestLSP_CompletionKeywords(t *testing.T) {
-	source := `fn main() {
+	source := `package main
+
+fn main() {
     l
 }`
-	items := CompletionItems(source, lspPosition{Line: 1, Character: 5})
+	items := CompletionItems(source, lspPosition{Line: 2, Character: 5})
 	if len(items) == 0 {
 		t.Fatal("expected completions, got empty list")
 	}
@@ -28,11 +30,13 @@ func TestLSP_CompletionKeywords(t *testing.T) {
 }
 
 func TestLSP_CompletionMemberDot(t *testing.T) {
-	source := `fn main() {
+	source := `package main
+
+fn main() {
     let mut s = []i32{}
     s.
 }`
-	items := CompletionItems(source, lspPosition{Line: 2, Character: 6})
+	items := CompletionItems(source, lspPosition{Line: 4, Character: 6})
 	foundPush := false
 	foundPop := false
 	for _, item := range items {
@@ -51,10 +55,12 @@ func TestLSP_CompletionMemberDot(t *testing.T) {
 }
 
 func TestLSP_HoverBuiltin(t *testing.T) {
-	source := `fn main() {
+	source := `package main
+
+fn main() {
     println("hello")
 }`
-	res := Hover("file:///main.ube", source, lspPosition{Line: 1, Character: 6})
+	res := Hover("file:///main.ube", source, lspPosition{Line: 3, Character: 6})
 	if res == nil {
 		t.Fatal("expected hover info for 'println', got nil")
 	}
@@ -69,7 +75,9 @@ func TestLSP_HoverBuiltin(t *testing.T) {
 }
 
 func TestLSP_DocumentSymbols(t *testing.T) {
-	source := `struct Point {
+	source := `package main
+
+struct Point {
     x: i32,
     y: i32
 }
@@ -96,14 +104,16 @@ fn add(a: i32, b: i32) -> i32 {
 }
 
 func TestLSP_Definition(t *testing.T) {
-	source := `fn greet() {
+	source := `package main
+
+fn greet() {
     println("hi")
 }
 
 fn main() {
     greet()
 }`
-	def := Definition("file:///main.ube", source, lspPosition{Line: 5, Character: 6})
+	def := Definition("file:///main.ube", source, lspPosition{Line: 7, Character: 6})
 	if def == nil {
 		t.Fatal("expected definition location for 'greet', got nil")
 	}
@@ -113,7 +123,7 @@ fn main() {
 	}
 	rangeMap := m["range"].(map[string]any)
 	start := rangeMap["start"].(map[string]int)
-	if start["line"] != 0 {
-		t.Errorf("expected definition line 0, got %d", start["line"])
+	if start["line"] != 2 {
+		t.Errorf("expected definition line 2, got %d", start["line"])
 	}
 }

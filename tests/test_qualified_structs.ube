@@ -1,4 +1,6 @@
-import "./helpers/geometry" as geo
+package main
+
+import "./helpers" as geo
 
 fn test_qualified_struct_instantiation() {
     let p = geo.Point{ x: 10, y: 25 }

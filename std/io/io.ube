@@ -1,3 +1,5 @@
+package io
+
 // File: std/io/io.ube
 
 // Ube standard library: input/output primitives and stream utilities.

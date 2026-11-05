@@ -14,6 +14,8 @@ import (
 // as a struct initialization instead of a plain member expression.
 func TestParser_QualifiedStructLiteral(t *testing.T) {
 	src := `
+package main
+
 fn main() {
     let s = mh.Stats{ min: 5, max: 25, count: 10 }
 }
@@ -30,11 +32,11 @@ fn main() {
 		t.Fatalf("unexpected parse error: %v", err)
 	}
 
-	if len(prog.Decls) == 0 {
-		t.Fatal("expected at least 1 declaration")
+	if len(prog.Decls) < 2 {
+		t.Fatal("expected a package declaration and a main function")
 	}
 
-	fnDecl, ok := prog.Decls[0].(*compiler.FnDecl)
+	fnDecl, ok := prog.Decls[1].(*compiler.FnDecl)
 	if !ok || fnDecl.Body == nil || len(fnDecl.Body.Stmts) == 0 {
 		t.Fatal("expected main function with body statements")
 	}
@@ -101,7 +103,8 @@ func TestWasmEmit_NoPanicOnUntypedMember(t *testing.T) {
 func TestEndToEnd_QualifiedStructModules(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	mathHelperSrc := `
+	mathHelperSrc := `package math_helpers
+
 pub struct Stats {
     pub min: i32,
     pub max: i32,
@@ -112,7 +115,8 @@ pub fn (s Stats) range() -> i32 {
     return s.max - s.min
 }
 `
-	mainSrc := `
+	mainSrc := `package main
+
 import "./math_helpers" as mh
 
 fn main() {
@@ -122,7 +126,11 @@ fn main() {
 }
 `
 
-	err := os.WriteFile(filepath.Join(tmpDir, "math_helpers.ube"), []byte(mathHelperSrc), 0644)
+	helperDir := filepath.Join(tmpDir, "math_helpers")
+	if err := os.MkdirAll(helperDir, 0755); err != nil {
+		t.Fatalf("failed to create helper package directory: %v", err)
+	}
+	err := os.WriteFile(filepath.Join(helperDir, "stats.ube"), []byte(mathHelperSrc), 0644)
 	if err != nil {
 		t.Fatalf("failed to write helper file: %v", err)
 	}

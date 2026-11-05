@@ -1,3 +1,5 @@
+package collections
+
 // File: std/collections/collections.ube
 
 // Ube standard library: slice-backed collections.

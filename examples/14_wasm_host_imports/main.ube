@@ -1,3 +1,5 @@
+package main
+
 // WebAssembly Host Environment Imports (Wasm Host Functions / WASI)
 extern fn abs(n: i32) -> i32
 extern fn sinf(rad: f32) -> f32

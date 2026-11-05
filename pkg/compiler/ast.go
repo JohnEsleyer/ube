@@ -46,12 +46,22 @@ type Decl interface {
 
 type Program struct {
 	At            SourceLocation
+	Package       string // declared package name (e.g. "main", "math")
 	Decls         []Decl
-	ModuleAliases map[string]string // local alias -> canonical module name
-	EntryModule   string            // canonical module name of the entry file
+	ModuleAliases map[string]string // local alias -> canonical package name
+	EntryModule   string            // declared package name of the entry file
 }
 
 func (p *Program) Loc() SourceLocation { return p.At }
+
+// PackageDecl is the mandatory first declaration in every .ube file.
+type PackageDecl struct {
+	At   SourceLocation
+	Name string
+}
+
+func (d *PackageDecl) Loc() SourceLocation { return d.At }
+func (d *PackageDecl) declNode()           {}
 
 type ImportDecl struct {
 	At    SourceLocation
@@ -79,6 +89,7 @@ type FieldDecl struct {
 type StructDecl struct {
 	At         SourceLocation
 	Name       string
+	Package    string
 	IsPub      bool
 	TypeParams []TypeParam
 	Fields     []FieldDecl
@@ -95,6 +106,7 @@ type VariantDecl struct {
 type EnumDecl struct {
 	At       SourceLocation
 	Name     string
+	Package  string
 	IsPub    bool
 	Variants []VariantDecl
 }
@@ -112,6 +124,7 @@ type TraitMethodDecl struct {
 type TraitDecl struct {
 	At          SourceLocation
 	Name        string
+	Package     string
 	IsPub       bool
 	Supertraits []string
 	Methods     []TraitMethodDecl
@@ -123,6 +136,7 @@ func (d *TraitDecl) declNode()           {}
 type FnDecl struct {
 	At         SourceLocation
 	Name       string
+	Package    string
 	IsPub      bool
 	TypeParams []TypeParam
 	Receiver   *FieldDecl
@@ -137,6 +151,7 @@ func (d *FnDecl) declNode()           {}
 type ExternFnDecl struct {
 	At      SourceLocation
 	Name    string
+	Package string
 	Module  string
 	IsPub   bool
 	Params  []FieldDecl

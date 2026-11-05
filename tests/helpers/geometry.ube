@@ -1,3 +1,5 @@
+package geometry
+
 // Helper module defining structs, value receivers, and mutable receivers
 pub struct Point {
     pub x: i32,

@@ -22,25 +22,25 @@ type FuncSignature struct {
 	Escaping    []bool
 	ReceiverMut bool
 	IsPub       bool
-	File        string
+	Package     string
 }
 
 type StructMeta struct {
-	Fields []FieldDecl
-	IsPub  bool
-	File   string
+	Fields  []FieldDecl
+	IsPub   bool
+	Package string
 }
 
 type EnumMeta struct {
 	Variants []VariantDecl
 	IsPub    bool
-	File     string
+	Package  string
 }
 
 type TraitMeta struct {
-	Trait *TraitDecl
-	IsPub bool
-	File  string
+	Trait   *TraitDecl
+	IsPub   bool
+	Package string
 }
 
 type TypeEnvironment struct {
@@ -53,7 +53,6 @@ type TypeEnvironment struct {
 	Traits     map[string]*TraitDecl
 	TraitMeta  map[string]TraitMeta
 	Funcs      map[string]FuncSignature
-	CurFile    string
 	CurModule  string
 	CurRet     UbeType
 	LoopDepth  int
@@ -82,7 +81,6 @@ func childTypeEnvironment(parent *TypeEnvironment) *TypeEnvironment {
 		env.Enums = parent.Enums
 		env.EnumMeta = parent.EnumMeta
 		env.Funcs = parent.Funcs
-		env.CurFile = parent.CurFile
 		env.CurModule = parent.CurModule
 		env.CurRet = parent.CurRet
 		env.LoopDepth = parent.LoopDepth
@@ -385,17 +383,31 @@ func (tc *Typechecker) Check(prog *Program) error {
 		return err
 	}
 
+	declPackage := func(pkg string) string {
+		if pkg != "" {
+			return pkg
+		}
+		return prog.EntryModule
+	}
+	validateInPackage := func(t UbeType, loc SourceLocation, pkg string) error {
+		prev := tc.Global.CurModule
+		tc.Global.CurModule = declPackage(pkg)
+		err := tc.validateType(t, loc)
+		tc.Global.CurModule = prev
+		return err
+	}
+
 	for _, decl := range prog.Decls {
 		switch d := decl.(type) {
 		case *StructDecl:
 			tc.Global.Structs[d.Name] = d.Fields
-			tc.Global.StructMeta[d.Name] = StructMeta{Fields: d.Fields, IsPub: d.IsPub, File: d.At.File}
+			tc.Global.StructMeta[d.Name] = StructMeta{Fields: d.Fields, IsPub: d.IsPub, Package: d.Package}
 		case *EnumDecl:
 			tc.Global.Enums[d.Name] = d.Variants
-			tc.Global.EnumMeta[d.Name] = EnumMeta{Variants: d.Variants, IsPub: d.IsPub, File: d.At.File}
+			tc.Global.EnumMeta[d.Name] = EnumMeta{Variants: d.Variants, IsPub: d.IsPub, Package: d.Package}
 		case *TraitDecl:
 			tc.Global.Traits[d.Name] = d
-			tc.Global.TraitMeta[d.Name] = TraitMeta{Trait: d, IsPub: d.IsPub, File: d.At.File}
+			tc.Global.TraitMeta[d.Name] = TraitMeta{Trait: d, IsPub: d.IsPub, Package: d.Package}
 		}
 	}
 
@@ -403,14 +415,14 @@ func (tc *Typechecker) Check(prog *Program) error {
 		switch d := decl.(type) {
 		case *StructDecl:
 			for _, f := range d.Fields {
-				if err := tc.validateType(f.Type, d.At); err != nil {
+				if err := validateInPackage(f.Type, d.At, d.Package); err != nil {
 					return err
 				}
 			}
 		case *EnumDecl:
 			for _, v := range d.Variants {
 				for _, vt := range v.Types {
-					if err := tc.validateType(vt, d.At); err != nil {
+					if err := validateInPackage(vt, d.At, d.Package); err != nil {
 						return err
 					}
 				}
@@ -418,11 +430,11 @@ func (tc *Typechecker) Check(prog *Program) error {
 		case *TraitDecl:
 			for _, m := range d.Methods {
 				for _, p := range m.Params {
-					if err := tc.validateType(p.Type, m.At); err != nil {
+					if err := validateInPackage(p.Type, m.At, d.Package); err != nil {
 						return err
 					}
 				}
-				if err := tc.validateType(m.RetType, m.At); err != nil {
+				if err := validateInPackage(m.RetType, m.At, d.Package); err != nil {
 					return err
 				}
 			}
@@ -433,16 +445,16 @@ func (tc *Typechecker) Check(prog *Program) error {
 		switch d := decl.(type) {
 		case *FnDecl:
 			if d.Receiver != nil {
-				if err := tc.validateType(d.Receiver.Type, d.At); err != nil {
+				if err := validateInPackage(d.Receiver.Type, d.At, d.Package); err != nil {
 					return err
 				}
 			}
 			for _, p := range d.Params {
-				if err := tc.validateType(p.Type, d.At); err != nil {
+				if err := validateInPackage(p.Type, d.At, d.Package); err != nil {
 					return err
 				}
 			}
-			if err := tc.validateType(d.RetType, d.At); err != nil {
+			if err := validateInPackage(d.RetType, d.At, d.Package); err != nil {
 				return err
 			}
 
@@ -455,18 +467,18 @@ func (tc *Typechecker) Check(prog *Program) error {
 				RetType:     d.RetType,
 				ReceiverMut: d.Receiver != nil && d.Receiver.IsMut,
 				IsPub:       d.IsPub,
-				File:        d.At.File,
+				Package:     d.Package,
 			}
 		case *ExternFnDecl:
 			for _, p := range d.Params {
-				if err := tc.validateType(p.Type, d.At); err != nil {
+				if err := validateInPackage(p.Type, d.At, d.Package); err != nil {
 					return err
 				}
 			}
-			if err := tc.validateType(d.RetType, d.At); err != nil {
+			if err := validateInPackage(d.RetType, d.At, d.Package); err != nil {
 				return err
 			}
-			tc.Global.Funcs[d.Name] = FuncSignature{Params: d.Params, RetType: d.RetType, IsPub: d.IsPub, File: d.At.File}
+			tc.Global.Funcs[d.Name] = FuncSignature{Params: d.Params, RetType: d.RetType, IsPub: d.IsPub, Package: d.Package}
 			tc.Externs[d.Name] = true
 		}
 	}
@@ -476,8 +488,10 @@ func (tc *Typechecker) Check(prog *Program) error {
 	for _, decl := range prog.Decls {
 		if fn, ok := decl.(*FnDecl); ok {
 			env := NewTypeEnvironment(tc.Global)
-			env.CurFile = fn.At.File
-			env.CurModule = tc.moduleOfFn(fn)
+			env.CurModule = fn.Package
+			if env.CurModule == "" {
+				env.CurModule = tc.moduleOfFn(fn)
+			}
 			env.CurRet = fn.RetType
 			env.ScopeDepth = 0
 			if fn.Receiver != nil {
