@@ -8,7 +8,13 @@ import "bytes"
 // staticDataOff (64).
 const (
 	scratchOpenedFd = 48
-	scratchSeekPos  = 52
+	// WASI fd_seek writes a u64 filesize to this out-pointer. Wasmtime
+	// requires that pointer to be 8-byte aligned. 52 is not (52%8=4),
+	// which produced "Pointer not aligned to 8: Region { start: 52,
+	// len: 8 }" on every seek. Use the next free 8-aligned slot after
+	// scratchOpenedFd; scratchCiovec (0..8), scratchNwrite (8..12),
+	// scratchItoa (16..48) and scratchOpenedFd (48..52) are unchanged.
+	scratchSeekPos = 56
 )
 
 func (e *wasmEmitter) registerWasiImport(name string, params []byte, results []byte) uint32 {
