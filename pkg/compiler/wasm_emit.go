@@ -3832,19 +3832,109 @@ func (e *wasmEmitter) buildStartFunc(mainIdx uint32) []byte {
 			}
 		}
 	}
+	// _start must consume main's return value (its own type is () -> ()).
+	// A ResultType return is a single i32 pointer to a {tag, payload}
+	// header. For main -> T ! string with tag == 0 (error), the payload at
+	// offset 4 is an i32 pointer to the error's string header {ptr, len}.
+	// Print it to fd 2 so a ? failure in main is no longer silent.
+	if res, isRes := mainRet.(ResultType); isRes {
+		if _, errIsStr := res.Err.(StringType); errIsStr {
+			body.WriteByte(0x21)
+			writeUleb128(&body, 0)
+
+			body.WriteByte(0x20)
+			writeUleb128(&body, 0)
+			body.WriteByte(0x28)
+			writeUleb128(&body, 2)
+			writeUleb128(&body, 0)
+			body.WriteByte(0x45)
+			body.WriteByte(0x04)
+			body.WriteByte(valTypeVoid)
+
+			body.WriteByte(0x41)
+			writeSleb128(&body, scratchCiovec)
+			body.WriteByte(0x20)
+			writeUleb128(&body, 0)
+			body.WriteByte(0x28)
+			writeUleb128(&body, 2)
+			writeUleb128(&body, 4)
+			body.WriteByte(0x28)
+			writeUleb128(&body, 2)
+			writeUleb128(&body, 0)
+			body.WriteByte(0x36)
+			writeUleb128(&body, 2)
+			writeUleb128(&body, 0)
+
+			body.WriteByte(0x41)
+			writeSleb128(&body, scratchCiovec+4)
+			body.WriteByte(0x20)
+			writeUleb128(&body, 0)
+			body.WriteByte(0x28)
+			writeUleb128(&body, 2)
+			writeUleb128(&body, 4)
+			body.WriteByte(0x28)
+			writeUleb128(&body, 2)
+			writeUleb128(&body, 4)
+			body.WriteByte(0x36)
+			writeUleb128(&body, 2)
+			writeUleb128(&body, 0)
+
+			body.WriteByte(0x41)
+			writeSleb128(&body, 2)
+			body.WriteByte(0x41)
+			writeSleb128(&body, scratchCiovec)
+			body.WriteByte(0x41)
+			writeSleb128(&body, 1)
+			body.WriteByte(0x41)
+			writeSleb128(&body, scratchNwrite)
+			body.WriteByte(0x10)
+			writeUleb128(&body, e.fdWriteIdx)
+			body.WriteByte(0x1a)
+
+			body.WriteByte(0x41)
+			writeSleb128(&body, scratchCiovec+48)
+			body.WriteByte(0x41)
+			writeSleb128(&body, 10)
+			body.WriteByte(0x3a)
+			writeUleb128(&body, 0)
+			writeUleb128(&body, 0)
+			body.WriteByte(0x41)
+			writeSleb128(&body, scratchCiovec)
+			body.WriteByte(0x41)
+			writeSleb128(&body, scratchCiovec+48)
+			body.WriteByte(0x36)
+			writeUleb128(&body, 2)
+			writeUleb128(&body, 0)
+			body.WriteByte(0x41)
+			writeSleb128(&body, scratchCiovec+4)
+			body.WriteByte(0x41)
+			writeSleb128(&body, 1)
+			body.WriteByte(0x36)
+			writeUleb128(&body, 2)
+			writeUleb128(&body, 0)
+			body.WriteByte(0x41)
+			writeSleb128(&body, 2)
+			body.WriteByte(0x41)
+			writeSleb128(&body, scratchCiovec)
+			body.WriteByte(0x41)
+			writeSleb128(&body, 1)
+			body.WriteByte(0x41)
+			writeSleb128(&body, scratchNwrite)
+			body.WriteByte(0x10)
+			writeUleb128(&body, e.fdWriteIdx)
+			body.WriteByte(0x1a)
+
+			body.WriteByte(0x0b)
+			body.WriteByte(0x0b)
+			return wrapStartWithLocals(body, 1)
+		}
+	}
+
 	if mainRet != nil && mainRet.String() != "void" {
 		body.WriteByte(0x1a) // drop
 	}
 	body.WriteByte(0x0b)
-
-	var codeBuf bytes.Buffer
-	writeUleb128(&codeBuf, 0)
-	codeBuf.Write(body.Bytes())
-
-	var fullBuf bytes.Buffer
-	writeUleb128(&fullBuf, uint32(codeBuf.Len()))
-	fullBuf.Write(codeBuf.Bytes())
-	return fullBuf.Bytes()
+	return wrapStartWithLocals(body, 0)
 }
 
 func (e *wasmEmitter) assembleBinary() ([]byte, error) {
@@ -3950,4 +4040,23 @@ func writeUleb128(buf *bytes.Buffer, val uint32) {
 
 func writeSleb128(buf *bytes.Buffer, val int32) {
 	buf.Write(wasm.AppendSleb128(nil, val))
+}
+
+// wrapStartWithLocals wraps a _start body with an i32 local declaration
+// group of nLocals entries and the code-section length prefix.
+func wrapStartWithLocals(body bytes.Buffer, nLocals uint32) []byte {
+	var codeBuf bytes.Buffer
+	if nLocals > 0 {
+		writeUleb128(&codeBuf, 1)
+		writeUleb128(&codeBuf, nLocals)
+		codeBuf.WriteByte(valTypeI32)
+	} else {
+		writeUleb128(&codeBuf, 0)
+	}
+	codeBuf.Write(body.Bytes())
+
+	var fullBuf bytes.Buffer
+	writeUleb128(&fullBuf, uint32(codeBuf.Len()))
+	fullBuf.Write(codeBuf.Bytes())
+	return fullBuf.Bytes()
 }
