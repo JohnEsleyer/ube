@@ -1545,6 +1545,44 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		writeUleb128(buf, uint32(offset))
 
 	case *SliceSubExpr:
+		// Determine element width and header size from the target type.
+		// A string is {ptr, len} = 8 bytes with byte elements (width 1).
+		// A []T is {ptr, len, cap} = 12 bytes with element width sizeof(T).
+		// For []T we currently assume 4-byte elements; this matches the
+		// ArrayInitExpr lowering and covers i32/f32/bool. Widen to 8 when
+		// i64/f64 element slices are added.
+		elemWidth := int32(1)
+		hdrSize := int32(8)
+		isSlice := false
+		if e.TargetType != nil {
+			switch tt := e.TargetType.(type) {
+			case StringType:
+				elemWidth = 1
+				hdrSize = 8
+				isSlice = false
+			case SliceType:
+				elemWidth = 4
+				hdrSize = 12
+				isSlice = true
+				if tt.Elem != nil {
+					switch tt.Elem.String() {
+					case "i64", "u64", "f64":
+						elemWidth = 8
+					}
+				}
+			case ArrayType:
+				elemWidth = 4
+				hdrSize = 12
+				isSlice = true
+				if tt.Elem != nil {
+					switch tt.Elem.String() {
+					case "i64", "u64", "f64":
+						elemWidth = 8
+					}
+				}
+			}
+		}
+
 		targetLocal := ctx.allocLocal(valTypeI32)
 		if err := ctx.compileExpr(buf, e.Target); err != nil {
 			return err
@@ -1567,8 +1605,9 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		writeUleb128(buf, endLocal)
 
 		hdrLocal := ctx.allocLocal(valTypeI32)
-		ctx.emitAlloc(buf, 12, hdrLocal)
+		ctx.emitAlloc(buf, hdrSize, hdrLocal)
 
+		// hdr[0] = target.ptr + start * elemWidth
 		buf.WriteByte(0x20)
 		writeUleb128(buf, hdrLocal)
 		buf.WriteByte(0x20)
@@ -1579,13 +1618,14 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		buf.WriteByte(0x20)
 		writeUleb128(buf, startLocal)
 		buf.WriteByte(0x41)
-		writeSleb128(buf, 4)
+		writeSleb128(buf, elemWidth)
 		buf.WriteByte(0x6c)
 		buf.WriteByte(0x6a)
 		buf.WriteByte(0x36)
 		writeUleb128(buf, 2)
 		writeUleb128(buf, 0)
 
+		// hdr[4] = end - start  (len)
 		buf.WriteByte(0x20)
 		writeUleb128(buf, hdrLocal)
 		buf.WriteByte(0x20)
@@ -1596,6 +1636,20 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		buf.WriteByte(0x36)
 		writeUleb128(buf, 2)
 		writeUleb128(buf, 4)
+
+		// For []T only: hdr[8] = cap = end - start
+		if isSlice {
+			buf.WriteByte(0x20)
+			writeUleb128(buf, hdrLocal)
+			buf.WriteByte(0x20)
+			writeUleb128(buf, endLocal)
+			buf.WriteByte(0x20)
+			writeUleb128(buf, startLocal)
+			buf.WriteByte(0x6b)
+			buf.WriteByte(0x36)
+			writeUleb128(buf, 2)
+			writeUleb128(buf, 8)
+		}
 
 		buf.WriteByte(0x20)
 		writeUleb128(buf, hdrLocal)
@@ -2532,6 +2586,22 @@ func (ctx *fnContext) inferExprType(expr Expr) string {
 			if meta, ok := ctx.emitter.structs[e.TargetType.String()]; ok {
 				if ft, ok := meta.fieldTypes[e.Member]; ok && ft != nil {
 					return ft.String()
+				}
+			}
+		}
+	case *SliceSubExpr:
+		if e.TargetType != nil {
+			switch e.TargetType.(type) {
+			case StringType:
+				return "string"
+			case SliceType:
+				return e.TargetType.String()
+			case ArrayType:
+				// [N]T coerces to []T; the caller wraps in ArrayToSliceExpr,
+				// so a bare ArrayType target here still means the result is
+				// a slice of the same element.
+				if at, ok := e.TargetType.(ArrayType); ok && at.Elem != nil {
+					return SliceType{Elem: at.Elem}.String()
 				}
 			}
 		}
