@@ -3818,6 +3818,23 @@ func (e *wasmEmitter) buildStartFunc(mainIdx uint32) []byte {
 
 	body.WriteByte(0x10)
 	writeUleb128(&body, mainIdx)
+	// Drop main's return value if it's non-void. A ResultType/OptionalType
+	// return compiles to a single i32 (pointer to a {tag, payload} header),
+	// so dropping one i32 is enough. _start itself returns ().
+	var mainRet UbeType
+	if rt, ok := e.fnReturns["main"]; ok {
+		mainRet = rt
+	} else {
+		for name, rt := range e.fnReturns {
+			if strings.HasSuffix(name, ".main") {
+				mainRet = rt
+				break
+			}
+		}
+	}
+	if mainRet != nil && mainRet.String() != "void" {
+		body.WriteByte(0x1a) // drop
+	}
 	body.WriteByte(0x0b)
 
 	var codeBuf bytes.Buffer
