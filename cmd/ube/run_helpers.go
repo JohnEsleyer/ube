@@ -42,7 +42,16 @@ func runWasmtimeInProcess(wasmPath string, args []string) error {
 	}
 	if start := instance.GetFunc(store, "_start"); start != nil {
 		_, err = start.Call(store)
-		return err
+		if err != nil {
+			if code, ok := wasiExitStatus(err); ok {
+				if code == 0 {
+					return nil
+				}
+				return exitCodeError{code}
+			}
+			return err
+		}
+		return nil
 	}
 	return nil
 }
@@ -80,12 +89,33 @@ func runWasmtimeCapture(wasmPath string, args []string) (string, error) {
 	var callErr error
 	if start := instance.GetFunc(store, "_start"); start != nil {
 		_, callErr = start.Call(store)
+		// Leave non-zero WASI exit traps in callErr so the `ube test`
+		// runner reports them per-test rather than aborting the whole
+		// run on the first failing test. A zero exit status is a clean
+		// return.
+		if callErr != nil {
+			if code, ok := wasiExitStatus(callErr); ok && code == 0 {
+				callErr = nil
+			}
+		}
 	}
 	out, readErr := os.ReadFile(outFile)
 	if readErr != nil {
 		return "", readErr
 	}
 	return string(out), callErr
+}
+
+// wasiExitStatus extracts the WASI exit code from a Wasmtime trap, if the
+// running Wasmtime binding exposes it. In wasmtime-go/v29 this is
+// Trap.ExitStatus(), which returns (int32, bool).
+func wasiExitStatus(err error) (int, bool) {
+	if e, ok := err.(*wasmtime.Error); ok {
+		if status, ok := e.ExitStatus(); ok {
+			return int(status), true
+		}
+	}
+	return 0, false
 }
 
 // wasmRuntimeCommand returns an external Wasm runtime command if one is

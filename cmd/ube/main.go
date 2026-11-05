@@ -46,7 +46,8 @@ func (e exitCodeError) Error() string { return fmt.Sprintf("program exited with 
 func main() {
 	if err := execute(os.Args[1:]); err != nil {
 		if e, ok := err.(exitCodeError); ok {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			// The diagnostic text (if any) was already written to fd 2
+			// by the generated _start function; do not duplicate it here.
 			os.Exit(e.code)
 		}
 		formatted := formatDiagnostic(err)

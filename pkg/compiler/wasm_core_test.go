@@ -377,6 +377,24 @@ fn main() {
 }
 
 func TestWasmCore_StringBuilder(t *testing.T) {
+	source := `
+package main
+
+fn main() {
+    let mut sb = StringBuilder.new(4)
+    sb.append_str("Ube")
+    sb.append_char(32)
+    sb.append_int(2026)
+    println(sb.to_string())
+}
+`
+	wasmBytes := compileToWasm(t, source)
+	out := runWasm(t, wasmBytes)
+	if out != "" && out != "Ube 2026" {
+		t.Errorf("expected 'Ube 2026', got '%s'", out)
+	}
+}
+
 func TestWasmCore_MethodReceiverEvaluatedOnce(t *testing.T) {
 	// Uses a mut-param method with a side effect and an aggregate receiver,
 	// which is the exact shape reported in problems_list1 item 1.
@@ -448,22 +466,5 @@ fn main() -> i32 ! string {
 	}
 	if !strings.Contains(stderr.String(), "fatal boot error") {
 		t.Errorf("expected 'fatal boot error' in stderr, got: %s", stderr.String())
-	}
-}
-	source := `
-package main
-
-fn main() {
-    let mut sb = StringBuilder.new(4)
-    sb.append_str("Ube")
-    sb.append_char(32)
-    sb.append_int(2026)
-    println(sb.to_string())
-}
-`
-	wasmBytes := compileToWasm(t, source)
-	out := runWasm(t, wasmBytes)
-	if out != "" && out != "Ube 2026" {
-		t.Errorf("expected 'Ube 2026', got '%s'", out)
 	}
 }

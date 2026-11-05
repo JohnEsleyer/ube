@@ -177,8 +177,7 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 
 	// Additional WASI preview1 imports used by std/fs and std/io. Registering
 	// them up-front keeps the emitter's raw syscall intrinsics simple.
-	e.registerWasiImport(
-e.registerWasiImport("proc_exit", []byte{valTypeI32}, []byte{})"fd_read", []byte{valTypeI32, valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
+	e.registerWasiImport("fd_read", []byte{valTypeI32, valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
 	e.registerWasiImport("fd_close", []byte{valTypeI32}, []byte{valTypeI32})
 	e.registerWasiImport("fd_sync", []byte{valTypeI32}, []byte{valTypeI32})
 	e.registerWasiImport("fd_seek", []byte{valTypeI32, valTypeI64, valTypeI32, valTypeI32}, []byte{valTypeI32})
@@ -188,6 +187,7 @@ e.registerWasiImport("proc_exit", []byte{valTypeI32}, []byte{})"fd_read", []byte
 	e.registerWasiImport("path_unlink_file", []byte{valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
 	e.registerWasiImport("path_remove_directory", []byte{valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
 	e.registerWasiImport("path_filestat_get", []byte{valTypeI32, valTypeI32, valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
+	e.registerWasiImport("proc_exit", []byte{valTypeI32}, []byte{})
 
 	// Register user host imports (extern fn)
 	for _, decl := range prog.Decls {
