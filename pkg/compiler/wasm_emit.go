@@ -671,9 +671,14 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		}
 
 	case *ReturnStmt:
-		for i := len(ctx.defers) - 1; i >= 0; i-- {
-			_ = ctx.compileDeferredCall(buf, ctx.defers[i])
-		}
+		// Evaluate the return expression FIRST, while the state it reads
+		// (open file descriptor, live arena slice, etc.) is still valid.
+		// Then run the deferred calls, then emit return. Defers must run
+		// at true scope exit, AFTER the return value is computed — not
+		// before, as this case previously did. The prior order caused
+		// `defer file.close(); return file.read_to_string()` to close
+		// the file before the read, so read_to_string always returned
+		// "attempt to read from closed file".
 		if s.Value != nil {
 			wrap := false
 			switch ctx.fn.RetType.(type) {
@@ -697,6 +702,10 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			} else if err := ctx.compileExpr(buf, s.Value); err != nil {
 				return err
 			}
+		}
+
+		for i := len(ctx.defers) - 1; i >= 0; i-- {
+			_ = ctx.compileDeferredCall(buf, ctx.defers[i])
 		}
 		buf.WriteByte(0x0f)
 
