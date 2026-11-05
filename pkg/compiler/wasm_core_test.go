@@ -377,6 +377,79 @@ fn main() {
 }
 
 func TestWasmCore_StringBuilder(t *testing.T) {
+func TestWasmCore_MethodReceiverEvaluatedOnce(t *testing.T) {
+	// Uses a mut-param method with a side effect and an aggregate receiver,
+	// which is the exact shape reported in problems_list1 item 1.
+	source := `
+package main
+
+struct Tracker {
+    calls: i32
+}
+
+fn (mut t Tracker) touch(mut buf: []i32) -> i32 {
+    t.calls += 1
+    return t.calls
+}
+
+fn main() {
+    let mut t = Tracker{ calls: 0 }
+    let mut buf = []i32{}
+    buf.push(1)
+    let r = t.touch(buf)
+    println(r)
+    println(t.calls)
+}
+`
+	wasmBytes := compileToWasm(t, source)
+	out := runWasm(t, wasmBytes)
+	if out != "" && out != "1\n1" {
+		t.Errorf("expected '1\\n1' (receiver evaluated once), got '%s'", out)
+	}
+}
+
+func TestWasmCore_ProcExitOnError(t *testing.T) {
+	source := `
+package main
+
+fn main() -> i32 ! string {
+    return error("fatal boot error")
+}
+`
+	wasmBytes := compileToWasm(t, source)
+
+	wasmtimePath, err := exec.LookPath("wasmtime")
+	if err != nil {
+		if home, hErr := os.UserHomeDir(); hErr == nil {
+			cand := filepath.Join(home, ".wasmtime", "bin", "wasmtime")
+			if info, sErr := os.Stat(cand); sErr == nil && !info.IsDir() {
+				wasmtimePath = cand
+				err = nil
+			}
+		}
+	}
+	if err != nil {
+		t.Skip("wasmtime not found on PATH")
+	}
+
+	tmpDir := t.TempDir()
+	wasmFile := filepath.Join(tmpDir, "out.wasm")
+	if err := os.WriteFile(wasmFile, wasmBytes, 0755); err != nil {
+		t.Fatalf("failed to write wasm file: %v", err)
+	}
+
+	cmd := exec.Command(wasmtimePath, wasmFile)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+	if runErr == nil {
+		t.Fatal("expected non-zero exit status for erroring main, got 0")
+	}
+	if !strings.Contains(stderr.String(), "fatal boot error") {
+		t.Errorf("expected 'fatal boot error' in stderr, got: %s", stderr.String())
+	}
+}
 	source := `
 package main
 

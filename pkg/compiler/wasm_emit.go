@@ -177,7 +177,8 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 
 	// Additional WASI preview1 imports used by std/fs and std/io. Registering
 	// them up-front keeps the emitter's raw syscall intrinsics simple.
-	e.registerWasiImport("fd_read", []byte{valTypeI32, valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
+	e.registerWasiImport(
+e.registerWasiImport("proc_exit", []byte{valTypeI32}, []byte{})"fd_read", []byte{valTypeI32, valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
 	e.registerWasiImport("fd_close", []byte{valTypeI32}, []byte{valTypeI32})
 	e.registerWasiImport("fd_sync", []byte{valTypeI32}, []byte{valTypeI32})
 	e.registerWasiImport("fd_seek", []byte{valTypeI32, valTypeI64, valTypeI32, valTypeI32}, []byte{valTypeI32})
@@ -2905,7 +2906,17 @@ func sliceElemInfo(elem UbeType) (width int32, loadOp, storeOp byte, align uint3
 	case "f64":
 		return 8, 0x2b, 0x39, 3 // f64.load, f64.store
 	default:
-		return 4, 0x28, 0x36, 2 // i32.load, i32.store
+		// Aggregate element: derive the true element width so that
+		// .resize growth, memory.copy, and capacity math are correct.
+		// NOTE: the load/store opcodes below are still scalar (4-byte).
+		// IndexExpr reads/writes of []Struct remain broken until a
+		// separate address-based indexing path lands; see
+		// _dev/problems/problems_list1.md item 5.
+		w := int32(elem.ByteSize())
+		if w <= 0 {
+			w = 4
+		}
+		return w, 0x28, 0x36, 2 // i32.load, i32.store
 	}
 }
 
@@ -3923,6 +3934,15 @@ func (e *wasmEmitter) buildStartFunc(mainIdx uint32) []byte {
 			body.WriteByte(0x10)
 			writeUleb128(&body, e.fdWriteIdx)
 			body.WriteByte(0x1a)
+
+			// proc_exit(1): the error message is already on fd 2; exit
+			// non-zero so scripts that check $? observe the failure.
+			// proc_exit is noreturn per WASI; the two 0x0b that follow
+			// close the diagnostic `if` and the _start block.
+			body.WriteByte(0x41) // i32.const
+			writeSleb128(&body, 1)
+			body.WriteByte(0x10) // call
+			writeUleb128(&body, e.wasiImports["proc_exit"])
 
 			body.WriteByte(0x0b)
 			body.WriteByte(0x0b)
