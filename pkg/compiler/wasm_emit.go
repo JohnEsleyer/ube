@@ -405,6 +405,19 @@ type fnContext struct {
 	numParams  uint32
 	allocTypes []byte
 	defers     []Expr
+	// labelDepth is the number of wasm labels (block/loop/if) currently
+	// open at this point in the emitted function body. It is incremented
+	// on every 0x02/0x03/0x04 emission and decremented on every 0x0b,
+	// so that break/continue in *LoopControlStmt can compute their
+	// relative br depth instead of hardcoding 1/0 (which mis-targets
+	// the enclosing block when break appears inside an if or match arm).
+	labelDepth int
+	// loopBodyDepths is a stack of labelDepth values captured right
+	// after each enclosing loop's 0x03 (loop) opcode is emitted. The
+	// top of the stack is the label depth at the innermost loop body
+	// start, so break = (labelDepth - top) + 1 and
+	// continue = (labelDepth - top).
+	loopBodyDepths []int
 }
 
 func (e *wasmEmitter) compileFunction(fn *FnDecl) ([]byte, error) {
@@ -459,6 +472,20 @@ func (ctx *fnContext) allocLocal(t byte) uint32 {
 	idx := ctx.numParams + uint32(len(ctx.allocTypes))
 	ctx.allocTypes = append(ctx.allocTypes, t)
 	return idx
+}
+
+// openLabel emits a wasm label-introducing opcode (0x02 block, 0x03 loop,
+// 0x04 if) and tracks the increase in label depth.
+func (ctx *fnContext) openLabel(buf *bytes.Buffer, op byte) {
+	buf.WriteByte(op)
+	ctx.labelDepth++
+}
+
+// closeLabel emits the 0x0b end opcode and tracks the decrease in label
+// depth.
+func (ctx *fnContext) closeLabel(buf *bytes.Buffer) {
+	buf.WriteByte(0x0b)
+	ctx.labelDepth--
 }
 
 func (ctx *fnContext) compileBlock(buf *bytes.Buffer, block *BlockStmt) error {
@@ -674,7 +701,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		if err := ctx.compileExpr(buf, s.Cond); err != nil {
 			return err
 		}
-		buf.WriteByte(0x04)
+		ctx.openLabel(buf, 0x04)
 		buf.WriteByte(valTypeVoid)
 		if err := ctx.compileBlock(buf, s.Then); err != nil {
 			return err
@@ -691,13 +718,14 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				}
 			}
 		}
-		buf.WriteByte(0x0b)
+		ctx.closeLabel(buf)
 
 	case *WhileStmt:
-		buf.WriteByte(0x02)
+		ctx.openLabel(buf, 0x02)
 		buf.WriteByte(valTypeVoid)
-		buf.WriteByte(0x03)
+		ctx.openLabel(buf, 0x03)
 		buf.WriteByte(valTypeVoid)
+		ctx.loopBodyDepths = append(ctx.loopBodyDepths, ctx.labelDepth)
 
 		if err := ctx.compileExpr(buf, s.Cond); err != nil {
 			return err
@@ -710,11 +738,13 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			return err
 		}
 
+		ctx.loopBodyDepths = ctx.loopBodyDepths[:len(ctx.loopBodyDepths)-1]
+
 		buf.WriteByte(0x0c)
 		writeUleb128(buf, 0)
 
-		buf.WriteByte(0x0b)
-		buf.WriteByte(0x0b)
+		ctx.closeLabel(buf)
+		ctx.closeLabel(buf)
 
 	case *ArenaStmt:
 		savedLocal := ctx.allocLocal(valTypeI32)
@@ -750,10 +780,11 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			buf.WriteByte(0x21)
 			writeUleb128(buf, endLocal)
 
-			buf.WriteByte(0x02)
+			ctx.openLabel(buf, 0x02)
 			buf.WriteByte(valTypeVoid)
-			buf.WriteByte(0x03)
+			ctx.openLabel(buf, 0x03)
 			buf.WriteByte(valTypeVoid)
+			ctx.loopBodyDepths = append(ctx.loopBodyDepths, ctx.labelDepth)
 
 			buf.WriteByte(0x20)
 			writeUleb128(buf, itemLocal)
@@ -767,6 +798,8 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				return err
 			}
 
+			ctx.loopBodyDepths = ctx.loopBodyDepths[:len(ctx.loopBodyDepths)-1]
+
 			buf.WriteByte(0x20)
 			writeUleb128(buf, itemLocal)
 			buf.WriteByte(0x41)
@@ -778,8 +811,8 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			buf.WriteByte(0x0c)
 			writeUleb128(buf, 0)
 
-			buf.WriteByte(0x0b)
-			buf.WriteByte(0x0b)
+			ctx.closeLabel(buf)
+			ctx.closeLabel(buf)
 		} else {
 			targetLocal := ctx.allocLocal(valTypeI32)
 			if err := ctx.compileExpr(buf, s.Iter); err != nil {
@@ -828,10 +861,11 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			itemLocal := ctx.allocLocal(valTypeI32)
 			ctx.locals[s.ItemName] = itemLocal
 
-			buf.WriteByte(0x02)
+			ctx.openLabel(buf, 0x02)
 			buf.WriteByte(valTypeVoid)
-			buf.WriteByte(0x03)
+			ctx.openLabel(buf, 0x03)
 			buf.WriteByte(valTypeVoid)
+			ctx.loopBodyDepths = append(ctx.loopBodyDepths, ctx.labelDepth)
 
 			buf.WriteByte(0x20)
 			writeUleb128(buf, idxLocal)
@@ -860,6 +894,8 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				return err
 			}
 
+			ctx.loopBodyDepths = ctx.loopBodyDepths[:len(ctx.loopBodyDepths)-1]
+
 			buf.WriteByte(0x20)
 			writeUleb128(buf, idxLocal)
 			buf.WriteByte(0x41)
@@ -871,8 +907,8 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			buf.WriteByte(0x0c)
 			writeUleb128(buf, 0)
 
-			buf.WriteByte(0x0b)
-			buf.WriteByte(0x0b)
+			ctx.closeLabel(buf)
+			ctx.closeLabel(buf)
 		}
 
 	case *IfLetStmt:
@@ -889,7 +925,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		writeUleb128(buf, 2)
 		writeUleb128(buf, 0)
 
-		buf.WriteByte(0x04)
+		ctx.openLabel(buf, 0x04)
 		buf.WriteByte(valTypeVoid)
 
 		bindingType := unwrapBindingType(ctx.exprStaticType(s.Expr))
@@ -940,13 +976,14 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				}
 			}
 		}
-		buf.WriteByte(0x0b)
+		ctx.closeLabel(buf)
 
 	case *WhileLetStmt:
-		buf.WriteByte(0x02)
+		ctx.openLabel(buf, 0x02)
 		buf.WriteByte(valTypeVoid)
-		buf.WriteByte(0x03)
+		ctx.openLabel(buf, 0x03)
 		buf.WriteByte(valTypeVoid)
+		ctx.loopBodyDepths = append(ctx.loopBodyDepths, ctx.labelDepth)
 
 		optLocal := ctx.allocLocal(valTypeI32)
 		if err := ctx.compileExpr(buf, s.Call); err != nil {
@@ -979,11 +1016,13 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			return err
 		}
 
+		ctx.loopBodyDepths = ctx.loopBodyDepths[:len(ctx.loopBodyDepths)-1]
+
 		buf.WriteByte(0x0c)
 		writeUleb128(buf, 0)
 
-		buf.WriteByte(0x0b)
-		buf.WriteByte(0x0b)
+		ctx.closeLabel(buf)
+		ctx.closeLabel(buf)
 
 	case *MatchStmt:
 		targetLocal := ctx.allocLocal(valTypeI32)
@@ -1002,12 +1041,12 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		buf.WriteByte(0x21)
 		writeUleb128(buf, tagLocal)
 
-		buf.WriteByte(0x02)
+		ctx.openLabel(buf, 0x02)
 		buf.WriteByte(valTypeVoid)
 
 		enumVariants := ctx.emitter.enums[s.EnumName]
 		for _, arm := range s.Arms {
-			buf.WriteByte(0x02)
+			ctx.openLabel(buf, 0x02)
 			buf.WriteByte(valTypeVoid)
 
 			if arm.Variant != "_" {
@@ -1080,10 +1119,10 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			buf.WriteByte(0x0c)
 			writeUleb128(buf, 1)
 
-			buf.WriteByte(0x0b)
+			ctx.closeLabel(buf)
 		}
 
-		buf.WriteByte(0x0b)
+		ctx.closeLabel(buf)
 
 	case *SpawnStmt:
 		if err := ctx.compileExpr(buf, s.Call); err != nil {
@@ -1170,15 +1209,25 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		buf.WriteByte(0x0b)
 
 	case *LoopControlStmt:
+		if len(ctx.loopBodyDepths) == 0 {
+			return fmt.Errorf("%s: %s outside of any loop", s.Loc(), loopControlName(s.Continue))
+		}
+		depth := ctx.labelDepth - ctx.loopBodyDepths[len(ctx.loopBodyDepths)-1]
+		buf.WriteByte(0x0c)
 		if s.Continue {
-			buf.WriteByte(0x0c)
-			writeUleb128(buf, 0)
+			writeUleb128(buf, uint32(depth))
 		} else {
-			buf.WriteByte(0x0c)
-			writeUleb128(buf, 1)
+			writeUleb128(buf, uint32(depth+1))
 		}
 	}
 	return nil
+}
+
+func loopControlName(cont bool) string {
+	if cont {
+		return "continue"
+	}
+	return "break"
 }
 
 func emitCompoundOp(buf *bytes.Buffer, op string) error {

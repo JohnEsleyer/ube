@@ -549,6 +549,9 @@ func (m *Monomorphizer) Process(prog *Program) error {
 func (m *Monomorphizer) specializeStruct(base string, args []UbeType, pending *[]Decl) (string, bool, error) {
 	tmpl, exists := m.genericStructs[base]
 	if !exists {
+		tmpl, exists = m.lookupGenericStructByShortName(base)
+	}
+	if !exists {
 		return "", false, fmt.Errorf("unknown generic struct '%s'", base)
 	}
 	if len(tmpl.TypeParams) != len(args) {
@@ -608,6 +611,9 @@ func (m *Monomorphizer) specializeStruct(base string, args []UbeType, pending *[
 
 func (m *Monomorphizer) specializeFunc(name string, args []UbeType, pending *[]Decl) (string, bool, error) {
 	tmpl, exists := m.genericFuncs[name]
+	if !exists {
+		tmpl, exists = m.lookupGenericFuncByShortName(name)
+	}
 	if !exists {
 		return "", false, fmt.Errorf("unknown generic function '%s'", name)
 	}
@@ -682,6 +688,62 @@ func (m *Monomorphizer) specializeMethod(tmpl *FnDecl, specializedStruct string,
 		RetType:  substituteType(tmpl.RetType, subMap),
 		Body:     substituteBlock(tmpl.Body, subMap),
 	}
+}
+
+// lookupGenericStructByShortName finds a generic struct template whose
+// registered (qualified) name has the same short name as `want`. Returns
+// (nil,false) on zero or ambiguous matches. This tolerates the
+// declaration-vs-reference naming drift documented in
+// _dev/docs/post-mortem/module_system_f32_wasm_emission.md (Lesson 10):
+// a generic struct literal inside a template body (e.g. `Stack[T]{...}`
+// inside `stack_new`) is never rewritten by qualifyDecls, so after
+// substitution it reaches specializeStruct as bare `Stack`, while the
+// template itself is registered as `collections.Stack`. Both spellings
+// must resolve to the same template.
+func (m *Monomorphizer) lookupGenericStructByShortName(want string) (*StructDecl, bool) {
+	short := want
+	if i := strings.LastIndex(short, "."); i >= 0 {
+		short = short[i+1:]
+	}
+	var found *StructDecl
+	matches := 0
+	for name, tmpl := range m.genericStructs {
+		s := name
+		if i := strings.LastIndex(s, "."); i >= 0 {
+			s = s[i+1:]
+		}
+		if s == short {
+			found = tmpl
+			matches++
+		}
+	}
+	if matches == 1 {
+		return found, true
+	}
+	return nil, false
+}
+
+func (m *Monomorphizer) lookupGenericFuncByShortName(want string) (*FnDecl, bool) {
+	short := want
+	if i := strings.LastIndex(short, "."); i >= 0 {
+		short = short[i+1:]
+	}
+	var found *FnDecl
+	matches := 0
+	for name, tmpl := range m.genericFuncs {
+		s := name
+		if i := strings.LastIndex(s, "."); i >= 0 {
+			s = s[i+1:]
+		}
+		if s == short {
+			found = tmpl
+			matches++
+		}
+	}
+	if matches == 1 {
+		return found, true
+	}
+	return nil, false
 }
 
 func (m *Monomorphizer) checkTraitConstraint(t UbeType, traitName string, loc SourceLocation) error {

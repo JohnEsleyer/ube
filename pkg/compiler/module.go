@@ -253,8 +253,29 @@ func qualifyDecls(prog *Program, canonical string) {
 	if canonical == "" {
 		return
 	}
+	// Collect the names this module itself declares. Only those get
+	// qualified. References to imported names must be left untouched so
+	// that the typechecker's canonicalName (which has ModuleAliases and
+	// the full symbol table) resolves them correctly. Qualifying a bare
+	// reference like `Stack` to `main.Stack` when `Stack` actually lives
+	// in `collections` is the "unknown generic struct 'Stack'" bug.
+	local := map[string]bool{}
+	for _, decl := range prog.Decls {
+		switch d := decl.(type) {
+		case *StructDecl:
+			local[d.Name] = true
+		case *EnumDecl:
+			local[d.Name] = true
+		case *TraitDecl:
+			local[d.Name] = true
+		case *FnDecl:
+			if d.Receiver == nil {
+				local[d.Name] = true
+			}
+		}
+	}
 	qualify := func(name string) string {
-		if name == "" || strings.Contains(name, ".") {
+		if name == "" || strings.Contains(name, ".") || !local[name] {
 			return name
 		}
 		return canonical + "." + name

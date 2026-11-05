@@ -8,7 +8,7 @@
 **The sweet, grounded language for games, apps, and high-throughput backends.**
 *100% WebAssembly Native • Zero External Toolchains • Zero GC • Clean like Go*
 
-[![Version](https://img.shields.io/badge/version-1.0.0-9333ea.svg)](https://github.com/JohnEsleyer/ube/releases)
+[![Version](https://img.shields.io/badge/version-1.1.0-9333ea.svg)](https://github.com/JohnEsleyer/ube/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Target](https://img.shields.io/badge/target-wasm32--wasi-654ff0.svg)](https://wasi.dev)
 [![Architecture](https://img.shields.io/badge/architecture-direct%20wasm%20binary-9333ea.svg)](https://github.com/JohnEsleyer/ube)
