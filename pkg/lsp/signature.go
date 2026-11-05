@@ -48,7 +48,70 @@ func SignatureHelp(source string, p lspPosition) any {
 		return nil
 	}
 
+	// Recover the qualified callee (alias.member) from the text before '('.
+	// The scan above stops at '.', so math.clamp would otherwise be seen as
+	// clamp only.
+	if q := strings.TrimSpace(fnPart); q != "" {
+		start := len(q)
+		for start > 0 {
+			c := q[start-1]
+			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '.' {
+				start--
+			} else {
+				break
+			}
+		}
+		if start < len(q) {
+			fnName = q[start:]
+		}
+	}
+
 	commaCount := strings.Count(sub[lastOpen:], ",")
+
+	if strings.Contains(fnName, ".") {
+		if prog, err := getProgram("", source); err == nil && prog != nil {
+			parts := strings.SplitN(fnName, ".", 2)
+			qualifier, member := parts[0], parts[1]
+			canonicalPkg := prog.ModuleAliases[qualifier]
+			if canonicalPkg == "" {
+				canonicalPkg = qualifier
+			}
+			for _, decl := range prog.Decls {
+				fn, ok := decl.(*compiler.FnDecl)
+				if !ok {
+					continue
+				}
+				if fn.Name != canonicalPkg+"."+member && !(fn.Package == canonicalPkg && shortName(fn.Name) == member) {
+					continue
+				}
+				var params []paramInfo
+				var labels []string
+				for _, param := range fn.Params {
+					pStr := param.Name + ": " + param.Type.String()
+					params = append(params, paramInfo{Label: pStr})
+					labels = append(labels, pStr)
+				}
+				ret := ""
+				if fn.RetType != nil && fn.RetType.String() != "void" {
+					ret = " -> " + fn.RetType.String()
+				}
+				active := uint32(commaCount)
+				if active >= uint32(len(params)) && len(params) > 0 {
+					active = uint32(len(params) - 1)
+				}
+				return map[string]any{
+					"signatures": []signatureInformation{
+						{
+							Label:      "fn " + fnName + "(" + strings.Join(labels, ", ") + ") " + ret,
+							Parameters: params,
+						},
+					},
+					"activeSignature": 0,
+					"activeParameter": active,
+				}
+			}
+		}
+	}
 
 	builtinSignatures := map[string][]string{
 		"println":         {"val: any", "..."},
@@ -77,12 +140,19 @@ func SignatureHelp(source string, p lspPosition) any {
 		"ends_with":       {"suffix: string"},
 		"index_of":        {"substr: string"},
 		"split":           {"delim: string"},
+		"clamp":           {"val: i32", "low: i32", "high: i32"},
 	}
 
 	var params []paramInfo
 	var label string
 
-	if bParams, exists := builtinSignatures[fnName]; exists {
+	// Strip a package qualifier so math.clamp resolves to the clamp entry.
+	lookupKey := fnName
+	if i := strings.LastIndexByte(lookupKey, '.'); i >= 0 {
+		lookupKey = lookupKey[i+1:]
+	}
+
+	if bParams, exists := builtinSignatures[lookupKey]; exists {
 		for _, param := range bParams {
 			params = append(params, paramInfo{Label: param})
 		}

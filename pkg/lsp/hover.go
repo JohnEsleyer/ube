@@ -30,6 +30,14 @@ func Hover(uri, source string, p lspPosition) any {
 		return nil
 	}
 	word := line[a:b]
+	qualifier := ""
+	if a > 1 && line[a-1] == '.' {
+		qa := a - 1
+		for qa > 0 && isWord(line[qa-1]) {
+			qa--
+		}
+		qualifier = line[qa : a-1]
+	}
 
 	builtins := map[string]string{
 		"println":         "`fn println(val)`\n*Polymorphically prints a primitive, string, or pointer followed by a newline.*",
@@ -63,9 +71,87 @@ func Hover(uri, source string, p lspPosition) any {
 		"str_ends_with":   "`fn str_ends_with(s: string, suffix: string) -> bool`\n*Checks if string ends with suffix.*",
 		"arena":           "`arena { ... }`\n*Lexical memory arena block. Reclaimed on block exit in one instruction.*",
 		"spawn":           "`spawn fn(args...)`\n*Schedules a concurrent Vine fiber onto the worker thread pool.*",
+		"package":         "`package <name>`\n*Declares the package this file belongs to. Every .ube file in a directory must declare the same package.*",
+		"pub":             "`pub`\n*Exports a declaration outside of its package.*",
+		"import":          "`import \"path\" [as alias]`\n*Imports a package directory. Exported symbols are accessed through the alias or the package's declared name.*",
+		"as":              "`as <alias>`\n*Assigns a local alias to an imported package.*",
+		"trait":           "`trait <Name> { ... }`\n*Defines a set of method signatures for dynamic dispatch.*",
 	}
 	if doc, ok := builtins[word]; ok {
 		return map[string]any{"contents": map[string]string{"kind": "markdown", "value": doc}}
+	}
+
+	if qualifier == "" && strings.HasPrefix(strings.TrimSpace(line), "package ") && word != "package" {
+		return map[string]any{"contents": map[string]string{"kind": "markdown", "value": fmt.Sprintf("```ube\npackage %s\n```\n*Package declaration*", word)}}
+	}
+
+	if prog, err := getProgram(uri, source); err == nil && prog != nil {
+		if qualifier != "" {
+			canonicalPkg := prog.ModuleAliases[qualifier]
+			if canonicalPkg == "" {
+				canonicalPkg = qualifier
+			}
+			for _, decl := range prog.Decls {
+				switch d := decl.(type) {
+				case *compiler.FnDecl:
+					if d.Name == canonicalPkg+"."+word || (d.Package == canonicalPkg && shortName(d.Name) == word) {
+						return hoverFn(d, qualifier)
+					}
+				case *compiler.StructDecl:
+					if d.Name == canonicalPkg+"."+word || (d.Package == canonicalPkg && shortName(d.Name) == word) {
+						return hoverStruct(d, qualifier)
+					}
+				case *compiler.EnumDecl:
+					if d.Name == canonicalPkg+"."+word || (d.Package == canonicalPkg && shortName(d.Name) == word) {
+						return hoverEnum(d, qualifier)
+					}
+				case *compiler.TraitDecl:
+					if d.Name == canonicalPkg+"."+word || (d.Package == canonicalPkg && shortName(d.Name) == word) {
+						return hoverTrait(d, qualifier)
+					}
+				}
+			}
+		} else {
+			for _, decl := range prog.Decls {
+				if imp, ok := decl.(*compiler.ImportDecl); ok {
+					alias := imp.Alias
+					if alias == "" {
+						alias = defaultAlias(imp.Path)
+					}
+					if alias == word {
+						target := prog.ModuleAliases[alias]
+						if target == "" {
+							target = alias
+						}
+						return map[string]any{"contents": map[string]string{"kind": "markdown", "value": fmt.Sprintf("```ube\nimport %q as %s\n```\n*Package `%s`*", imp.Path, alias, target)}}
+					}
+				}
+			}
+			for _, decl := range prog.Decls {
+				switch d := decl.(type) {
+				case *compiler.PackageDecl:
+					if d.Name == word {
+						return map[string]any{"contents": map[string]string{"kind": "markdown", "value": fmt.Sprintf("```ube\npackage %s\n```\n*Package declaration*", d.Name)}}
+					}
+				case *compiler.FnDecl:
+					if d.Name == word || shortName(d.Name) == word {
+						return hoverFn(d, "")
+					}
+				case *compiler.StructDecl:
+					if d.Name == word || shortName(d.Name) == word {
+						return hoverStruct(d, "")
+					}
+				case *compiler.EnumDecl:
+					if d.Name == word || shortName(d.Name) == word {
+						return hoverEnum(d, "")
+					}
+				case *compiler.TraitDecl:
+					if d.Name == word || shortName(d.Name) == word {
+						return hoverTrait(d, "")
+					}
+				}
+			}
+		}
 	}
 
 	tokens, err := compiler.NewLexer(uri, source).Tokenize()
@@ -120,4 +206,115 @@ func Hover(uri, source string, p lspPosition) any {
 		detail = "Ube local variable"
 	}
 	return map[string]any{"contents": map[string]string{"kind": "markdown", "value": "```ube\n" + word + "\n```\n*" + detail + "*"}}
+}
+
+// hoverFn, hoverStruct, hoverEnum, and hoverTrait render markdown tooltips for
+// a resolved declaration. qualifier is the alias the user typed, or "" when
+// the reference was unqualified.
+func hoverFn(d *compiler.FnDecl, qualifier string) any {
+	pub := ""
+	if d.IsPub {
+		pub = "pub "
+	}
+	var params []string
+	for _, param := range d.Params {
+		params = append(params, fmt.Sprintf("%s: %s", param.Name, param.Type))
+	}
+	ret := "void"
+	if d.RetType != nil {
+		ret = d.RetType.String()
+	}
+	recv := ""
+	if d.Receiver != nil {
+		recv = fmt.Sprintf("(%s %s) ", d.Receiver.Name, d.Receiver.Type)
+	}
+	name := shortName(d.Name)
+	if qualifier != "" {
+		name = qualifier + "." + name
+	}
+	sig := fmt.Sprintf("```ube\n%sfn %s%s(%s) -> %s\n```", pub, recv, name, strings.Join(params, ", "), ret)
+	if d.Package != "" {
+		sig += fmt.Sprintf("\n*Package `%s`*", d.Package)
+	}
+	return map[string]any{"contents": map[string]string{"kind": "markdown", "value": sig}}
+}
+
+func hoverStruct(d *compiler.StructDecl, qualifier string) any {
+	pub := ""
+	if d.IsPub {
+		pub = "pub "
+	}
+	var fields []string
+	for _, f := range d.Fields {
+		fPub := ""
+		if f.IsPub {
+			fPub = "pub "
+		}
+		fields = append(fields, fmt.Sprintf("    %s%s: %s,", fPub, f.Name, f.Type))
+	}
+	name := shortName(d.Name)
+	if qualifier != "" {
+		name = qualifier + "." + name
+	}
+	code := fmt.Sprintf("```ube\n%sstruct %s {\n%s\n}\n```", pub, name, strings.Join(fields, "\n"))
+	if d.Package != "" {
+		code += fmt.Sprintf("\n*Package `%s`*", d.Package)
+	}
+	return map[string]any{"contents": map[string]string{"kind": "markdown", "value": code}}
+}
+
+func hoverEnum(d *compiler.EnumDecl, qualifier string) any {
+	pub := ""
+	if d.IsPub {
+		pub = "pub "
+	}
+	var variants []string
+	for _, v := range d.Variants {
+		if len(v.Types) == 0 {
+			variants = append(variants, "    "+v.Name+",")
+		} else {
+			var tStrs []string
+			for _, t := range v.Types {
+				tStrs = append(tStrs, t.String())
+			}
+			variants = append(variants, fmt.Sprintf("    %s(%s),", v.Name, strings.Join(tStrs, ", ")))
+		}
+	}
+	name := shortName(d.Name)
+	if qualifier != "" {
+		name = qualifier + "." + name
+	}
+	code := fmt.Sprintf("```ube\n%senum %s {\n%s\n}\n```", pub, name, strings.Join(variants, "\n"))
+	if d.Package != "" {
+		code += fmt.Sprintf("\n*Package `%s`*", d.Package)
+	}
+	return map[string]any{"contents": map[string]string{"kind": "markdown", "value": code}}
+}
+
+func hoverTrait(d *compiler.TraitDecl, qualifier string) any {
+	pub := ""
+	if d.IsPub {
+		pub = "pub "
+	}
+	var methods []string
+	for _, m := range d.Methods {
+		var params []string
+		for _, p := range m.Params {
+			params = append(params, fmt.Sprintf("%s: %s", p.Name, p.Type))
+		}
+		ret := "void"
+		if m.RetType != nil {
+			ret = m.RetType.String()
+		}
+		methods = append(methods, fmt.Sprintf("    fn %s(%s) -> %s", m.Name, strings.Join(params, ", "), ret))
+	}
+	name := shortName(d.Name)
+	if qualifier != "" {
+		name = qualifier + "." + name
+	}
+	code := fmt.Sprintf("```ube\n%strait %s {\n%s\n}\n```", pub, name, strings.Join(methods, "\n"))
+	if d.Package != "" {
+		code += fmt.Sprintf("\n*Package `%s`*", d.Package)
+	}
+	return map[string]any{"contents": map[string]string{"kind": "markdown", "value": code}}
 }

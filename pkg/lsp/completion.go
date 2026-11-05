@@ -21,7 +21,42 @@ func CompletionItems(source string, p lspPosition) []map[string]any {
 		prefix = strings.TrimSpace(line[:c])
 	}
 
+	// Line 0: package declaration.
+	if p.Line == 0 && (prefix == "" || strings.HasPrefix("package", prefix)) {
+		return []map[string]any{
+			{"label": "package main", "kind": 14, "detail": "executable package declaration"},
+			{"label": "package", "kind": 14, "detail": "package <name>"},
+		}
+	}
+
+	// Import path.
+	if strings.Contains(prefix, "import \"") || strings.Contains(prefix, "import `") || prefix == "import" || prefix == "import " {
+		return []map[string]any{
+			{"label": "std/math", "kind": 9, "detail": "standard math library"},
+			{"label": "std/strings", "kind": 9, "detail": "standard string utilities"},
+			{"label": "std/io", "kind": 9, "detail": "standard I/O and streams"},
+			{"label": "std/fs", "kind": 9, "detail": "standard filesystem utilities"},
+			{"label": "std/bytes", "kind": 9, "detail": "standard byte buffer utilities"},
+			{"label": "std/collections", "kind": 9, "detail": "standard collections (Stack, SimpleMap)"},
+			{"label": "std/wasi", "kind": 9, "detail": "low-level WASI bindings"},
+		}
+	}
+
 	if strings.HasSuffix(prefix, ".") {
+		beforeDot := strings.TrimSuffix(prefix, ".")
+		qualifier := ""
+		for i := len(beforeDot) - 1; i >= 0; i-- {
+			if isWord(beforeDot[i]) {
+				qualifier = string(beforeDot[i]) + qualifier
+			} else {
+				break
+			}
+		}
+		if qualifier != "" {
+			if pkgItems := qualifiedMemberCompletions(source, qualifier); len(pkgItems) > 0 {
+				return pkgItems
+			}
+		}
 		items = append(items,
 			map[string]any{"label": "len", "kind": 10, "detail": "length (i32)"},
 			map[string]any{"label": "cap", "kind": 10, "detail": "capacity (i32)"},
@@ -106,4 +141,72 @@ func CompletionItems(source string, p lspPosition) []map[string]any {
 		}
 	}
 	return items
+}
+
+// qualifiedMemberCompletions returns the exported members of the imported
+// package referenced by qualifier, or nil when qualifier is not an import.
+func qualifiedMemberCompletions(source, qualifier string) []map[string]any {
+	prog, err := getProgram("", source)
+	if err != nil || prog == nil {
+		return nil
+	}
+	canonicalPkg := prog.ModuleAliases[qualifier]
+	if canonicalPkg == "" {
+		if path, ok := parseImportsFromSource(source)[qualifier]; ok {
+			canonicalPkg = strings.TrimPrefix(defaultAlias(path), "std/")
+		} else {
+			canonicalPkg = qualifier
+		}
+	}
+	var out []map[string]any
+	for _, decl := range prog.Decls {
+		if declPackageOf(decl) != canonicalPkg {
+			continue
+		}
+		switch d := decl.(type) {
+		case *compiler.FnDecl:
+			if d.IsPub && d.Receiver == nil {
+				ret := "void"
+				if d.RetType != nil {
+					ret = d.RetType.String()
+				}
+				out = append(out, map[string]any{"label": shortName(d.Name), "kind": 3, "detail": "fn " + shortName(d.Name) + "(...) -> " + ret})
+			}
+		case *compiler.StructDecl:
+			if d.IsPub {
+				out = append(out, map[string]any{"label": shortName(d.Name), "kind": 22, "detail": "struct " + shortName(d.Name)})
+			}
+		case *compiler.EnumDecl:
+			if d.IsPub {
+				out = append(out, map[string]any{"label": shortName(d.Name), "kind": 13, "detail": "enum " + shortName(d.Name)})
+			}
+		case *compiler.TraitDecl:
+			if d.IsPub {
+				out = append(out, map[string]any{"label": shortName(d.Name), "kind": 11, "detail": "trait " + shortName(d.Name)})
+			}
+		}
+	}
+	return out
+}
+
+// parseImportsFromSource extracts alias -> import path pairs from the buffer.
+func parseImportsFromSource(source string) map[string]string {
+	aliases := make(map[string]string)
+	for _, l := range strings.Split(source, "\n") {
+		trimmed := strings.TrimSpace(l)
+		if !strings.HasPrefix(trimmed, "import ") {
+			continue
+		}
+		parts := strings.Fields(trimmed)
+		if len(parts) < 2 {
+			continue
+		}
+		path := strings.Trim(parts[1], "\"'`")
+		alias := defaultAlias(path)
+		if len(parts) >= 4 && parts[2] == "as" {
+			alias = parts[3]
+		}
+		aliases[alias] = path
+	}
+	return aliases
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -305,6 +306,117 @@ func uriToPath(uri string) string {
 	return p
 }
 
+// fileToURI converts a filesystem path to a file:// URI suitable for LSP
+// Location and DocumentSymbol responses.
+func fileToURI(file string) string {
+	if strings.HasPrefix(file, "file://") {
+		return file
+	}
+	p := filepath.ToSlash(filepath.Clean(file))
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return "file://" + p
+}
+
+// shortName returns the trailing identifier of a possibly package-qualified
+// name. "std:math.clamp" -> "clamp".
+func shortName(name string) string {
+	if i := strings.LastIndexByte(name, '.'); i >= 0 {
+		return name[i+1:]
+	}
+	return name
+}
+
+// defaultAlias derives the implicit import alias from a package path.
+func defaultAlias(path string) string {
+	base := filepath.Base(path)
+	return strings.TrimSuffix(base, ".ube")
+}
+
+func declPackageOf(d compiler.Decl) string {
+	switch decl := d.(type) {
+	case *compiler.StructDecl:
+		return decl.Package
+	case *compiler.EnumDecl:
+		return decl.Package
+	case *compiler.TraitDecl:
+		return decl.Package
+	case *compiler.FnDecl:
+		return decl.Package
+	case *compiler.ExternFnDecl:
+		return decl.Package
+	default:
+		return ""
+	}
+}
+
+// extractWordAndQualifier returns the identifier under the cursor and, if it
+// is the member of a qualified expression (a.b), the qualifier a.
+func extractWordAndQualifier(line string, col int) (string, string) {
+	if col > len(line) {
+		col = len(line)
+	}
+	a, b := col, col
+	for a > 0 && isWord(line[a-1]) {
+		a--
+	}
+	for b < len(line) && isWord(line[b]) {
+		b++
+	}
+	if a == b {
+		return "", ""
+	}
+	word := line[a:b]
+	qualifier := ""
+	if a > 1 && line[a-1] == '.' {
+		qa := a - 1
+		for qa > 0 && isWord(line[qa-1]) {
+			qa--
+		}
+		qualifier = line[qa : a-1]
+	}
+	return word, qualifier
+}
+
+// getProgram loads the document as a full package, overlaying unsaved buffer
+// contents for the current file and every other open tab. If loading fails it
+// falls back to parsing the current buffer alone so hover/definition remain
+// available in the presence of unrelated compile errors.
+func getProgram(uri, source string) (*compiler.Program, error) {
+	filePath := uriToPath(uri)
+	cleanFilePath := filepath.Clean(filePath)
+	loader := compiler.NewModuleLoader()
+	loader.FileReadOverlay = func(p string) ([]byte, bool) {
+		cleanP := filepath.Clean(p)
+		if uri != "" && cleanP == cleanFilePath {
+			return []byte(source), true
+		}
+		docsMu.RLock()
+		defer docsMu.RUnlock()
+		for u, text := range openDocs {
+			if filepath.Clean(uriToPath(u)) == cleanP {
+				return []byte(text), true
+			}
+		}
+		return nil, false
+	}
+	prog, err := loader.LoadSource(filePath, source)
+	if err == nil {
+		_ = compiler.Monomorphize(prog)
+		return prog, nil
+	}
+	toks, lexErr := compiler.NewLexer(uri, source).Tokenize()
+	if lexErr != nil {
+		return nil, err
+	}
+	fileProg, parseErr := compiler.NewParser(toks).ParseProgram()
+	if parseErr != nil {
+		return nil, err
+	}
+	return fileProg, nil
+}
+
 // publish runs the full compiler pipeline and emits publishDiagnostics.
 // It respects ctx so that a newer didChange can pre-empt an in-flight run.
 func publish(ctx context.Context, uri, source string) {
@@ -312,6 +424,17 @@ func publish(ctx context.Context, uri, source string) {
 
 	filePath := uriToPath(uri)
 	loader := compiler.NewModuleLoader()
+	loader.FileReadOverlay = func(p string) ([]byte, bool) {
+		cleanP := filepath.Clean(p)
+		docsMu.RLock()
+		defer docsMu.RUnlock()
+		for u, text := range openDocs {
+			if filepath.Clean(uriToPath(u)) == cleanP {
+				return []byte(text), true
+			}
+		}
+		return nil, false
+	}
 	prog, err := loader.LoadSource(filePath, source)
 
 	// Check for cancellation after each heavy stage.

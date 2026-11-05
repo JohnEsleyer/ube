@@ -120,5 +120,32 @@
       "}"
     ],
     "description": "Iterate optional/channel stream"
+  },
+  "Package Declaration": {
+    "prefix": "package",
+    "body": [
+      "package ${1:main}",
+      "",
+      "$0"
+    ],
+    "description": "Package declaration clause"
+  },
+  "Package Main": {
+    "prefix": "pkgm",
+    "body": [
+      "package main",
+      "",
+      "fn main() {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Executable main package entry point template"
+  },
+  "Import Package": {
+    "prefix": "import",
+    "body": [
+      "import \"${1:std/math}\" as ${2:math}"
+    ],
+    "description": "Package directory import declaration"
   }
 }

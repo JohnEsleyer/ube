@@ -25,6 +25,20 @@ type ModuleLoader struct {
 	allDecls      []Decl
 	entryDir      string
 	moduleAliases map[string]string
+
+	// FileReadOverlay, when set, is consulted before the filesystem. The LSP
+	// uses it to feed unsaved buffer contents across open tabs so that
+	// sibling-file resolution and diagnostics reflect in-editor state.
+	FileReadOverlay func(path string) ([]byte, bool)
+}
+
+func (m *ModuleLoader) readFile(path string) ([]byte, error) {
+	if m.FileReadOverlay != nil {
+		if data, ok := m.FileReadOverlay(path); ok {
+			return data, nil
+		}
+	}
+	return os.ReadFile(path)
 }
 
 func NewModuleLoader() *ModuleLoader {
@@ -125,11 +139,55 @@ func (m *ModuleLoader) LoadSource(entry, source string) (*Program, error) {
 	for _, d := range fileProg.Decls {
 		switch d := d.(type) {
 		case *PackageDecl:
-			// already captured in fileProg.Package
+			// Keep the clause in Decls so LSP definition/hover can locate
+			// `package <name>`. The typechecker and wasm emitter skip
+			// declaration kinds they do not recognize.
+			decls = append(decls, d)
 		case *ImportDecl:
 			imports = append(imports, d)
 		default:
 			decls = append(decls, d)
+		}
+	}
+
+	// Load sibling .ube files in the same directory that declare the same
+	// package, so cross-file references resolve inside the editor before the
+	// file has been saved. A mismatched package in the same folder is an
+	// immediate error.
+	includeTests := strings.HasSuffix(filepath.Base(abs), "_test.ube")
+	if files, err := ubePackageFiles(dir, includeTests); err == nil {
+		for _, file := range files {
+			if filepath.Clean(file) == filepath.Clean(abs) {
+				continue
+			}
+			srcBytes, err := m.readFile(file)
+			if err != nil {
+				continue
+			}
+			siblingToks, err := NewLexer(file, string(srcBytes)).Tokenize()
+			if err != nil {
+				return nil, err
+			}
+			siblingProg, err := NewParser(siblingToks).ParseProgram()
+			if err != nil {
+				return nil, err
+			}
+			if siblingProg.Package != pkgName {
+				return nil, fmt.Errorf(
+					"found packages '%s' (%s) and '%s' (%s) in directory '%s' (all files in a folder must share the same package)",
+					pkgName, filepath.Base(abs), siblingProg.Package, filepath.Base(file), dir,
+				)
+			}
+			for _, d := range siblingProg.Decls {
+				switch d := d.(type) {
+				case *PackageDecl:
+					decls = append(decls, d)
+				case *ImportDecl:
+					imports = append(imports, d)
+				default:
+					decls = append(decls, d)
+				}
+			}
 		}
 	}
 
@@ -185,7 +243,7 @@ func (m *ModuleLoader) loadPackageDir(dir string, isRoot, includeTests bool) (st
 	var imports []*ImportDecl
 
 	for _, file := range files {
-		src, err := os.ReadFile(file)
+		src, err := m.readFile(file)
 		if err != nil {
 			return "", fmt.Errorf("reading %s: %w", file, err)
 		}

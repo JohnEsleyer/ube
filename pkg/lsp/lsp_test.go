@@ -127,3 +127,75 @@ fn main() {
 		t.Errorf("expected definition line 2, got %d", start["line"])
 	}
 }
+
+func TestLSP_Completion_PackageLineZero(t *testing.T) {
+	source := `p`
+	items := CompletionItems(source, lspPosition{Line: 0, Character: 1})
+	found := false
+	for _, item := range items {
+		if label, ok := item["label"].(string); ok && label == "package main" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected 'package main' completion on line 0, got: %v", items)
+	}
+}
+
+func TestLSP_Completion_ImportPath(t *testing.T) {
+	source := "package main\n\nimport \""
+	items := CompletionItems(source, lspPosition{Line: 2, Character: 8})
+	foundMath, foundFS := false, false
+	for _, item := range items {
+		if label, ok := item["label"].(string); ok {
+			if label == "std/math" {
+				foundMath = true
+			}
+			if label == "std/fs" {
+				foundFS = true
+			}
+		}
+	}
+	if !foundMath || !foundFS {
+		t.Errorf("expected std/math and std/fs import completions, got: %v", items)
+	}
+}
+
+func TestLSP_Hover_PackageKeyword(t *testing.T) {
+	source := "package main\n\nfn main() {}"
+	res := Hover("file:///main.ube", source, lspPosition{Line: 0, Character: 2})
+	if res == nil {
+		t.Fatal("expected hover for 'package'")
+	}
+	val := res.(map[string]any)["contents"].(map[string]string)["value"]
+	if !strings.Contains(val, "package <name>") {
+		t.Errorf("expected package keyword description, got: %s", val)
+	}
+}
+
+func TestLSP_DocumentSymbols_PackageKind(t *testing.T) {
+	source := "package main\n\nfn main() {}\n"
+	syms := DocumentSymbols("file:///main.ube", source)
+	foundPkg := false
+	for _, s := range syms {
+		if s.Kind == 4 && s.Name == "main" {
+			foundPkg = true
+		}
+	}
+	if !foundPkg {
+		t.Errorf("expected a Package (kind 4) symbol named main, got: %v", syms)
+	}
+}
+
+func TestLSP_SignatureHelp_QualifiedCall(t *testing.T) {
+	source := "package main\n\nimport \"std/math\" as math\n\nfn main() {\n    math.clamp(10, \n}"
+	sig := SignatureHelp(source, lspPosition{Line: 5, Character: 19})
+	if sig == nil {
+		t.Fatal("expected signature help for math.clamp, got nil")
+	}
+	sigs := sig.(map[string]any)["signatures"].([]signatureInformation)
+	if len(sigs) == 0 || !strings.Contains(sigs[0].Label, "clamp") {
+		t.Errorf("expected clamp signature, got %v", sig)
+	}
+}
