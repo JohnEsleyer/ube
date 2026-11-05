@@ -598,6 +598,24 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				}
 				return OptionalType{Inner: sl.Elem}, nil
 			}
+			if _, ok := tgtT.(SliceType); ok && mem.Member == "resize" {
+				if len(e.Args) != 1 {
+					return nil, fmt.Errorf("[%s] resize expects 1 argument", e.At)
+				}
+				if root := assignmentRoot(mem.Target); root != "" {
+					if info, found := env.LookupVar(root); found && !info.IsMut {
+						return nil, fmt.Errorf("[%s] cannot call 'resize' on immutable slice '%s'", e.At, root)
+					}
+				}
+				argT, err := tc.inferExpr(e.Args[0], env)
+				if err != nil {
+					return nil, err
+				}
+				if err := tc.assertCompat(PrimitiveType{Name: "i32"}, argT, e.At); err != nil {
+					return nil, err
+				}
+				return PrimitiveType{Name: "void"}, nil
+			}
 			if _, ok := tgtT.(SliceType); ok && mem.Member == "clear" {
 				if len(e.Args) != 0 {
 					return nil, fmt.Errorf("[%s] clear expects 0 arguments", e.At)

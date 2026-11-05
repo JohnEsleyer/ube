@@ -2076,6 +2076,206 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		if mem, ok := e.Callee.(*MemberExpr); ok {
 			if _, isSlice := mem.TargetType.(SliceType); isSlice {
 				switch mem.Member {
+				case "resize":
+					if len(e.Args) != 1 {
+						return nil
+					}
+					width := int32(4)
+					if st, isSlice := mem.TargetType.(SliceType); isSlice {
+						width, _, _, _ = sliceElemInfo(st.Elem)
+					}
+
+					slLocal := ctx.allocLocal(valTypeI32)
+					if err := ctx.compileExpr(buf, mem.Target); err != nil {
+						return err
+					}
+					buf.WriteByte(0x21)
+					writeUleb128(buf, slLocal)
+
+					newLenL := ctx.allocLocal(valTypeI32)
+					if err := ctx.compileExpr(buf, e.Args[0]); err != nil {
+						return err
+					}
+					buf.WriteByte(0x21)
+					writeUleb128(buf, newLenL)
+
+					oldLenL := ctx.allocLocal(valTypeI32)
+					buf.WriteByte(0x20)
+					writeUleb128(buf, slLocal)
+					buf.WriteByte(0x28)
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 4)
+					buf.WriteByte(0x21)
+					writeUleb128(buf, oldLenL)
+
+					// if newLen > cap { grow }
+					newCapL := ctx.allocLocal(valTypeI32)
+					newSizeL := ctx.allocLocal(valTypeI32)
+					newBufL := ctx.allocLocal(valTypeI32)
+
+					buf.WriteByte(0x20)
+					writeUleb128(buf, newLenL)
+					buf.WriteByte(0x20)
+					writeUleb128(buf, slLocal)
+					buf.WriteByte(0x28)
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 8)
+					buf.WriteByte(0x4b) // i32.gt_u
+					buf.WriteByte(0x04) // if
+					buf.WriteByte(valTypeVoid)
+
+					// newCap = select(newLen > cap*2+8, newLen, cap*2+8)
+					//   false-branch value first: cap*2+8
+					buf.WriteByte(0x20)
+					writeUleb128(buf, slLocal)
+					buf.WriteByte(0x28)
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 8)
+					buf.WriteByte(0x41)
+					writeSleb128(buf, 2)
+					buf.WriteByte(0x6c)
+					buf.WriteByte(0x41)
+					writeSleb128(buf, 8)
+					buf.WriteByte(0x6a)
+					//   true-branch value second: newLen
+					buf.WriteByte(0x20)
+					writeUleb128(buf, newLenL)
+					//   condition: newLen > cap*2+8
+					buf.WriteByte(0x20)
+					writeUleb128(buf, newLenL)
+					buf.WriteByte(0x20)
+					writeUleb128(buf, slLocal)
+					buf.WriteByte(0x28)
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 8)
+					buf.WriteByte(0x41)
+					writeSleb128(buf, 2)
+					buf.WriteByte(0x6c)
+					buf.WriteByte(0x41)
+					writeSleb128(buf, 8)
+					buf.WriteByte(0x6a)
+					buf.WriteByte(0x4b) // i32.gt_u
+					buf.WriteByte(0x1b) // select
+					buf.WriteByte(0x21)
+					writeUleb128(buf, newCapL)
+
+					// newSize = newCap * width
+					buf.WriteByte(0x20)
+					writeUleb128(buf, newCapL)
+					if width != 1 {
+						buf.WriteByte(0x41)
+						writeSleb128(buf, width)
+						buf.WriteByte(0x6c)
+					}
+					buf.WriteByte(0x21)
+					writeUleb128(buf, newSizeL)
+
+					// newBuf = __arena_alloc_dyn(newSize)
+					ctx.emitAllocDyn(buf, newSizeL, newBufL)
+
+					// memory.copy(newBuf, slLocal.ptr, oldLen * width)
+					buf.WriteByte(0x20)
+					writeUleb128(buf, newBufL)
+					buf.WriteByte(0x20)
+					writeUleb128(buf, slLocal)
+					buf.WriteByte(0x28)
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 0)
+					buf.WriteByte(0x20)
+					writeUleb128(buf, oldLenL)
+					if width != 1 {
+						buf.WriteByte(0x41)
+						writeSleb128(buf, width)
+						buf.WriteByte(0x6c)
+					}
+					ctx.emitMemoryCopy(buf)
+
+					// slLocal.ptr = newBuf
+					buf.WriteByte(0x20)
+					writeUleb128(buf, slLocal)
+					buf.WriteByte(0x20)
+					writeUleb128(buf, newBufL)
+					buf.WriteByte(0x36)
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 0)
+
+					// slLocal.cap = newCap
+					buf.WriteByte(0x20)
+					writeUleb128(buf, slLocal)
+					buf.WriteByte(0x20)
+					writeUleb128(buf, newCapL)
+					buf.WriteByte(0x36)
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 8)
+
+					buf.WriteByte(0x0b) // end if
+
+					// if newLen > oldLen { memory.fill tail with zeros }
+					fillDstL := ctx.allocLocal(valTypeI32)
+					fillLenL := ctx.allocLocal(valTypeI32)
+
+					buf.WriteByte(0x20)
+					writeUleb128(buf, newLenL)
+					buf.WriteByte(0x20)
+					writeUleb128(buf, oldLenL)
+					buf.WriteByte(0x4b) // i32.gt_u
+					buf.WriteByte(0x04)
+					buf.WriteByte(valTypeVoid)
+
+					// dst = ptr + oldLen*width
+					buf.WriteByte(0x20)
+					writeUleb128(buf, slLocal)
+					buf.WriteByte(0x28)
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 0)
+					buf.WriteByte(0x20)
+					writeUleb128(buf, oldLenL)
+					if width != 1 {
+						buf.WriteByte(0x41)
+						writeSleb128(buf, width)
+						buf.WriteByte(0x6c)
+					}
+					buf.WriteByte(0x6a)
+					buf.WriteByte(0x21)
+					writeUleb128(buf, fillDstL)
+
+					// fillLen = (newLen - oldLen) * width
+					buf.WriteByte(0x20)
+					writeUleb128(buf, newLenL)
+					buf.WriteByte(0x20)
+					writeUleb128(buf, oldLenL)
+					buf.WriteByte(0x6b) // i32.sub
+					if width != 1 {
+						buf.WriteByte(0x41)
+						writeSleb128(buf, width)
+						buf.WriteByte(0x6c)
+					}
+					buf.WriteByte(0x21)
+					writeUleb128(buf, fillLenL)
+
+					// memory.fill(dst, 0, fillLen)
+					buf.WriteByte(0x20)
+					writeUleb128(buf, fillDstL)
+					buf.WriteByte(0x41)
+					writeSleb128(buf, 0)
+					buf.WriteByte(0x20)
+					writeUleb128(buf, fillLenL)
+					buf.WriteByte(0xfc)
+					writeUleb128(buf, 0x0b)
+					writeUleb128(buf, 0x00)
+
+					buf.WriteByte(0x0b) // end if
+
+					// slLocal.len = newLen
+					buf.WriteByte(0x20)
+					writeUleb128(buf, slLocal)
+					buf.WriteByte(0x20)
+					writeUleb128(buf, newLenL)
+					buf.WriteByte(0x36)
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 4)
+					return nil
+
 				case "push":
 					width := int32(4)
 					storeOp := byte(0x36)
