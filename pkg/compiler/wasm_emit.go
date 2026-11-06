@@ -282,6 +282,18 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 				key := fn.Receiver.Type.String() + "." + fn.Name
 				e.methodIndices[key] = fnIdx
 				e.fnReturns[key] = fn.RetType
+
+				// Also register the receiver's bare short name so calls
+				// emitted with an unqualified receiver type resolve to the
+				// same function. First registration wins, matching the
+				// function-index fallback convention.
+				if i := strings.LastIndexByte(fn.Receiver.Type.String(), '.'); i >= 0 {
+					shortKey := fn.Receiver.Type.String()[i+1:] + "." + fn.Name
+					if _, exists := e.methodIndices[shortKey]; !exists {
+						e.methodIndices[shortKey] = fnIdx
+						e.fnReturns[shortKey] = fn.RetType
+					}
+				}
 			} else {
 				e.fnIndices[fn.Name] = fnIdx
 				e.fnReturns[fn.Name] = fn.RetType
@@ -405,7 +417,14 @@ type fnContext struct {
 	localTypes map[string]UbeType
 	numParams  uint32
 	allocTypes []byte
-	defers     []Expr
+	// deferScopes is a stack of defer lists, one per lexical block. A defer
+	// runs when its own block exits (fall-through, break/continue out of a
+	// loop body, `?`, or return), not merely when the function returns.
+	deferScopes [][]Expr
+	// loopDeferDepths is a stack of deferScopes indices for the innermost
+	// loop body scopes. break/continue run every defer from the current
+	// innermost scope down to (and including) the loop body's scope.
+	loopDeferDepths []int
 	// labelDepth is the number of wasm labels (block/loop/if) currently
 	// open at this point in the emitted function body. It is incremented
 	// on every 0x02/0x03/0x04 emission and decremented on every 0x0b,
@@ -419,6 +438,93 @@ type fnContext struct {
 	// start, so break = (labelDepth - top) + 1 and
 	// continue = (labelDepth - top).
 	loopBodyDepths []int
+}
+
+func (ctx *fnContext) pushDeferScope() {
+	ctx.deferScopes = append(ctx.deferScopes, nil)
+}
+
+func (ctx *fnContext) popDeferScope() []Expr {
+	if len(ctx.deferScopes) == 0 {
+		return nil
+	}
+	top := ctx.deferScopes[len(ctx.deferScopes)-1]
+	ctx.deferScopes = ctx.deferScopes[:len(ctx.deferScopes)-1]
+	return top
+}
+
+func (ctx *fnContext) addDefer(e Expr) {
+	if len(ctx.deferScopes) == 0 {
+		ctx.deferScopes = append(ctx.deferScopes, nil)
+	}
+	idx := len(ctx.deferScopes) - 1
+	ctx.deferScopes[idx] = append(ctx.deferScopes[idx], e)
+}
+
+// emitAllDefers runs every active defer from innermost to outermost. It is
+// used on paths that leave the function entirely (return and `?`).
+func (ctx *fnContext) emitAllDefers(buf *bytes.Buffer) {
+	for s := len(ctx.deferScopes) - 1; s >= 0; s-- {
+		scope := ctx.deferScopes[s]
+		for i := len(scope) - 1; i >= 0; i-- {
+			_ = ctx.compileDeferredCall(buf, scope[i])
+		}
+	}
+}
+
+// emitCurrentScopeDefers runs only the innermost block's defers. It is used
+// on normal fall-through out of a block.
+func (ctx *fnContext) emitCurrentScopeDefers(buf *bytes.Buffer) {
+	if len(ctx.deferScopes) == 0 {
+		return
+	}
+	scope := ctx.deferScopes[len(ctx.deferScopes)-1]
+	for i := len(scope) - 1; i >= 0; i-- {
+		_ = ctx.compileDeferredCall(buf, scope[i])
+	}
+}
+
+// emitLoopDefers runs the defers of every scope entered since the loop body
+// began, including the loop body scope itself. It is used by break/continue,
+// which leave the loop body but not the enclosing function.
+func (ctx *fnContext) emitLoopDefers(buf *bytes.Buffer, loopScopeDepth int) {
+	if loopScopeDepth < 0 {
+		loopScopeDepth = 0
+	}
+	for s := len(ctx.deferScopes) - 1; s >= loopScopeDepth; s-- {
+		scope := ctx.deferScopes[s]
+		for i := len(scope) - 1; i >= 0; i-- {
+			_ = ctx.compileDeferredCall(buf, scope[i])
+		}
+	}
+}
+
+// stmtTerminated reports whether a statement always transfers control away
+// (return, break, continue) so the block-end defer flush must not run again on
+// that path.
+func stmtTerminated(s Stmt) bool {
+	if s == nil {
+		return false
+	}
+	switch st := s.(type) {
+	case *ReturnStmt, *LoopControlStmt:
+		return true
+	case *BlockStmt:
+		return blockTerminated(st)
+	case *IfStmt:
+		if st.Else == nil {
+			return false
+		}
+		return blockTerminated(st.Then) && stmtTerminated(st.Else)
+	}
+	return false
+}
+
+func blockTerminated(b *BlockStmt) bool {
+	if b == nil || len(b.Stmts) == 0 {
+		return false
+	}
+	return stmtTerminated(b.Stmts[len(b.Stmts)-1])
 }
 
 func (e *wasmEmitter) compileFunction(fn *FnDecl) ([]byte, error) {
@@ -447,9 +553,8 @@ func (e *wasmEmitter) compileFunction(fn *FnDecl) ([]byte, error) {
 		return nil, err
 	}
 
-	for i := len(ctx.defers) - 1; i >= 0; i-- {
-		_ = ctx.compileDeferredCall(&bodyBuf, ctx.defers[i])
-	}
+	// compileBlock flushes the function body's defer scope on fall-through
+	// (or the terminating statement already flushed every active scope).
 	if fn.RetType != nil && fn.RetType.String() != "void" {
 		bodyBuf.WriteByte(0x00)
 	}
@@ -493,11 +598,27 @@ func (ctx *fnContext) compileBlock(buf *bytes.Buffer, block *BlockStmt) error {
 	if block == nil {
 		return nil
 	}
+
+	// Every lexical block owns a defer scope. On normal fall-through its
+	// defers run here; terminating statements (return, break, continue)
+	// run the relevant scopes themselves and mark the block terminated so
+	// we do not emit them a second time on the same control-flow path.
+	ctx.pushDeferScope()
+	terminated := false
 	for _, stmt := range block.Stmts {
 		if err := ctx.compileStmt(buf, stmt); err != nil {
+			ctx.popDeferScope()
 			return err
 		}
+		if stmtTerminated(stmt) {
+			terminated = true
+			break
+		}
 	}
+	if !terminated {
+		ctx.emitCurrentScopeDefers(buf)
+	}
+	ctx.popDeferScope()
 	return nil
 }
 
@@ -705,13 +826,11 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			}
 		}
 
-		for i := len(ctx.defers) - 1; i >= 0; i-- {
-			_ = ctx.compileDeferredCall(buf, ctx.defers[i])
-		}
+		ctx.emitAllDefers(buf)
 		buf.WriteByte(0x0f)
 
 	case *DeferStmt:
-		ctx.defers = append(ctx.defers, s.Call)
+		ctx.addDefer(s.Call)
 
 	case *IfStmt:
 		if err := ctx.compileExpr(buf, s.Cond); err != nil {
@@ -742,6 +861,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		ctx.openLabel(buf, 0x03)
 		buf.WriteByte(valTypeVoid)
 		ctx.loopBodyDepths = append(ctx.loopBodyDepths, ctx.labelDepth)
+		ctx.loopDeferDepths = append(ctx.loopDeferDepths, len(ctx.deferScopes))
 
 		if err := ctx.compileExpr(buf, s.Cond); err != nil {
 			return err
@@ -755,6 +875,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		}
 
 		ctx.loopBodyDepths = ctx.loopBodyDepths[:len(ctx.loopBodyDepths)-1]
+		ctx.loopDeferDepths = ctx.loopDeferDepths[:len(ctx.loopDeferDepths)-1]
 
 		buf.WriteByte(0x0c)
 		writeUleb128(buf, 0)
@@ -801,6 +922,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			ctx.openLabel(buf, 0x03)
 			buf.WriteByte(valTypeVoid)
 			ctx.loopBodyDepths = append(ctx.loopBodyDepths, ctx.labelDepth)
+			ctx.loopDeferDepths = append(ctx.loopDeferDepths, len(ctx.deferScopes))
 
 			buf.WriteByte(0x20)
 			writeUleb128(buf, itemLocal)
@@ -815,6 +937,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			}
 
 			ctx.loopBodyDepths = ctx.loopBodyDepths[:len(ctx.loopBodyDepths)-1]
+			ctx.loopDeferDepths = ctx.loopDeferDepths[:len(ctx.loopDeferDepths)-1]
 
 			buf.WriteByte(0x20)
 			writeUleb128(buf, itemLocal)
@@ -882,6 +1005,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			ctx.openLabel(buf, 0x03)
 			buf.WriteByte(valTypeVoid)
 			ctx.loopBodyDepths = append(ctx.loopBodyDepths, ctx.labelDepth)
+			ctx.loopDeferDepths = append(ctx.loopDeferDepths, len(ctx.deferScopes))
 
 			buf.WriteByte(0x20)
 			writeUleb128(buf, idxLocal)
@@ -911,6 +1035,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			}
 
 			ctx.loopBodyDepths = ctx.loopBodyDepths[:len(ctx.loopBodyDepths)-1]
+			ctx.loopDeferDepths = ctx.loopDeferDepths[:len(ctx.loopDeferDepths)-1]
 
 			buf.WriteByte(0x20)
 			writeUleb128(buf, idxLocal)
@@ -1000,6 +1125,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		ctx.openLabel(buf, 0x03)
 		buf.WriteByte(valTypeVoid)
 		ctx.loopBodyDepths = append(ctx.loopBodyDepths, ctx.labelDepth)
+		ctx.loopDeferDepths = append(ctx.loopDeferDepths, len(ctx.deferScopes))
 
 		optLocal := ctx.allocLocal(valTypeI32)
 		if err := ctx.compileExpr(buf, s.Call); err != nil {
@@ -1033,6 +1159,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		}
 
 		ctx.loopBodyDepths = ctx.loopBodyDepths[:len(ctx.loopBodyDepths)-1]
+		ctx.loopDeferDepths = ctx.loopDeferDepths[:len(ctx.loopDeferDepths)-1]
 
 		buf.WriteByte(0x0c)
 		writeUleb128(buf, 0)
@@ -1227,6 +1354,9 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 	case *LoopControlStmt:
 		if len(ctx.loopBodyDepths) == 0 {
 			return fmt.Errorf("%s: %s outside of any loop", s.Loc(), loopControlName(s.Continue))
+		}
+		if len(ctx.loopDeferDepths) > 0 {
+			ctx.emitLoopDefers(buf, ctx.loopDeferDepths[len(ctx.loopDeferDepths)-1])
 		}
 		depth := ctx.labelDepth - ctx.loopBodyDepths[len(ctx.loopBodyDepths)-1]
 		buf.WriteByte(0x0c)
@@ -1909,9 +2039,7 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		buf.WriteByte(0x04)
 		buf.WriteByte(valTypeVoid)
 
-		for i := len(ctx.defers) - 1; i >= 0; i-- {
-			_ = ctx.compileDeferredCall(buf, ctx.defers[i])
-		}
+		ctx.emitAllDefers(buf)
 
 		buf.WriteByte(0x20)
 		writeUleb128(buf, resLocal)
@@ -2134,8 +2262,12 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 					buf.WriteByte(0x04) // if
 					buf.WriteByte(valTypeVoid)
 
-					// newCap = select(newLen > cap*2+8, newLen, cap*2+8)
-					//   false-branch value first: cap*2+8
+					// newCap = select(newLen, cap*2+8, newLen > cap*2+8)
+					// Wasm select returns the first value when the
+					// condition is true, so the true value (newLen) is
+					// pushed first and the false value (cap*2+8) second.
+					buf.WriteByte(0x20)
+					writeUleb128(buf, newLenL)
 					buf.WriteByte(0x20)
 					writeUleb128(buf, slLocal)
 					buf.WriteByte(0x28)
@@ -2147,9 +2279,6 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 					buf.WriteByte(0x41)
 					writeSleb128(buf, 8)
 					buf.WriteByte(0x6a)
-					//   true-branch value second: newLen
-					buf.WriteByte(0x20)
-					writeUleb128(buf, newLenL)
 					//   condition: newLen > cap*2+8
 					buf.WriteByte(0x20)
 					writeUleb128(buf, newLenL)

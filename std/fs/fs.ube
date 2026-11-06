@@ -433,11 +433,7 @@ pub fn (f File) read_all() -> []u8 ! string {
 
     let mut result = []u8{}
     let mut chunk = []u8{}
-    let mut i = 0
-    while i < 1024 {
-        chunk.push(0)
-        i += 1
-    }
+    chunk.resize(1024)
 
     while true {
         let bytes_read = f.read(mut chunk)?

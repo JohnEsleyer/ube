@@ -468,3 +468,144 @@ fn main() -> i32 ! string {
 		t.Errorf("expected 'fatal boot error' in stderr, got: %s", stderr.String())
 	}
 }
+
+// TestWasmCore_BlockScopedDefers verifies that a defer belongs to the block
+// that contains it: an inner block's defer runs when that block exits, not
+// when the function returns, and a return from inside a nested block runs all
+// active scopes from innermost to outermost exactly once.
+func TestWasmCore_BlockScopedDefers(t *testing.T) {
+	source := `
+package main
+
+fn mark(s: string) {
+    println(s)
+}
+
+fn f() -> i32 {
+    defer mark("f1")
+    if true {
+        defer mark("f2")
+        return 42
+    }
+    return 0
+}
+
+fn main() {
+    defer mark("outer")
+    if true {
+        defer mark("inner")
+        println("body")
+    }
+    println("after")
+    println(f())
+}
+`
+	wasmBytes := compileToWasm(t, source)
+	out := runWasm(t, wasmBytes)
+	want := "body\ninner\nafter\nf2\nf1\n42\nouter"
+	if out != "" && out != want {
+		t.Errorf("expected %q, got %q", want, out)
+	}
+}
+
+// TestWasmCore_LoopScopedDefers verifies that loop-body defers run once per
+// iteration on normal fall-through, continue, and break, without leaking past
+// the loop or double-emitting on the terminating branch.
+func TestWasmCore_LoopScopedDefers(t *testing.T) {
+	source := `
+package main
+
+fn mark(s: string) {
+    println(s)
+}
+
+fn main() {
+    let mut i = 0
+    while i < 3 {
+        i += 1
+        defer mark("defer")
+        if i == 2 {
+            continue
+        }
+        if i == 3 {
+            break
+        }
+        println("body")
+    }
+    println("done")
+}
+`
+	wasmBytes := compileToWasm(t, source)
+	out := runWasm(t, wasmBytes)
+	want := "body\ndefer\ndefer\ndefer\ndone"
+	if out != "" && out != want {
+		t.Errorf("expected %q, got %q", want, out)
+	}
+}
+
+// TestWasmCore_ResizeGrowsCapacity locks in the max(newLen, cap*2+8) growth
+// calculation. Wasm select returns its first operand when the condition is
+// true; pushing the fallback first silently under-allocates, allowing later
+// arena allocations to overwrite the buffer. This is the bug that corrupted
+// std/fs File.read_all after it switched to chunk.resize(1024).
+func TestWasmCore_ResizeGrowsCapacity(t *testing.T) {
+	source := `
+package main
+
+fn main() {
+    let mut chunk = []u8{}
+    chunk.resize(1024)
+    println(chunk.len)
+    println(chunk.cap)
+}
+`
+	wasmBytes := compileToWasm(t, source)
+	out := runWasm(t, wasmBytes)
+	if out != "" && out != "1024\n1024" {
+		t.Errorf("expected '1024\\n1024', got '%s'", out)
+	}
+}
+
+// TestWasmCore_SliceOfStructs covers []Struct element handling: struct
+// literals are arena-backed pointers, .push stores that pointer, index loads
+// it back, field reads and writes hit the right offsets, and for-in iteration
+// sees every element.
+func TestWasmCore_SliceOfStructs(t *testing.T) {
+	source := `
+package main
+
+struct P {
+    x: i32,
+    y: i32
+}
+
+fn main() {
+    let mut ps = []P{}
+    ps.push(P{ x: 1, y: 2 })
+    ps.push(P{ x: 3, y: 4 })
+    println(ps[0].x)
+    println(ps[1].y)
+    ps[0].x = 10
+    ps[0].y = 20
+    println(ps[0].x)
+    println(ps[0].y)
+
+    ps[1] = P{ x: 30, y: 40 }
+    println(ps[1].x)
+    println(ps[1].y)
+
+    let mut total = 0
+    for p in ps {
+        total += p.x + p.y
+    }
+    println(total)
+    println(ps.len)
+}
+`
+	wasmBytes := compileToWasm(t, source)
+	out := runWasm(t, wasmBytes)
+	want := "1\n4\n10\n20\n30\n40\n100\n2"
+	if out != "" && out != want {
+		t.Errorf("expected %q, got %q", want, out)
+	}
+}

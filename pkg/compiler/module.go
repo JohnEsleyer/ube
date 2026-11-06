@@ -556,7 +556,14 @@ func qualifyPackageDecls(decls []Decl, canonical string) {
 				d.Methods[i].RetType = qualifyType(d.Methods[i].RetType, qualify)
 			}
 		case *FnDecl:
-			d.Name = qualify(d.Name)
+			// Receiver methods keep their unqualified method name. Their
+			// identity is (qualified receiver type, method name), so only
+			// the receiver type is rewritten here. Qualifying the method
+			// name would register it as e.g. fs.OpenOptions.fs.open while
+			// call sites look for fs.OpenOptions.open.
+			if d.Receiver == nil {
+				d.Name = qualify(d.Name)
+			}
 			qualifyTypeParams(d.TypeParams)
 			if d.Receiver != nil {
 				d.Receiver.Type = qualifyType(d.Receiver.Type, qualify)
