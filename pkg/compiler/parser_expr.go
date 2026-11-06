@@ -211,7 +211,14 @@ func (p *Parser) parsePostfix() Expr {
 				}
 			}
 			p.expect(TokenRParen, "Expected ')'")
-			node = &CallExpr{At: loc, Callee: node, Args: args}
+			// Pin CallExpr.At to the callee, not the '(' token. Diagnostics
+			// ("has no method", "Unsupported call target") then point at
+			// the actual call target rather than the opening paren.
+			calleeLoc := loc
+			if node != nil {
+				calleeLoc = node.Loc()
+			}
+			node = &CallExpr{At: calleeLoc, Callee: node, Args: args}
 		} else {
 			break
 		}
@@ -291,7 +298,41 @@ func parseInterpolatedParts(raw string, loc SourceLocation) ([]Expr, error) {
 	return parts, nil
 }
 
+// parseIfExpr parses `if <cond> { <then> } else { <else> }` in expression
+// position. Both branches are mandatory; both must end in an expression
+// statement whose type is the value of that arm.
+func (p *Parser) parseIfExpr() Expr {
+	start := p.expect(TokenIf, "Expected 'if'")
+	if p.check(TokenLet) {
+		p.errorAt(p.peek(0).Loc, "if-let cannot appear in expression position; use a statement")
+		for !p.check(TokenEOF) && !p.check(TokenRBrace) {
+			p.advance()
+		}
+		return &LiteralExpr{At: start.Loc, Val: "false", Type: PrimitiveType{Name: "bool"}}
+	}
+	cond := p.parseExpr()
+	if !p.check(TokenLBrace) {
+		p.errorAt(p.peek(0).Loc, "expected '{' after if condition in expression position")
+		return &LiteralExpr{At: start.Loc, Val: "false", Type: PrimitiveType{Name: "bool"}}
+	}
+	then := p.parseBlock()
+	if !p.check(TokenElse) {
+		p.errorAt(p.peek(0).Loc, "if-expression requires an 'else' branch")
+		return &LiteralExpr{At: start.Loc, Val: "false", Type: PrimitiveType{Name: "bool"}}
+	}
+	p.advance()
+	if !p.check(TokenLBrace) {
+		p.errorAt(p.peek(0).Loc, "expected '{' after 'else' in expression position")
+		return &LiteralExpr{At: start.Loc, Val: "false", Type: PrimitiveType{Name: "bool"}}
+	}
+	elseB := p.parseBlock()
+	return &IfExpr{At: start.Loc, Cond: cond, Then: then, Else: elseB}
+}
+
 func (p *Parser) parsePrimary() Expr {
+	if p.check(TokenIf) {
+		return p.parseIfExpr()
+	}
 	if p.check(TokenArena) {
 		tok := p.advance()
 		body := p.parseBlock()

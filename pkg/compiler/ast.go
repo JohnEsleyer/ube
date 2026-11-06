@@ -214,8 +214,24 @@ type IfStmt struct {
 	Else Stmt
 }
 
+// IfExpr is the expression form of `if`. Both arms are required and must
+// yield compatible value types. The value of each arm is the final ExprStmt
+// of its block. Statement-position `if` remains an IfStmt so existing code
+// continues to work unchanged; the parser only reaches parseIfExpr when an
+// `if` appears in expression position (e.g. after `=` or as an argument).
+type IfExpr struct {
+	At   SourceLocation
+	Cond Expr
+	Then *BlockStmt
+	Else *BlockStmt
+	Type UbeType
+}
+
 func (s *IfStmt) Loc() SourceLocation { return s.At }
 func (s *IfStmt) stmtNode()           {}
+
+func (e *IfExpr) Loc() SourceLocation { return e.At }
+func (e *IfExpr) exprNode()           {}
 
 type IfLetStmt struct {
 	At       SourceLocation

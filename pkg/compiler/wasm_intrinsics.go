@@ -518,6 +518,8 @@ func (ctx *fnContext) exprLeavesValue(expr Expr) bool {
 	switch e := expr.(type) {
 	case *CallExpr:
 		return ctx.callReturnsValue(e)
+	case *IfExpr:
+		return e.Type == nil || e.Type.String() != "void"
 	case *TryExpr, *OrElseExpr, *ErrorExpr, *InterpolatedStringExpr,
 		*StructInitExpr, *SliceInitExpr, *ArrayInitExpr, *TupleExpr,
 		*BinaryExpr, *UnaryExpr, *MemberExpr, *IndexExpr, *SliceSubExpr,

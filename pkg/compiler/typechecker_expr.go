@@ -32,6 +32,100 @@ func integerType(t UbeType) bool {
 // lookupModuleMember resolves `alias.member` to the internal flattened name
 // used for an imported module. Unaliased imports map to the empty prefix, so
 // `wasi.fd_write(...)` and `fd_write(...)` resolve to the same declaration.
+// inferIfArmValue typechecks every statement of an if-expression arm in the
+// provided child scope, and returns the type of the final ExprStmt. Earlier
+// statements are checked normally; only the final statement must be an
+// expression (otherwise the arm has no value).
+// findEmbeddedMethod walks the anonymous embedding chain of structName
+// looking for a method called methodName. Returns the unique match; ambiguity
+// is treated as "not found" so the caller can fall back to a diagnostic that
+// explains how to qualify. `seen` guards against cyclic embedding.
+func (tc *Typechecker) findEmbeddedMethod(structName, methodName string, path []string, seen map[string]bool) ([]string, string, FuncSignature, bool) {
+	if seen[structName] {
+		return nil, "", FuncSignature{}, false
+	}
+	seen[structName] = true
+	meta, ok := tc.Global.StructMeta[structName]
+	if !ok {
+		return nil, "", FuncSignature{}, false
+	}
+	var matches [][]string
+	var owners []string
+	var sigs []FuncSignature
+	for _, f := range meta.Fields {
+		if !f.Anonymous {
+			continue
+		}
+		ct, ok := f.Type.(CustomType)
+		if !ok {
+			continue
+		}
+		childPath := append(append([]string{}, path...), f.Name)
+		if sig, has := tc.Global.Funcs[ct.Name+"."+methodName]; has {
+			matches = append(matches, childPath)
+			owners = append(owners, ct.Name)
+			sigs = append(sigs, sig)
+		}
+		subPath, subOwner, subSig, subFound := tc.findEmbeddedMethod(ct.Name, methodName, childPath, seen)
+		if subFound {
+			matches = append(matches, subPath)
+			owners = append(owners, subOwner)
+			sigs = append(sigs, subSig)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], owners[0], sigs[0], true
+	}
+	return nil, "", FuncSignature{}, false
+}
+
+// collectEmbeddedMethodHints appends "<Embed>[.<Embed>...].<method>" strings
+// for every anonymous embedding path that exposes methodName. Used only to
+// build the "did you mean ...?" part of the diagnostic.
+func (tc *Typechecker) collectEmbeddedMethodHints(structName, methodName string, path []string, seen map[string]bool, out *[]string) {
+	if seen[structName] {
+		return
+	}
+	seen[structName] = true
+	meta, ok := tc.Global.StructMeta[structName]
+	if !ok {
+		return
+	}
+	for _, f := range meta.Fields {
+		if !f.Anonymous {
+			continue
+		}
+		ct, ok := f.Type.(CustomType)
+		if !ok {
+			continue
+		}
+		childPath := append(append([]string{}, path...), f.Name)
+		if _, has := tc.Global.Funcs[ct.Name+"."+methodName]; has {
+			*out = append(*out, strings.Join(append(childPath, methodName), "."))
+		}
+		tc.collectEmbeddedMethodHints(ct.Name, methodName, childPath, seen, out)
+	}
+}
+
+func (tc *Typechecker) inferIfArmValue(b *BlockStmt, env *TypeEnvironment) (UbeType, error) {
+	if b == nil || len(b.Stmts) == 0 {
+		return nil, fmt.Errorf("%s: if-expression branch has no value (empty block)", b.Loc())
+	}
+	for i, stmt := range b.Stmts {
+		if i == len(b.Stmts)-1 {
+			es, ok := stmt.(*ExprStmt)
+			if !ok {
+				return nil, fmt.Errorf("%s: if-expression branch's last statement must be an expression", stmt.Loc())
+			}
+			return tc.inferExpr(es.Expr, env)
+		}
+		if err := tc.checkStmt(stmt, env); err != nil {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("%s: if-expression branch has no value", b.Loc())
+}
+
 func (tc *Typechecker) lookupModuleMember(alias, member string) (string, FuncSignature, bool) {
 	canonical, isModule := tc.ModuleAliases[alias]
 	if !isModule {
@@ -44,6 +138,48 @@ func (tc *Typechecker) lookupModuleMember(alias, member string) (string, FuncSig
 
 func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, error) {
 	switch e := expr.(type) {
+	case *IfExpr:
+		condT, err := tc.inferExpr(e.Cond, env)
+		if err != nil {
+			return nil, err
+		}
+		if condT.String() != "bool" {
+			return nil, fmt.Errorf("[%s] if-expression condition must be bool, got '%s'", e.Cond.Loc(), condT)
+		}
+		thenEnv := childTypeEnvironment(env)
+		for k, v := range env.Vars {
+			thenEnv.Vars[k] = v
+		}
+		thenT, err := tc.inferIfArmValue(e.Then, thenEnv)
+		if err != nil {
+			return nil, err
+		}
+		elseEnv := childTypeEnvironment(env)
+		for k, v := range env.Vars {
+			elseEnv.Vars[k] = v
+		}
+		elseT, err := tc.inferIfArmValue(e.Else, elseEnv)
+		if err != nil {
+			return nil, err
+		}
+		thenT = tc.resolveType(thenT)
+		elseT = tc.resolveType(elseT)
+		if thenT.String() != elseT.String() {
+			return nil, fmt.Errorf("[%s] if-expression branches have different types: then='%s' else='%s'", e.At, thenT, elseT)
+		}
+		for name, ti := range thenEnv.Vars {
+			if ti.Moved {
+				env.updateVar(name, func(v *VarInfo) { v.Moved = true })
+			}
+		}
+		for name, ei := range elseEnv.Vars {
+			if ei.Moved {
+				env.updateVar(name, func(v *VarInfo) { v.Moved = true })
+			}
+		}
+		e.Type = thenT
+		return thenT, nil
+
 	case *PromoteExpr:
 		t, err := tc.inferExpr(e.Value, env)
 		if err != nil {
@@ -778,6 +914,28 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				}
 				return sig.RetType, nil
 			}
+			// Embedded-method promotion: x.m() where m is a method of an
+			// anonymously embedded field of x's type. We resolve exactly one
+			// embedding path; ambiguous matches fall through to the
+			// actionable error below so the developer can qualify explicitly.
+			if ct, ok := tgtT.(CustomType); ok {
+				if path, owner, sig, found := tc.findEmbeddedMethod(ct.Name, mem.Member, nil, map[string]bool{}); found && len(path) > 0 {
+					mem.EmbedPath = path
+					mem.TargetType = CustomType{Name: owner}
+					e.ReceiverType = mem.TargetType
+					if sig.ReceiverMut {
+						if root := assignmentRoot(mem.Target); root != "" {
+							if vInfo, found := env.LookupVar(root); found && !vInfo.IsMut {
+								return nil, fmt.Errorf("[%s] cannot call mutating method '%s' on immutable value '%s'", e.At, mem.Member, root)
+							}
+						}
+					}
+					if err := tc.checkCallArgsWithReceiver(mem.Target, sig.ReceiverMut, e.Args, sig.Params, sig.Escaping, env, e.At); err != nil {
+						return nil, err
+					}
+					return sig.RetType, nil
+				}
+			}
 		}
 		if id, ok := e.Callee.(*IdentExpr); ok {
 			canonical := tc.canonicalName(id.Name)
@@ -795,6 +953,19 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				return sig.RetType, nil
 			}
 			return nil, fmt.Errorf("[%s] Undefined function '%s'", e.At, id.Name)
+		}
+		if mem, ok := e.Callee.(*MemberExpr); ok {
+			if tt, terr := tc.inferExpr(mem.Target, env); terr == nil {
+				if ct, ok := tt.(CustomType); ok {
+					var hints []string
+					tc.collectEmbeddedMethodHints(ct.Name, mem.Member, nil, map[string]bool{}, &hints)
+					if len(hints) > 0 {
+						return nil, fmt.Errorf("[%s] type '%s' has no method '%s' (did you mean '%s'?)",
+							e.At, ct.Name, mem.Member, hints[0])
+					}
+					return nil, fmt.Errorf("[%s] type '%s' has no method '%s'", e.At, ct.Name, mem.Member)
+				}
+			}
 		}
 		return nil, fmt.Errorf("[%s] Unsupported call target", e.At)
 

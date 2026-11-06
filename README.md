@@ -77,7 +77,6 @@ Worth stating explicitly, because the surface syntax invites the wrong expectati
 
 - **Not a general-purpose replacement for Rust or C++.** If you need `unsafe`, raw pointers, SIMD intrinsics, or hand-tuned allocation, Ube deliberately forbids all of it. That is a design choice, not a gap.
 - **Not a scripting language.** There is no REPL, no eval, no dynamic dispatch by name.
-- **Not finished.** Networking and WebGPU support are planned but not shipped; `std/net` and `std/http` do not yet exist.
 
 ---
 
@@ -272,6 +271,19 @@ fn main() {
 ```
 
 Promoted field access works through arbitrary embedding depth and is resolved statically.
+
+**Methods on embedded structs are also promoted**, mirroring Go's behavior:
+`player.translate(...)` dispatches to `Transform3D.translate` with the embedded
+field's storage as receiver, so mutations land in the outer struct's inline
+`Transform3D` slot rather than the outer struct's first bytes. If two embedded
+structs both declare the same method name, the call is rejected as ambiguous —
+qualify the call (`player.Transform3D.translate(...)`) to disambiguate.
+
+**Known limitation:** string interpolation of `f32`/`f64` values currently
+truncates to the integer part. `f"{3.75}"` prints `3`, not `3.75`. The compiler
+emits `i32.trunc_f32_s` / `i32.trunc_f64_s` on the float and formats via
+`__i32_to_str`; a full decimal formatter is a planned addition. Use
+`println(some_i32)` for integer presentation until then.
 
 ---
 

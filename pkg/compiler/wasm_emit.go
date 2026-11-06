@@ -237,32 +237,108 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 	}
 
 	// Pre-scan structs, enums, and traits
+	// Pass 1: seed empty meta for every struct so recursive sizeof lookups
+	// can terminate. Also register enums and traits.
 	currentTypeID := int32(1)
+	structDecls := make(map[string]*StructDecl)
+	var structOrder []string
 	for _, decl := range prog.Decls {
 		switch d := decl.(type) {
 		case *StructDecl:
-			meta := structMeta{
+			e.structs[d.Name] = structMeta{
 				fieldOffsets: make(map[string]int),
 				fieldTypes:   make(map[string]UbeType),
 			}
-			offset := 0
-			for _, f := range d.Fields {
-				meta.fieldOffsets[f.Name] = offset
-				meta.fieldTypes[f.Name] = f.Type
-				offset += 4
-			}
-			meta.totalSize = offset
-			if meta.totalSize == 0 {
-				meta.totalSize = 4
-			}
-			e.structs[d.Name] = meta
 			e.typeIDs[d.Name] = currentTypeID
 			currentTypeID++
+			structDecls[d.Name] = d
+			structOrder = append(structOrder, d.Name)
 		case *EnumDecl:
 			e.enums[d.Name] = d.Variants
 		case *TraitDecl:
 			e.traits[d.Name] = d
 		}
+	}
+
+	// sizeofStruct computes the total in-memory size of a struct, aligning
+	// every field to its own Align() and advancing by its true ByteSize().
+	// CustomType fields recurse (their ByteSize() reports the fat-pointer
+	// size of 4, which is the wrong value for inline storage). The result
+	// is memoized in meta.totalSize; the `seen` guard breaks any cycle.
+	var sizeofStruct func(name string, seen map[string]bool) int
+	sizeofStruct = func(name string, seen map[string]bool) int {
+		meta, ok := e.structs[name]
+		if !ok {
+			return 4
+		}
+		if meta.totalSize > 0 {
+			return meta.totalSize
+		}
+		if seen[name] {
+			return 4
+		}
+		seen[name] = true
+		sd, ok := structDecls[name]
+		if !ok {
+			return 4
+		}
+		offset := 0
+		for _, f := range sd.Fields {
+			sz := structFieldSize(f.Type, sizeofStruct, seen)
+			al := f.Type.Align()
+			if al < 1 {
+				al = 1
+			}
+			offset = alignUpInt(offset, al)
+			offset += sz
+		}
+		if offset == 0 {
+			offset = 4
+		}
+		meta.totalSize = offset
+		e.structs[name] = meta
+		return offset
+	}
+
+	// Pass 2: fill in real fieldOffsets / fieldTypes using the recursive
+	// size computation. Field start positions are aligned to the field
+	// type's Align() so i64/f64 fields land on 8-byte boundaries.
+	for _, name := range structOrder {
+		sd := structDecls[name]
+		meta := e.structs[name]
+		offset := 0
+		for _, f := range sd.Fields {
+			al := f.Type.Align()
+			if al < 1 {
+				al = 1
+			}
+			offset = alignUpInt(offset, al)
+			meta.fieldOffsets[f.Name] = offset
+			meta.fieldTypes[f.Name] = f.Type
+			offset += structFieldSize(f.Type, sizeofStruct, map[string]bool{})
+		}
+		if offset == 0 {
+			offset = 4
+		}
+		meta.totalSize = offset
+		e.structs[name] = meta
+	}
+
+	// After every direct struct is registered, walk each struct's anonymous
+	// embedding chain and register promoted field offsets under dotted keys.
+	// This makes `h.pos_x` resolve to the same offset as `h.Transform3D.pos_x`
+	// when the typechecker has set MemberExpr.EmbedPath.
+	for _, decl := range prog.Decls {
+		sd, ok := decl.(*StructDecl)
+		if !ok {
+			continue
+		}
+		meta, ok := e.structs[sd.Name]
+		if !ok {
+			continue
+		}
+		e.registerPromotedFields(&meta, sd, nil, map[string]bool{})
+		e.structs[sd.Name] = meta
 	}
 
 	// Intern static boolean headers
@@ -677,7 +753,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				if err := ctx.compileExpr(buf, s.RHS); err != nil {
 					return err
 				}
-				if err := emitCompoundOp(buf, s.Op); err != nil {
+				if err := emitCompoundOp(buf, s.Op, ctx.inferExprType(s.RHS)); err != nil {
 					return err
 				}
 			} else {
@@ -693,9 +769,10 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			if !ok {
 				return fmt.Errorf("unknown struct type %s", structName)
 			}
-			offset, ok := meta.fieldOffsets[mem.Member]
+			fieldKey := memberFieldKey(mem)
+			offset, ok := meta.fieldOffsets[fieldKey]
 			if !ok {
-				return fmt.Errorf("unknown field %s on struct %s", mem.Member, structName)
+				return fmt.Errorf("unknown field %s on struct %s", fieldKey, structName)
 			}
 			if err := ctx.compileExpr(buf, mem.Target); err != nil {
 				return err
@@ -712,6 +789,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				compoundLoadOp = 0x29
 				compoundLoadAlign = 3
 			}
+			fieldType := meta.fieldTypes[fieldKey]
 			if s.Op != "=" {
 				targetLocal := ctx.allocLocal(valTypeI32)
 				buf.WriteByte(0x22)
@@ -725,9 +803,30 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				if err := ctx.compileExpr(buf, s.RHS); err != nil {
 					return err
 				}
-				if err := emitCompoundOp(buf, s.Op); err != nil {
+				if err := emitCompoundOp(buf, s.Op, ctx.inferExprType(s.RHS)); err != nil {
 					return err
 				}
+			} else if isAddressMember(fieldType) {
+				// mem.copy(base+offset, src_ptr, sizeofInline).
+				// base was already pushed by the outer compileExpr(mem.Target);
+				// move it into a local so offset can be added before RHS runs.
+				baseLocal := ctx.allocLocal(valTypeI32)
+				buf.WriteByte(0x21)
+				writeUleb128(buf, baseLocal)
+				buf.WriteByte(0x20)
+				writeUleb128(buf, baseLocal)
+				if offset != 0 {
+					buf.WriteByte(0x41)
+					writeSleb128(buf, int32(offset))
+					buf.WriteByte(0x6a)
+				}
+				if err := ctx.compileExpr(buf, s.RHS); err != nil {
+					return err
+				}
+				buf.WriteByte(0x41)
+				writeSleb128(buf, int32(ctx.emitter.sizeofInline(fieldType)))
+				ctx.emitMemoryCopy(buf)
+				return nil
 			} else {
 				if err := ctx.compileExpr(buf, s.RHS); err != nil {
 					return err
@@ -1376,18 +1475,46 @@ func loopControlName(cont bool) string {
 	return "break"
 }
 
-func emitCompoundOp(buf *bytes.Buffer, op string) error {
+// emitCompoundOp emits the wasm arithmetic opcode for a compound assignment
+// operator, chosen by both the operator and the operand type. Wasm numeric
+// opcodes are type-specific: i32.add = 0x6a, i64.add = 0x7c, f32.add = 0x92,
+// f64.add = 0xa0. The same offset pattern holds for sub/mul/div/rem.
+func emitCompoundOp(buf *bytes.Buffer, op string, operandType string) error {
+	// Base offsets within each family: add=0x00, sub=0x01, mul=0x02,
+	// div=0x03, rem=0x05. The family base is the opcode for that family's
+	// add (i32=0x6a, i64=0x7c, f32=0x92, f64=0xa0).
+	var familyBase byte
+	switch operandType {
+	case "f32":
+		familyBase = 0x92
+	case "f64":
+		familyBase = 0xa0
+	case "i64":
+		familyBase = 0x7c
+	default:
+		familyBase = 0x6a
+	}
+	// f32/f64 have no integer remainder; i32/i64 have no float remainder
+	// either, but the numeric family layout is: add, sub, mul, div, rem
+	// where each is one byte apart. For f32/f64 the gap is: add, sub, mul,
+	// div, min, max, copysign — so we cannot use base+5 for rem. The demo
+	// does not use %= on floats; reject that combination explicitly rather
+	// than emitting the wrong opcode.
+	isFloat := operandType == "f32" || operandType == "f64"
 	switch op {
 	case "+=":
-		buf.WriteByte(0x6a)
+		buf.WriteByte(familyBase)
 	case "-=":
-		buf.WriteByte(0x6b)
+		buf.WriteByte(familyBase + 0x01)
 	case "*=":
-		buf.WriteByte(0x6c)
+		buf.WriteByte(familyBase + 0x02)
 	case "/=":
-		buf.WriteByte(0x6d)
+		buf.WriteByte(familyBase + 0x03)
 	case "%=":
-		buf.WriteByte(0x6f)
+		if isFloat {
+			return fmt.Errorf("'%%=' is not supported on '%s'", operandType)
+		}
+		buf.WriteByte(familyBase + 0x05)
 	case "&=":
 		buf.WriteByte(0x71)
 	case "|=":
@@ -1406,6 +1533,38 @@ func emitCompoundOp(buf *bytes.Buffer, op string) error {
 
 func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 	switch e := expr.(type) {
+	case *IfExpr:
+		if err := ctx.compileExpr(buf, e.Cond); err != nil {
+			return err
+		}
+		resultVal := byte(valTypeVoid)
+		if e.Type != nil {
+			switch e.Type.String() {
+			case "f32":
+				resultVal = valTypeF32
+			case "f64":
+				resultVal = valTypeF64
+			case "i64":
+				resultVal = valTypeI64
+			case "void":
+				resultVal = valTypeVoid
+			default:
+				resultVal = valTypeI32
+			}
+		} else {
+			resultVal = valTypeI32
+		}
+		ctx.openLabel(buf, 0x04)
+		buf.WriteByte(resultVal)
+		if err := ctx.compileExprArm(buf, e.Then); err != nil {
+			return err
+		}
+		buf.WriteByte(0x05)
+		if err := ctx.compileExprArm(buf, e.Else); err != nil {
+			return err
+		}
+		ctx.closeLabel(buf)
+		return nil
 	case *LiteralExpr:
 		switch e.Type.String() {
 		case "i32", "u8":
@@ -1680,17 +1839,32 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		if !ok {
 			return fmt.Errorf("unknown struct type %s", structName)
 		}
-		offset, ok := meta.fieldOffsets[e.Member]
+		fieldKey := memberFieldKey(e)
+		offset, ok := meta.fieldOffsets[fieldKey]
 		if !ok {
-			return fmt.Errorf("unknown field %s on struct %s", e.Member, structName)
+			return fmt.Errorf("unknown field %s on struct %s", fieldKey, structName)
+		}
+		fieldType := meta.fieldTypes[fieldKey]
+		if isAddressMember(fieldType) {
+			// Compound-valued field (nested struct or fixed array): return a
+			// pointer into the owner's inline storage, not a scalar load.
+			if err := ctx.compileExpr(buf, e.Target); err != nil {
+				return err
+			}
+			if offset != 0 {
+				buf.WriteByte(0x41)
+				writeSleb128(buf, int32(offset))
+				buf.WriteByte(0x6a)
+			}
+			return nil
 		}
 		if err := ctx.compileExpr(buf, e.Target); err != nil {
 			return err
 		}
 		loadOp := byte(0x28)
 		loadAl := uint32(2)
-		if ft, ok := meta.fieldTypes[e.Member]; ok && ft != nil {
-			switch ft.String() {
+		if fieldType != nil {
+			switch fieldType.String() {
 			case "f32":
 				loadOp = 0x2a
 			case "f64":
@@ -1933,6 +2107,25 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 
 		for _, f := range e.Fields {
 			offset := meta.fieldOffsets[f.Name]
+			fieldType := meta.fieldTypes[f.Name]
+			if isAddressMember(fieldType) {
+				// mem.copy(structBase+offset, src_ptr, sizeofInline).
+				// Stack order: [dst, src, len] then memory.copy.
+				buf.WriteByte(0x20)
+				writeUleb128(buf, structBase)
+				if offset != 0 {
+					buf.WriteByte(0x41)
+					writeSleb128(buf, int32(offset))
+					buf.WriteByte(0x6a)
+				}
+				if err := ctx.compileExpr(buf, f.Val); err != nil {
+					return err
+				}
+				buf.WriteByte(0x41)
+				writeSleb128(buf, int32(ctx.emitter.sizeofInline(fieldType)))
+				ctx.emitMemoryCopy(buf)
+				continue
+			}
 			buf.WriteByte(0x20)
 			writeUleb128(buf, structBase)
 			if err := ctx.compileExpr(buf, f.Val); err != nil {
@@ -1940,8 +2133,8 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			}
 			storeOp := byte(0x36)
 			storeAl := uint32(2)
-			if ft, ok := meta.fieldTypes[f.Name]; ok && ft != nil {
-				switch ft.String() {
+			if fieldType != nil {
+				switch fieldType.String() {
 				case "f32":
 					storeOp = 0x38
 				case "f64":
@@ -2885,6 +3078,18 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 				if err := ctx.compileExpr(buf, mem.Target); err != nil {
 					return err
 				}
+				if len(mem.EmbedPath) > 0 {
+					rootType := ctx.inferExprType(mem.Target)
+					off, _, err := ctx.embedReceiverOffset(rootType, mem.EmbedPath)
+					if err != nil {
+						return err
+					}
+					if off != 0 {
+						buf.WriteByte(0x41)
+						writeSleb128(buf, int32(off))
+						buf.WriteByte(0x6a)
+					}
+				}
 				for _, arg := range e.Args {
 					if err := ctx.compileExpr(buf, arg); err != nil {
 						return err
@@ -2906,6 +3111,18 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 				if methodIdx, exists := ctx.emitter.methodIndices[shortKey]; exists {
 					if err := ctx.compileExpr(buf, mem.Target); err != nil {
 						return err
+					}
+					if len(mem.EmbedPath) > 0 {
+						rootType := ctx.inferExprType(mem.Target)
+						off, _, err := ctx.embedReceiverOffset(rootType, mem.EmbedPath)
+						if err != nil {
+							return err
+						}
+						if off != 0 {
+							buf.WriteByte(0x41)
+							writeSleb128(buf, int32(off))
+							buf.WriteByte(0x6a)
+						}
 					}
 					for _, arg := range e.Args {
 						if err := ctx.compileExpr(buf, arg); err != nil {
@@ -3109,6 +3326,198 @@ func (ctx *fnContext) compilePrint(buf *bytes.Buffer, args []Expr, newline bool)
 	return nil
 }
 
+// isAddressMember returns true for field types whose runtime representation
+// is a compound value (nested struct or fixed array) stored inline at the
+// field offset. Reading such a field must return a pointer into the owner's
+// storage, and writing one must copy the value into that storage; a scalar
+// load/store would touch only the first word and corrupt memory.
+func isAddressMember(t UbeType) bool {
+	switch t.(type) {
+	case CustomType, ArrayType:
+		return true
+	}
+	return false
+}
+
+// embedReceiverOffset walks mem.EmbedPath from rootType and returns the
+// composite byte offset to add to a pointer of type rootType in order to
+// reach the embedded receiver, plus the innermost embedded type name.
+// The walk relies on structMeta.fieldOffsets, which — thanks to patch 04 —
+// reflect the actual inline layout of embedded structs.
+func (ctx *fnContext) embedReceiverOffset(rootType string, path []string) (int, string, error) {
+	cur := rootType
+	total := 0
+	for _, seg := range path {
+		meta, ok := ctx.emitter.structs[cur]
+		if !ok {
+			return 0, "", fmt.Errorf("unknown struct %s while resolving embed path", cur)
+		}
+		off, ok := meta.fieldOffsets[seg]
+		if !ok {
+			return 0, "", fmt.Errorf("unknown embedded field %s on %s", seg, cur)
+		}
+		total += off
+		ft, ok := meta.fieldTypes[seg]
+		if !ok {
+			return 0, "", fmt.Errorf("unknown embedded field type %s on %s", seg, cur)
+		}
+		cur = ft.String()
+	}
+	return total, cur, nil
+}
+
+// sizeofInline returns the byte size a value of type t occupies when stored
+// inline as a struct field. CustomType uses the recursive struct size
+// (CustomType.ByteSize() is the fat-pointer size of 4). ArrayType multiplies
+// element count by inline element size. All other types use ByteSize().
+func (e *wasmEmitter) sizeofInline(t UbeType) int {
+	if ct, ok := t.(CustomType); ok {
+		if meta, ok := e.structs[ct.Name]; ok && meta.totalSize > 0 {
+			return meta.totalSize
+		}
+		return 4
+	}
+	if at, ok := t.(ArrayType); ok {
+		if at.Elem != nil {
+			return at.Size * e.sizeofInline(at.Elem)
+		}
+		return at.Size * 4
+	}
+	if sz := t.ByteSize(); sz > 0 {
+		return sz
+	}
+	return 4
+}
+
+// alignUpInt rounds offset up to the next multiple of align. align must be
+// positive; callers clamp to 1 before calling.
+func alignUpInt(offset, align int) int {
+	if align <= 1 {
+		return offset
+	}
+	rem := offset % align
+	if rem == 0 {
+		return offset
+	}
+	return offset + (align - rem)
+}
+
+// structFieldSize returns the in-memory size of a field of type t when
+// stored inline in a struct. Primitive, string, slice, and array sizes come
+// from UbeType.ByteSize(). CustomType uses the recursive struct size (the
+// built-in ByteSize() reports 4, which is the fat-pointer size and is not
+// what an inline field occupies). Optional/result/tuple/chan/pool fall back
+// to ByteSize(), which is defined for each by types.go.
+func structFieldSize(t UbeType, sizeofStruct func(string, map[string]bool) int, seen map[string]bool) int {
+	if ct, ok := t.(CustomType); ok {
+		return sizeofStruct(ct.Name, seen)
+	}
+	sz := t.ByteSize()
+	if sz < 1 {
+		sz = 4
+	}
+	return sz
+}
+
+// registerPromotedFields descends into the anonymous embedded fields of sd
+// and records each transitively accessible leaf field's composite offset in
+// meta.fieldOffsets under a dotted key ("Transform3D.pos_x", "A.B.x", ...).
+// It never overwrites an existing direct key, so `h.Transform3D` remains the
+// embedded-struct offset itself. Cyclic embedding is guarded by `seen`.
+func (e *wasmEmitter) registerPromotedFields(meta *structMeta, sd *StructDecl, path []string, seen map[string]bool) {
+	if seen[sd.Name] {
+		return
+	}
+	seen[sd.Name] = true
+	for _, f := range sd.Fields {
+		if !f.Anonymous {
+			continue
+		}
+		ct, ok := f.Type.(CustomType)
+		if !ok {
+			continue
+		}
+		base, ok := meta.fieldOffsets[f.Name]
+		if !ok {
+			continue
+		}
+		inner, ok := e.structs[ct.Name]
+		if !ok {
+			continue
+		}
+		childPath := append(append([]string{}, path...), f.Name)
+		// Promote every direct field of the embedded struct, plus any
+		// fields already promoted into it (recursive descent).
+		for leafName, leafOff := range inner.fieldOffsets {
+			dotted := strings.Join(childPath, ".") + "." + leafName
+			if _, exists := meta.fieldOffsets[dotted]; !exists {
+				meta.fieldOffsets[dotted] = base + leafOff
+			}
+			if lt, ok := inner.fieldTypes[leafName]; ok {
+				if _, exists := meta.fieldTypes[dotted]; !exists {
+					meta.fieldTypes[dotted] = lt
+				}
+			}
+		}
+		// Recurse so that `A.B.x` is also registered on the outermost struct.
+		e.registerPromotedFields(meta, &StructDecl{Name: ct.Name, Fields: innerFields(inner, e)}, childPath, seen)
+	}
+}
+
+// innerFields reconstructs the fields of a struct from its structMeta so the
+// recursion above can descend without a second AST walk. Only Anonymous
+// fields are needed for further promotion, so any non-anonymous field is
+// returned as-is (the recursion ignores them).
+func innerFields(meta structMeta, e *wasmEmitter) []FieldDecl {
+	var out []FieldDecl
+	seen := map[string]bool{}
+	for name, t := range meta.fieldTypes {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		// Only fields whose type is a CustomType can carry further
+		// anonymous embedding; keep them.
+		if ct, ok := t.(CustomType); ok {
+			out = append(out, FieldDecl{Name: name, Type: ct, Anonymous: true})
+		}
+	}
+	return out
+}
+
+// memberFieldKey returns the key to use when looking up a MemberExpr in
+// structMeta.fieldOffsets / fieldTypes. When the typechecker set EmbedPath
+// (via findFieldMatches), the dotted form is used; otherwise the bare
+// member name is returned unchanged.
+func memberFieldKey(e *MemberExpr) string {
+	if len(e.EmbedPath) == 0 {
+		return e.Member
+	}
+	return strings.Join(e.EmbedPath, ".") + "." + e.Member
+}
+
+// compileExprArm emits a block whose value is the final ExprStmt. Earlier
+// statements are emitted as normal, with any values they leave on the stack
+// dropped at the ExprStmt site (see compileStmt's *ExprStmt case).
+func (ctx *fnContext) compileExprArm(buf *bytes.Buffer, b *BlockStmt) error {
+	if b == nil || len(b.Stmts) == 0 {
+		return fmt.Errorf("%s: if-expression branch has no value", b.Loc())
+	}
+	for i, stmt := range b.Stmts {
+		if i == len(b.Stmts)-1 {
+			es, ok := stmt.(*ExprStmt)
+			if !ok {
+				return fmt.Errorf("%s: if-expression branch's last statement must be an expression", stmt.Loc())
+			}
+			return ctx.compileExpr(buf, es.Expr)
+		}
+		if err := ctx.compileStmt(buf, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (ctx *fnContext) inferExprType(expr Expr) string {
 	if expr == nil {
 		return ""
@@ -3127,7 +3536,7 @@ func (ctx *fnContext) inferExprType(expr Expr) string {
 	case *MemberExpr:
 		if e.TargetType != nil {
 			if meta, ok := ctx.emitter.structs[e.TargetType.String()]; ok {
-				if ft, ok := meta.fieldTypes[e.Member]; ok && ft != nil {
+				if ft, ok := meta.fieldTypes[memberFieldKey(e)]; ok && ft != nil {
 					return ft.String()
 				}
 			}
@@ -3161,6 +3570,10 @@ func (ctx *fnContext) inferExprType(expr Expr) string {
 		}
 		if rt := ctx.inferExprType(e.Right); rt != "" {
 			return rt
+		}
+	case *IfExpr:
+		if e.Type != nil {
+			return e.Type.String()
 		}
 	case *CallExpr:
 		if t := ctx.callReturnUbeType(e); t != nil {
