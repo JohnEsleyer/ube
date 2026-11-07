@@ -163,6 +163,20 @@ func substituteExpr(expr Expr, subMap map[string]UbeType) Expr {
 		return nil
 	}
 	switch e := expr.(type) {
+	case *CastExpr:
+		return &CastExpr{
+			At:         e.At,
+			TargetType: substituteType(e.TargetType, subMap),
+			Expr:       substituteExpr(e.Expr, subMap),
+		}
+	case *IfExpr:
+		return &IfExpr{
+			At:   e.At,
+			Cond: substituteExpr(e.Cond, subMap),
+			Then: substituteBlock(e.Then, subMap),
+			Else: substituteBlock(e.Else, subMap),
+			Type: substituteType(e.Type, subMap),
+		}
 	case *LiteralExpr:
 		return &LiteralExpr{At: e.At, Val: e.Val, Type: substituteType(e.Type, subMap)}
 	case *InterpolatedStringExpr:

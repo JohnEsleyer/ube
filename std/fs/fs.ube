@@ -21,16 +21,17 @@ pub fn SEEK_CUR() -> i32 { return 1 }
 pub fn SEEK_END() -> i32 { return 2 }
 
 // Standard WASI file rights bitmasks, narrowed to i32 for the raw intrinsics.
+// Write rights include FD_FILESTAT_SET_SIZE (4194304) required for WASI_O_TRUNC.
 fn rights_read_i32() -> i32 { return 2097190 }
-fn rights_write_i32() -> i32 { return 2097268 }
-fn rights_all_i32() -> i32 { return 536870911 }
+fn rights_write_i32() -> i32 { return 6291572 }
+fn rights_read_write_i32() -> i32 { return 6291574 }
 
 // Translates WASI errno integers to descriptive error strings.
 fn wasi_error_to_string(code: i32, path: string) -> string {
     if code == 2 {
         return f"file or directory not found: '{path}' (ENOENT)"
     }
-    if code == 19 {
+    if code == 19 || code == 20 {
         return f"file already exists: '{path}' (EEXIST)"
     }
     if code == 28 {
@@ -388,12 +389,12 @@ pub fn (o OpenOptions) open(path: string) -> File ! string {
 
     let mut rights_base = rights_read_i32()
     if o.read_opt && o.write_opt {
-        rights_base = rights_all_i32()
+        rights_base = rights_read_write_i32()
     } else if o.write_opt {
         rights_base = rights_write_i32()
     }
 
-    let fd = wasi.path_open_raw(p.raw, oflags, fdflags, rights_base, rights_base)
+    let fd = wasi.path_open_raw(p.raw, oflags, fdflags, rights_base, 0)
     if fd < 0 {
         return error(wasi_error_to_string(-fd, p.raw))
     }

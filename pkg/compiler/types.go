@@ -397,3 +397,60 @@ func isFlatType(t UbeType, env *TypeEnvironment, seen map[string]bool) bool {
 	}
 	return t.IsFlat(env)
 }
+
+// -------------------------------------------------------------
+// Untyped Literal Types (typesafety.md section 2)
+// -------------------------------------------------------------
+
+// UntypedIntType is the type of an integer literal in source. It has no
+// runtime representation until pinLiteral decides which primitive it will
+// be, and it defaults to i32 when no context pins it.
+type UntypedIntType struct {
+	Reg int
+}
+
+func (t UntypedIntType) String() string                   { return "untyped int" }
+func (t UntypedIntType) IsFlat(env *TypeEnvironment) bool { return true }
+func (t UntypedIntType) Region() int                      { return t.Reg }
+func (t UntypedIntType) WithRegion(r int) UbeType         { return UntypedIntType{Reg: r} }
+func (t UntypedIntType) WasmType() wasm.ValType           { return wasm.ValI32 }
+func (t UntypedIntType) ByteSize() int                    { return 4 }
+func (t UntypedIntType) Align() int                       { return 4 }
+func (t UntypedIntType) IsCopy() bool                     { return true }
+
+// UntypedFloatType is the type of a float literal in source. It can only be
+// pinned to f32 or f64; there is no implicit int→float literal widening.
+type UntypedFloatType struct {
+	Reg int
+}
+
+func (t UntypedFloatType) String() string                   { return "untyped float" }
+func (t UntypedFloatType) IsFlat(env *TypeEnvironment) bool { return true }
+func (t UntypedFloatType) Region() int                      { return t.Reg }
+func (t UntypedFloatType) WithRegion(r int) UbeType         { return UntypedFloatType{Reg: r} }
+func (t UntypedFloatType) WasmType() wasm.ValType           { return wasm.ValF32 }
+func (t UntypedFloatType) ByteSize() int                    { return 4 }
+func (t UntypedFloatType) Align() int                       { return 4 }
+func (t UntypedFloatType) IsCopy() bool                     { return true }
+
+// isNumericType reports whether t is one of the sized numeric primitives.
+func isNumericType(t UbeType) bool {
+	if t == nil {
+		return false
+	}
+	switch t.String() {
+	case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64":
+		return true
+	}
+	return false
+}
+
+// isPrimitiveTypeName reports whether name lexes as a built-in primitive
+// type usable as a conversion target (i32(x), f64(x), bool(x), ...).
+func isPrimitiveTypeName(name string) bool {
+	switch name {
+	case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool":
+		return true
+	}
+	return false
+}

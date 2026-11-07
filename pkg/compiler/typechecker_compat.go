@@ -32,6 +32,9 @@ func (tc *Typechecker) checkCallArgsWithReceiver(receiver Expr, receiverMut bool
 
 	for i, arg := range args {
 		_, explicitMut := mutArgOperand(arg)
+		if i < len(params) && params[i].Type != nil {
+			tc.pinLiteral(arg, params[i].Type)
+		}
 		actual, err := tc.inferExpr(arg, env)
 		if err != nil {
 			return err
@@ -130,7 +133,7 @@ func (tc *Typechecker) structImplementsTrait(structName, traitName string) bool 
 
 func (tc *Typechecker) typeFromName(name string) UbeType {
 	switch name {
-	case "i32", "u32", "i64", "u64", "u8", "f32", "f64", "bool", "void":
+	case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool", "void":
 		return PrimitiveType{Name: name}
 	case "string":
 		return StringType{}
@@ -144,6 +147,78 @@ func (tc *Typechecker) typeFromName(name string) UbeType {
 	}
 }
 
+// pinLiteral implements the literal pinning rules from typesafety.md
+// section 2.1. A literal in source is untyped until a context pins it; a
+// compatible numeric context (variable annotation, parameter, return,
+// struct field, slice element, binary operand, or cast target) decides the
+// literal's type in one local pass with no inference. An untyped integer
+// literal may be pinned to any sized numeric type; an untyped float literal
+// only to f32 or f64. It returns true when the literal (or one of its
+// untyped sub-expressions) was pinned to target.
+func (tc *Typechecker) pinLiteral(expr Expr, target UbeType) bool {
+	if expr == nil || target == nil {
+		return false
+	}
+	target = tc.resolveType(target)
+
+	if opt, ok := target.(OptionalType); ok {
+		target = opt.Inner
+	} else if res, ok := target.(ResultType); ok {
+		target = res.Ok
+	}
+
+	switch e := expr.(type) {
+	case *LiteralExpr:
+		switch e.Type.(type) {
+		case UntypedIntType:
+			if isNumericType(target) {
+				e.Type = target
+				return true
+			}
+		case UntypedFloatType:
+			if target.String() == "f32" || target.String() == "f64" {
+				e.Type = target
+				return true
+			}
+		}
+	case *UnaryExpr:
+		if e.Op == "-" || e.Op == "+" || e.Op == "~" {
+			return tc.pinLiteral(e.Operand, target)
+		}
+	case *BinaryExpr:
+		pLeft := tc.pinLiteral(e.Left, target)
+		pRight := tc.pinLiteral(e.Right, target)
+		if pLeft || pRight {
+			e.Type = target
+			e.OperandType = target
+			return true
+		}
+	case *CastExpr:
+		return tc.pinLiteral(e.Expr, e.TargetType)
+	case *IfExpr:
+		pThen := tc.pinBlockResult(e.Then, target)
+		pElse := tc.pinBlockResult(e.Else, target)
+		if pThen || pElse {
+			e.Type = target
+			return true
+		}
+	}
+	return false
+}
+
+// pinBlockResult pins the terminal expression statement of an if-expression
+// arm, if one exists.
+func (tc *Typechecker) pinBlockResult(b *BlockStmt, target UbeType) bool {
+	if b == nil || len(b.Stmts) == 0 {
+		return false
+	}
+	last := b.Stmts[len(b.Stmts)-1]
+	if es, ok := last.(*ExprStmt); ok {
+		return tc.pinLiteral(es.Expr, target)
+	}
+	return false
+}
+
 func (tc *Typechecker) assertCompat(expected, actual UbeType, loc SourceLocation) error {
 	if expected == nil || actual == nil {
 		return nil
@@ -151,6 +226,22 @@ func (tc *Typechecker) assertCompat(expected, actual UbeType, loc SourceLocation
 	expected = tc.resolveType(expected)
 	actual = tc.resolveType(actual)
 	if expected.String() == actual.String() {
+		return nil
+	}
+	// Untyped literal allowances: an untyped int may flow into any numeric
+	// expected type when it was not (or could not be) pinned ahead of time.
+	// Runtime variables of different types are never compatible (the core
+	// invariant of typesafety.md section 1; no implicit widening here).
+	if _, ok := actual.(UntypedIntType); ok && isNumericType(expected) {
+		return nil
+	}
+	if _, ok := actual.(UntypedFloatType); ok && (expected.String() == "f32" || expected.String() == "f64") {
+		return nil
+	}
+	if _, ok := expected.(UntypedIntType); ok && isNumericType(actual) {
+		return nil
+	}
+	if _, ok := expected.(UntypedFloatType); ok && (actual.String() == "f32" || actual.String() == "f64") {
 		return nil
 	}
 	if tr, isTrait := expected.(TraitType); isTrait {
@@ -168,9 +259,6 @@ func (tc *Typechecker) assertCompat(expected, actual UbeType, loc SourceLocation
 			}
 		}
 	}
-	if integerType(expected) && integerType(actual) {
-		return nil
-	}
 	if opt, ok := expected.(OptionalType); ok {
 		if actOpt, ok := actual.(OptionalType); ok && actOpt.Inner.String() == "void" {
 			return nil
@@ -179,9 +267,6 @@ func (tc *Typechecker) assertCompat(expected, actual UbeType, loc SourceLocation
 			return nil
 		}
 		if opt.Inner.String() == actual.String() {
-			return nil
-		}
-		if integerType(opt.Inner) && integerType(actual) {
 			return nil
 		}
 	}

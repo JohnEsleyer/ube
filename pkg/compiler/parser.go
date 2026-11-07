@@ -526,7 +526,7 @@ func (p *Parser) parseType() UbeType {
 			t = GenericInstanceType{Base: idName, TypeArgs: typeArgs}
 		} else {
 			switch idName {
-			case "i32", "u32", "i64", "u64", "u8", "f32", "f64", "bool", "void":
+			case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool", "void":
 				t = PrimitiveType{Name: idName}
 			case "string":
 				t = StringType{}

@@ -150,6 +150,8 @@ func (v *flowVisitor) walkExpr(ex compiler.Expr) {
 		for _, el := range e.Elements {
 			v.walkExpr(el)
 		}
+	case *compiler.CastExpr:
+		v.walkExpr(e.Expr)
 	case *compiler.TryExpr:
 		v.flow["try?"] = true
 		v.walkExpr(e.Operand)

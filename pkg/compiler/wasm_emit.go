@@ -295,6 +295,7 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 		if offset == 0 {
 			offset = 4
 		}
+		offset = alignUpInt(offset, 4)
 		meta.totalSize = offset
 		e.structs[name] = meta
 		return offset
@@ -320,6 +321,7 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 		if offset == 0 {
 			offset = 4
 		}
+		offset = alignUpInt(offset, 4)
 		meta.totalSize = offset
 		e.structs[name] = meta
 	}
@@ -774,30 +776,20 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			if !ok {
 				return fmt.Errorf("unknown field %s on struct %s", fieldKey, structName)
 			}
+			fieldType := meta.fieldTypes[fieldKey]
+			loadOp, storeOp, align := fieldLoadStoreInfo(fieldType)
+
 			if err := ctx.compileExpr(buf, mem.Target); err != nil {
 				return err
 			}
-			compoundLoadOp := byte(0x28)
-			compoundLoadAlign := uint32(2)
-			switch ctx.inferExprType(s.RHS) {
-			case "f32":
-				compoundLoadOp = 0x2a // f32.load
-			case "f64":
-				compoundLoadOp = 0x2b
-				compoundLoadAlign = 3
-			case "i64":
-				compoundLoadOp = 0x29
-				compoundLoadAlign = 3
-			}
-			fieldType := meta.fieldTypes[fieldKey]
 			if s.Op != "=" {
 				targetLocal := ctx.allocLocal(valTypeI32)
 				buf.WriteByte(0x22)
 				writeUleb128(buf, targetLocal)
 				buf.WriteByte(0x20)
 				writeUleb128(buf, targetLocal)
-				buf.WriteByte(compoundLoadOp)
-				writeUleb128(buf, compoundLoadAlign)
+				buf.WriteByte(loadOp)
+				writeUleb128(buf, align)
 				writeUleb128(buf, uint32(offset))
 
 				if err := ctx.compileExpr(buf, s.RHS); err != nil {
@@ -832,20 +824,8 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 					return err
 				}
 			}
-			storeOpcode := byte(0x36) // i32.store
-			storeAlign := uint32(2)
-			switch ctx.inferExprType(s.RHS) {
-			case "f32":
-				storeOpcode = 0x38 // f32.store
-			case "f64":
-				storeOpcode = 0x39 // f64.store
-				storeAlign = 3
-			case "i64":
-				storeOpcode = 0x37 // i64.store
-				storeAlign = 3
-			}
-			buf.WriteByte(storeOpcode)
-			writeUleb128(buf, storeAlign)
+			buf.WriteByte(storeOp)
+			writeUleb128(buf, align)
 			writeUleb128(buf, uint32(offset))
 		} else if idx, ok := s.LHS.(*IndexExpr); ok {
 			addrLocal := ctx.allocLocal(valTypeI32)
@@ -860,6 +840,8 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				writeUleb128(buf, 2)
 				writeUleb128(buf, 0)
 				width, _, storeOp, align = sliceElemInfo(st.Elem)
+			} else if at, isArr := idx.TargetType.(ArrayType); isArr {
+				width, _, storeOp, align = sliceElemInfo(at.Elem)
 			}
 			if err := ctx.compileExpr(buf, idx.Index); err != nil {
 				return err
@@ -916,6 +898,21 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			case ResultType, OptionalType:
 				wrap = false
 			}
+			// Store the return value in a local before running defers. Defers
+			// may leave their own values on the operand stack, so keeping the
+			// result there would corrupt the function's return value.
+			retValWasm := byte(valTypeI32)
+			if ctx.fn.RetType != nil {
+				switch ctx.fn.RetType.String() {
+				case "f32":
+					retValWasm = valTypeF32
+				case "f64":
+					retValWasm = valTypeF64
+				case "i64":
+					retValWasm = valTypeI64
+				}
+			}
+			retLocal := ctx.allocLocal(retValWasm)
 			if wrap {
 				if err := ctx.compileWrappedSuccess(buf, s.Value); err != nil {
 					return err
@@ -923,9 +920,16 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			} else if err := ctx.compileExpr(buf, s.Value); err != nil {
 				return err
 			}
-		}
+			buf.WriteByte(0x21)
+			writeUleb128(buf, retLocal)
 
-		ctx.emitAllDefers(buf)
+			ctx.emitAllDefers(buf)
+
+			buf.WriteByte(0x20)
+			writeUleb128(buf, retLocal)
+		} else {
+			ctx.emitAllDefers(buf)
+		}
 		buf.WriteByte(0x0f)
 
 	case *DeferStmt:
@@ -1533,6 +1537,14 @@ func emitCompoundOp(buf *bytes.Buffer, op string, operandType string) error {
 
 func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 	switch e := expr.(type) {
+	case *CastExpr:
+		if err := ctx.compileExpr(buf, e.Expr); err != nil {
+			return err
+		}
+		srcType := ctx.inferExprType(e.Expr)
+		dstType := e.TargetType.String()
+		emitCastOp(buf, srcType, dstType)
+		return nil
 	case *IfExpr:
 		if err := ctx.compileExpr(buf, e.Cond); err != nil {
 			return err
@@ -1771,6 +1783,21 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			writeUleb128(buf, 0)
 			writeUleb128(buf, 0)
 			return nil
+		} else if at, isArr := e.TargetType.(ArrayType); isArr {
+			width, loadOp, _, align := sliceElemInfo(at.Elem)
+			if err := ctx.compileExpr(buf, e.Index); err != nil {
+				return err
+			}
+			if width != 1 {
+				buf.WriteByte(0x41)
+				writeSleb128(buf, width)
+				buf.WriteByte(0x6c) // i32.mul
+			}
+			buf.WriteByte(0x6a) // i32.add
+			buf.WriteByte(loadOp)
+			writeUleb128(buf, align)
+			writeUleb128(buf, 0)
+			return nil
 		}
 		if err := ctx.compileExpr(buf, e.Index); err != nil {
 			return err
@@ -1861,20 +1888,7 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		if err := ctx.compileExpr(buf, e.Target); err != nil {
 			return err
 		}
-		loadOp := byte(0x28)
-		loadAl := uint32(2)
-		if fieldType != nil {
-			switch fieldType.String() {
-			case "f32":
-				loadOp = 0x2a
-			case "f64":
-				loadOp = 0x2b
-				loadAl = 3
-			case "i64":
-				loadOp = 0x29
-				loadAl = 3
-			}
-		}
+		loadOp, _, loadAl := fieldLoadStoreInfo(fieldType)
 		buf.WriteByte(loadOp)
 		writeUleb128(buf, loadAl)
 		writeUleb128(buf, uint32(offset))
@@ -1991,7 +2005,17 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 
 	case *ArrayInitExpr:
 		elemCount := len(e.Elements)
-		totalSize := elemCount * 4
+		elemSize := 4
+		storeOp := byte(0x36)
+		storeAlign := uint32(2)
+		if e.Elem != nil {
+			elemSize = e.Elem.ByteSize()
+			if elemSize < 1 {
+				elemSize = 4
+			}
+			_, storeOp, storeAlign = fieldLoadStoreInfo(e.Elem)
+		}
+		totalSize := elemCount * elemSize
 		baseLocal := ctx.allocLocal(valTypeI32)
 		ctx.emitAlloc(buf, int32(totalSize), baseLocal)
 
@@ -2001,9 +2025,9 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			if err := ctx.compileExpr(buf, el); err != nil {
 				return err
 			}
-			buf.WriteByte(0x36)
-			writeUleb128(buf, 2)
-			writeUleb128(buf, uint32(i*4))
+			buf.WriteByte(storeOp)
+			writeUleb128(buf, storeAlign)
+			writeUleb128(buf, uint32(i*elemSize))
 		}
 
 		buf.WriteByte(0x20)
@@ -2131,20 +2155,7 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			if err := ctx.compileExpr(buf, f.Val); err != nil {
 				return err
 			}
-			storeOp := byte(0x36)
-			storeAl := uint32(2)
-			if fieldType != nil {
-				switch fieldType.String() {
-				case "f32":
-					storeOp = 0x38
-				case "f64":
-					storeOp = 0x39
-					storeAl = 3
-				case "i64":
-					storeOp = 0x37
-					storeAl = 3
-				}
-			}
+			_, storeOp, storeAl := fieldLoadStoreInfo(fieldType)
 			buf.WriteByte(storeOp)
 			writeUleb128(buf, storeAl)
 			writeUleb128(buf, uint32(offset))
@@ -3234,6 +3245,33 @@ func (ctx *fnContext) emitMemoryCopy(buf *bytes.Buffer) {
 	writeUleb128(buf, 0x00) // src memory index 0
 }
 
+// fieldLoadStoreInfo returns the correct load/store opcodes and alignment for
+// a struct field's type. Fields are packed at their natural size, so a bool or
+// u8 must not be accessed with a full 4-byte i32.load/i32.store.
+func fieldLoadStoreInfo(t UbeType) (loadOp, storeOp byte, align uint32) {
+	if t == nil {
+		return 0x28, 0x36, 2 // i32.load, i32.store
+	}
+	switch t.String() {
+	case "bool", "u8":
+		return 0x2d, 0x3a, 0 // i32.load8_u, i32.store8
+	case "i8":
+		return 0x2c, 0x3a, 0 // i32.load8_s, i32.store8
+	case "u16":
+		return 0x2f, 0x3b, 1 // i32.load16_u, i32.store16
+	case "i16":
+		return 0x2e, 0x3b, 1 // i32.load16_s, i32.store16
+	case "f32":
+		return 0x2a, 0x38, 2 // f32.load, f32.store
+	case "f64":
+		return 0x2b, 0x39, 3 // f64.load, f64.store
+	case "i64", "u64":
+		return 0x29, 0x37, 3 // i64.load, i64.store
+	default:
+		return 0x28, 0x36, 2 // i32.load, i32.store
+	}
+}
+
 // sliceElemInfo returns the element width and the correct load/store
 // opcodes + alignment for a slice's element type.
 func sliceElemInfo(elem UbeType) (width int32, loadOp, storeOp byte, align uint32) {
@@ -3523,6 +3561,22 @@ func (ctx *fnContext) inferExprType(expr Expr) string {
 		return ""
 	}
 	switch e := expr.(type) {
+	case *CastExpr:
+		if e.TargetType != nil {
+			return e.TargetType.String()
+		}
+	case *IndexExpr:
+		if e.TargetType != nil {
+			if st, ok := e.TargetType.(SliceType); ok && st.Elem != nil {
+				return st.Elem.String()
+			}
+			if at, ok := e.TargetType.(ArrayType); ok && at.Elem != nil {
+				return at.Elem.String()
+			}
+			if _, ok := e.TargetType.(StringType); ok {
+				return "u8"
+			}
+		}
 	case *LiteralExpr:
 		return e.Type.String()
 	case *IdentExpr:
@@ -4621,4 +4675,142 @@ func wrapStartWithLocals(body bytes.Buffer, nLocals uint32) []byte {
 	writeUleb128(&fullBuf, uint32(codeBuf.Len()))
 	fullBuf.Write(codeBuf.Bytes())
 	return fullBuf.Bytes()
+}
+
+func emitCastOp(buf *bytes.Buffer, srcType, dstType string) {
+	if srcType == dstType {
+		return
+	}
+	isSrcI32 := isI32Like(srcType)
+	isDstI32 := isI32Like(dstType)
+
+	if isSrcI32 && isDstI32 {
+		if dstType == "u8" {
+			buf.WriteByte(0x41) // i32.const
+			writeSleb128(buf, 0xff)
+			buf.WriteByte(0x71) // i32.and
+		} else if dstType == "i8" {
+			buf.WriteByte(0x41)
+			writeSleb128(buf, 24)
+			buf.WriteByte(0x74) // i32.shl
+			buf.WriteByte(0x41)
+			writeSleb128(buf, 24)
+			buf.WriteByte(0x75) // i32.shr_s
+		} else if dstType == "u16" {
+			buf.WriteByte(0x41)
+			writeSleb128(buf, 0xffff)
+			buf.WriteByte(0x71)
+		} else if dstType == "i16" {
+			buf.WriteByte(0x41)
+			writeSleb128(buf, 16)
+			buf.WriteByte(0x74)
+			buf.WriteByte(0x41)
+			writeSleb128(buf, 16)
+			buf.WriteByte(0x75)
+		}
+		return
+	}
+
+	if isSrcI32 {
+		switch dstType {
+		case "i64":
+			if isUnsigned(srcType) {
+				buf.WriteByte(0xad) // i64.extend_i32_u
+			} else {
+				buf.WriteByte(0xac) // i64.extend_i32_s
+			}
+		case "u64":
+			buf.WriteByte(0xad) // i64.extend_i32_u
+		case "f32":
+			if isUnsigned(srcType) {
+				buf.WriteByte(0xb3) // f32.convert_i32_u
+			} else {
+				buf.WriteByte(0xb2) // f32.convert_i32_s
+			}
+		case "f64":
+			if isUnsigned(srcType) {
+				buf.WriteByte(0xb8) // f64.convert_i32_u
+			} else {
+				buf.WriteByte(0xb7) // f64.convert_i32_s
+			}
+		}
+		return
+	}
+
+	if srcType == "i64" || srcType == "u64" {
+		switch {
+		case isDstI32:
+			buf.WriteByte(0xa7) // i32.wrap_i64
+			if dstType == "u8" {
+				buf.WriteByte(0x41)
+				writeSleb128(buf, 0xff)
+				buf.WriteByte(0x71)
+			}
+		case dstType == "f32":
+			if srcType == "u64" {
+				buf.WriteByte(0xb5) // f32.convert_i64_u
+			} else {
+				buf.WriteByte(0xb4) // f32.convert_i64_s
+			}
+		case dstType == "f64":
+			if srcType == "u64" {
+				buf.WriteByte(0xba) // f64.convert_i64_u
+			} else {
+				buf.WriteByte(0xb9) // f64.convert_i64_s
+			}
+		}
+		return
+	}
+
+	if srcType == "f32" {
+		switch {
+		case isDstI32:
+			if isUnsigned(dstType) {
+				buf.WriteByte(0xa9) // i32.trunc_f32_u
+			} else {
+				buf.WriteByte(0xa8) // i32.trunc_f32_s
+			}
+		case dstType == "i64":
+			buf.WriteByte(0xae) // i64.trunc_f32_s
+		case dstType == "u64":
+			buf.WriteByte(0xaf) // i64.trunc_f32_u
+		case dstType == "f64":
+			buf.WriteByte(0xbb) // f64.promote_f32
+		}
+		return
+	}
+
+	if srcType == "f64" {
+		switch {
+		case isDstI32:
+			if isUnsigned(dstType) {
+				buf.WriteByte(0xab) // i32.trunc_f64_u
+			} else {
+				buf.WriteByte(0xaa) // i32.trunc_f64_s
+			}
+		case dstType == "i64":
+			buf.WriteByte(0xb0) // i64.trunc_f64_s
+		case dstType == "u64":
+			buf.WriteByte(0xb1) // i64.trunc_f64_u
+		case dstType == "f32":
+			buf.WriteByte(0xb6) // f32.demote_f64
+		}
+		return
+	}
+}
+
+func isI32Like(t string) bool {
+	switch t {
+	case "i8", "u8", "i16", "u16", "i32", "u32", "bool", "":
+		return true
+	}
+	return false
+}
+
+func isUnsigned(t string) bool {
+	switch t {
+	case "u8", "u16", "u32", "u64":
+		return true
+	}
+	return false
 }

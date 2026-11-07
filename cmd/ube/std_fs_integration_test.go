@@ -1,3 +1,4 @@
+// File: cmd/ube/std_fs_integration_test.go
 package main
 
 import (
@@ -85,8 +86,11 @@ func TestStdFsRoundTripInProcess(t *testing.T) {
 import "std/fs" as fs
 
 fn main() -> bool ! string {
+    println("before write_string")
     fs.write_string("e2e.txt", "first line\n")?
+    println("after write_string")
     fs.append_string("e2e.txt", "second line\n")?
+    println("after append_string")
 
     let content = fs.read_to_string("e2e.txt")?
     println(content)

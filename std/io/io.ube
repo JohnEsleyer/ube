@@ -78,9 +78,7 @@ pub fn (s Stdin) read_byte() -> i32 ! string {
         if n <= 0 {
             return -1
         }
-        let mut val = 0
-        val += b[0]
-        return val
+        return i32(b[0])
     }
     return -1
 }
@@ -189,9 +187,7 @@ pub fn (f File) read_byte() -> i32 ! string {
         if n <= 0 {
             return -1
         }
-        let mut val = 0
-        val += b[0]
-        return val
+        return i32(b[0])
     }
     return -1
 }
@@ -297,9 +293,7 @@ pub fn (mut r BytesReader) read_byte() -> i32 ! string {
     }
     let b = r.data[r.pos]
     r.pos += 1
-    let mut val = 0
-    val += b
-    return val
+    return i32(b)
 }
 
 pub fn (r BytesReader) peek_byte() -> i32 ! string {
@@ -307,9 +301,7 @@ pub fn (r BytesReader) peek_byte() -> i32 ! string {
         return -1
     }
     let b = r.data[r.pos]
-    let mut val = 0
-    val += b
-    return val
+    return i32(b)
 }
 
 pub fn (mut r BytesReader) read_line() -> string ! string {
@@ -510,9 +502,7 @@ pub fn (mut r StringReader) read_byte() -> i32 ! string {
     }
     let b = r.s[r.pos]
     r.pos += 1
-    let mut val = 0
-    val += b
-    return val
+    return i32(b)
 }
 
 pub fn (r StringReader) peek_byte() -> i32 ! string {
@@ -520,9 +510,7 @@ pub fn (r StringReader) peek_byte() -> i32 ! string {
         return -1
     }
     let b = r.s[r.pos]
-    let mut val = 0
-    val += b
-    return val
+    return i32(b)
 }
 
 pub fn (mut r StringReader) read_line() -> string ! string {
@@ -658,9 +646,7 @@ pub fn (mut b BufReader) read_byte() -> i32 ! string {
     }
     let byte_val = b.buf[b.pos]
     b.pos += 1
-    let mut res = 0
-    res += byte_val
-    return res
+    return i32(byte_val)
 }
 
 pub fn (mut b BufReader) read(mut dst: []u8) -> i32 ! string {
@@ -706,7 +692,7 @@ pub fn (mut b BufReader) read_line() -> string ! string {
                 }
                 break
             }
-            line_bytes.push(val)
+            line_bytes.push(u8(val))
         } else {
             if line_bytes.len == 0 {
                 return error("EOF")

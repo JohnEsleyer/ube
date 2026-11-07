@@ -523,7 +523,7 @@ func (ctx *fnContext) exprLeavesValue(expr Expr) bool {
 	case *TryExpr, *OrElseExpr, *ErrorExpr, *InterpolatedStringExpr,
 		*StructInitExpr, *SliceInitExpr, *ArrayInitExpr, *TupleExpr,
 		*BinaryExpr, *UnaryExpr, *MemberExpr, *IndexExpr, *SliceSubExpr,
-		*RangeExpr, *TraitCoerceExpr, *ArrayToSliceExpr, *PromoteExpr, *ArenaExpr:
+		*RangeExpr, *TraitCoerceExpr, *ArrayToSliceExpr, *PromoteExpr, *ArenaExpr, *CastExpr:
 		return true
 	case *LiteralExpr:
 		return e.Type == nil || e.Type.String() != "void"

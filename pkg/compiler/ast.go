@@ -488,6 +488,17 @@ type TryExpr struct {
 func (e *TryExpr) Loc() SourceLocation { return e.At }
 func (e *TryExpr) exprNode()           {}
 
+// CastExpr is an explicit Go-style numeric conversion: T(expr). It is the
+// only runtime conversion in the language; see typesafety.md section 3.
+type CastExpr struct {
+	At         SourceLocation
+	TargetType UbeType
+	Expr       Expr
+}
+
+func (e *CastExpr) Loc() SourceLocation { return e.At }
+func (e *CastExpr) exprNode()           {}
+
 type OrElseExpr struct {
 	At          SourceLocation
 	Primary     Expr

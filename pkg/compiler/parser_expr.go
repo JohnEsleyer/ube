@@ -357,10 +357,10 @@ func (p *Parser) parsePrimary() Expr {
 		return &InterpolatedStringExpr{At: tok.Loc, Parts: parts}
 	case TokenInt:
 		p.advance()
-		return &LiteralExpr{At: tok.Loc, Val: normalizeIntLiteral(tok), Type: PrimitiveType{Name: "i32"}}
+		return &LiteralExpr{At: tok.Loc, Val: normalizeIntLiteral(tok), Type: UntypedIntType{}}
 	case TokenFloat:
 		p.advance()
-		return &LiteralExpr{At: tok.Loc, Val: tok.Val, Type: PrimitiveType{Name: "f32"}}
+		return &LiteralExpr{At: tok.Loc, Val: tok.Val, Type: UntypedFloatType{}}
 	case TokenString:
 		p.advance()
 		return &LiteralExpr{At: tok.Loc, Val: tok.Val, Type: StringType{}}
@@ -434,6 +434,24 @@ func (p *Parser) parsePrimary() Expr {
 		arg := p.parseExpr()
 		p.expect(TokenRParen, "Expected ')' after error argument")
 		return &ErrorExpr{At: loc, Arg: arg}
+	}
+
+	// Go-style type conversion operator: T(expr) — e.g. i32(x), f64(y),
+	// u8(b). Conversions are explicit, named, and reject non-numeric
+	// targets in the typechecker (typesafety.md section 3).
+	if tok.Type == TokenIdent && isPrimitiveTypeName(tok.Val) && p.peek(1).Type == TokenLParen {
+		typeTok := p.advance()
+		p.advance() // consume '('
+		if p.check(TokenRParen) {
+			p.errorAt(typeTok.Loc, fmt.Sprintf("type conversion '%s()' expects an expression", typeTok.Val))
+		}
+		arg := p.parseExpr()
+		p.expect(TokenRParen, fmt.Sprintf("Expected ')' after '%s(...)' conversion", typeTok.Val))
+		return &CastExpr{
+			At:         typeTok.Loc,
+			TargetType: PrimitiveType{Name: typeTok.Val},
+			Expr:       arg,
+		}
 	}
 
 	if tok.Type == TokenIdent {

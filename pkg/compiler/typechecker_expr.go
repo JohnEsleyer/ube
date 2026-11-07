@@ -1,3 +1,4 @@
+
 // File: pkg/compiler/typechecker_expr.go
 package compiler
 
@@ -22,7 +23,7 @@ func printableType(t UbeType) bool {
 func integerType(t UbeType) bool {
 	if p, ok := t.(PrimitiveType); ok {
 		switch p.Name {
-		case "i32", "u32", "u8", "i64", "u64":
+		case "i8", "i16", "i32", "u8", "u16", "u32", "i64", "u64":
 			return true
 		}
 	}
@@ -136,6 +137,52 @@ func (tc *Typechecker) lookupModuleMember(alias, member string) (string, FuncSig
 	return key, sig, ok
 }
 
+// isUntypedOperand reports whether expr is an integer/float literal (or an
+// arithmetic expression composed entirely of untyped literals) whose type
+// has not yet been pinned by an enclosing context.
+func isUntypedOperand(expr Expr) bool {
+	switch e := expr.(type) {
+	case *LiteralExpr:
+		switch e.Type.(type) {
+		case UntypedIntType, UntypedFloatType:
+			return true
+		}
+	case *UnaryExpr:
+		if e.Op == "-" || e.Op == "+" || e.Op == "~" {
+			return isUntypedOperand(e.Operand)
+		}
+	case *BinaryExpr:
+		switch e.Op {
+		case "+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>":
+			return isUntypedOperand(e.Left) && isUntypedOperand(e.Right)
+		}
+	}
+	return false
+}
+
+// peekNumericTarget predicts the numeric type a non-literal operand will
+// take, without defaulting any literal it may contain.
+func (tc *Typechecker) peekNumericTarget(expr Expr, env *TypeEnvironment) UbeType {
+	switch e := expr.(type) {
+	case *IdentExpr:
+		if v, ok := env.LookupVar(e.Name); ok {
+			return tc.resolveType(v.Type)
+		}
+	case *UnaryExpr:
+		if e.Op == "-" || e.Op == "+" || e.Op == "~" {
+			return tc.peekNumericTarget(e.Operand, env)
+		}
+	case *CastExpr:
+		return tc.resolveType(e.TargetType)
+	case *BinaryExpr:
+		if t := tc.peekNumericTarget(e.Left, env); t != nil {
+			return t
+		}
+		return tc.peekNumericTarget(e.Right, env)
+	}
+	return nil
+}
+
 func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, error) {
 	switch e := expr.(type) {
 	case *IfExpr:
@@ -206,8 +253,6 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			if err != nil {
 				return nil, err
 			}
-			// Zero-leak arena sandbox invariant: arena-backed references may
-			// only escape through an explicit promote(...) terminal value.
 			if tc.hasLifetime(t) {
 				if _, isPromote := es.Expr.(*PromoteExpr); !isPromote {
 					return nil, fmt.Errorf("[%s] arena expression cannot return unpromoted value of type '%s'; use promote(...) to retain it", e.At, t)
@@ -275,7 +320,29 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		return StringType{}, nil
 
 	case *LiteralExpr:
+		switch e.Type.(type) {
+		case UntypedIntType:
+			e.Type = PrimitiveType{Name: "i32"}
+		case UntypedFloatType:
+			e.Type = PrimitiveType{Name: "f32"}
+		}
 		return e.Type, nil
+
+	case *CastExpr:
+		targetT := tc.resolveType(e.TargetType)
+		tc.pinLiteral(e.Expr, targetT)
+		srcT, err := tc.inferExpr(e.Expr, env)
+		if err != nil {
+			return nil, err
+		}
+		srcT = tc.resolveType(srcT)
+		if srcT.String() == targetT.String() {
+			return targetT, nil
+		}
+		if isNumericType(targetT) && isNumericType(srcT) {
+			return targetT, nil
+		}
+		return nil, fmt.Errorf("[%s] cannot convert '%s' to '%s'", e.At, srcT, targetT)
 
 	case *IdentExpr:
 		if e.Name == "StringBuilder" {
@@ -317,14 +384,50 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		return tc.inferExpr(e.Arg, env)
 
 	case *BinaryExpr:
-		lT, err := tc.inferExpr(e.Left, env)
-		if err != nil {
-			return nil, err
+		leftUntyped := isUntypedOperand(e.Left)
+		rightUntyped := isUntypedOperand(e.Right)
+
+		var lT, rT UbeType
+		var err error
+
+		if !leftUntyped && rightUntyped {
+			lT, err = tc.inferExpr(e.Left, env)
+			if err != nil {
+				return nil, err
+			}
+			if isNumericType(lT) {
+				tc.pinLiteral(e.Right, lT)
+			}
+			rT, err = tc.inferExpr(e.Right, env)
+			if err != nil {
+				return nil, err
+			}
+		} else if leftUntyped && !rightUntyped {
+			rT, err = tc.inferExpr(e.Right, env)
+			if err != nil {
+				return nil, err
+			}
+			if isNumericType(rT) {
+				tc.pinLiteral(e.Left, rT)
+			}
+			lT, err = tc.inferExpr(e.Left, env)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			lT, err = tc.inferExpr(e.Left, env)
+			if err != nil {
+				return nil, err
+			}
+			if isNumericType(lT) && rightUntyped {
+				tc.pinLiteral(e.Right, lT)
+			}
+			rT, err = tc.inferExpr(e.Right, env)
+			if err != nil {
+				return nil, err
+			}
 		}
-		rT, err := tc.inferExpr(e.Right, env)
-		if err != nil {
-			return nil, err
-		}
+
 		e.OperandType = lT
 		switch e.Op {
 		case "&&", "||":
@@ -418,11 +521,6 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		return opndT, nil
 
 	case *CallExpr:
-		// Wasm host imports declared with 'extern fn' are safe, sandboxed calls.
-		// No unsafe wrapper is required or permitted anywhere in the language.
-
-		// Safe string construction from a byte slice:
-		//   string.from_bytes(bytes) -> string ! string
 		if mem, ok := e.Callee.(*MemberExpr); ok {
 			if id, ok := mem.Target.(*IdentExpr); ok && id.Name == "string" &&
 				(mem.Member == "from_bytes" || mem.Member == "from_utf8") {
@@ -440,7 +538,6 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				return ResultType{Ok: StringType{}, Err: StringType{}}, nil
 			}
 
-			// Qualified module function call: math.min(a, b).
 			if id, ok := mem.Target.(*IdentExpr); ok {
 				if _, isVar := env.LookupVar(id.Name); !isVar {
 					if _, isMod := tc.ModuleAliases[id.Name]; isMod {
@@ -548,6 +645,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 								return nil, fmt.Errorf("[%s] enum variant '%s' expects %d arguments, got %d", e.At, mem.Member, len(variant.Types), len(e.Args))
 							}
 							for i, arg := range e.Args {
+								tc.pinLiteral(arg, variant.Types[i])
 								actual, err := tc.inferExpr(arg, env)
 								if err != nil {
 									return nil, err
@@ -568,7 +666,6 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			}
 			mem.TargetType = tgtT
 
-			// String built-in instance methods
 			if _, isStr := tgtT.(StringType); isStr {
 				e.ReceiverType = tgtT
 				switch mem.Member {
@@ -633,7 +730,6 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				}
 			}
 
-			// StringBuilder instance methods
 			if _, isSB := tgtT.(StringBuilderType); isSB {
 				e.ReceiverType = tgtT
 				switch mem.Member {
@@ -695,7 +791,6 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				}
 			}
 
-			// Trait dynamic method calls
 			if tr, isTrait := tgtT.(TraitType); isTrait {
 				e.ReceiverType = tgtT
 				if meta, hasMeta := tc.Global.TraitMeta[tr.Name]; hasMeta {
@@ -730,6 +825,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 						}
 					}
 				}
+				tc.pinLiteral(e.Args[0], sl.Elem)
 				argT, err := tc.inferExpr(e.Args[0], env)
 				if err != nil {
 					return nil, err
@@ -751,6 +847,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 						return nil, fmt.Errorf("[%s] cannot call 'resize' on immutable slice '%s'", e.At, root)
 					}
 				}
+				tc.pinLiteral(e.Args[0], PrimitiveType{Name: "i32"})
 				argT, err := tc.inferExpr(e.Args[0], env)
 				if err != nil {
 					return nil, err
@@ -775,6 +872,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				if len(e.Args) != 1 {
 					return nil, fmt.Errorf("[%s] contains expects 1 argument", e.At)
 				}
+				tc.pinLiteral(e.Args[0], sl.Elem)
 				argT, err := tc.inferExpr(e.Args[0], env)
 				if err != nil {
 					return nil, err
@@ -789,6 +887,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					if len(e.Args) != 1 {
 						return nil, fmt.Errorf("[%s] Chan.new expects a capacity", e.At)
 					}
+					tc.pinLiteral(e.Args[0], PrimitiveType{Name: "i32"})
 					capacityType, err := tc.inferExpr(e.Args[0], env)
 					if err != nil {
 						return nil, err
@@ -815,6 +914,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					if len(e.Args) != 1 {
 						return nil, fmt.Errorf("[%s] send expects 1 argument", e.At)
 					}
+					tc.pinLiteral(e.Args[0], ch.Elem)
 					argT, err := tc.inferExpr(e.Args[0], env)
 					if err != nil {
 						return nil, err
@@ -825,8 +925,6 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					if err := tc.assertCompat(ch.Elem, argT, e.At); err != nil {
 						return nil, err
 					}
-					// Complete linear ownership handoff: the sending thread
-					// can never touch the value again.
 					if err := tc.markMovedIfAffine(e.Args[0], env); err != nil {
 						return nil, err
 					}
@@ -839,6 +937,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					if len(e.Args) != 1 {
 						return nil, fmt.Errorf("[%s] Pool.new expects a capacity", e.At)
 					}
+					tc.pinLiteral(e.Args[0], PrimitiveType{Name: "i32"})
 					capacityType, err := tc.inferExpr(e.Args[0], env)
 					if err != nil {
 						return nil, err
@@ -852,6 +951,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					if len(e.Args) != 1 {
 						return nil, fmt.Errorf("[%s] Pool.spawn expects one value", e.At)
 					}
+					tc.pinLiteral(e.Args[0], p.Elem)
 					valueType, err := tc.inferExpr(e.Args[0], env)
 					if err != nil {
 						return nil, err
@@ -914,10 +1014,6 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				}
 				return sig.RetType, nil
 			}
-			// Embedded-method promotion: x.m() where m is a method of an
-			// anonymously embedded field of x's type. We resolve exactly one
-			// embedding path; ambiguous matches fall through to the
-			// actionable error below so the developer can qualify explicitly.
 			if ct, ok := tgtT.(CustomType); ok {
 				if path, owner, sig, found := tc.findEmbeddedMethod(ct.Name, mem.Member, nil, map[string]bool{}); found && len(path) > 0 {
 					mem.EmbedPath = path
@@ -943,9 +1039,6 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				if env.CurModule != "" && sig.Package != "" && sig.Package != env.CurModule && !sig.IsPub {
 					return nil, fmt.Errorf("[%s] cannot access unexported function '%s' from package '%s'", e.At, id.Name, sig.Package)
 				}
-				// Pin the call to its canonical package symbol so the Wasm
-				// emitter never has to guess between short names in different
-				// packages.
 				id.Name = canonical
 				if err := tc.checkCallArgs(e.Args, sig.Params, sig.Escaping, env, e.At); err != nil {
 					return nil, err
@@ -971,7 +1064,6 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 
 	case *MemberExpr:
 		if id, ok := e.Target.(*IdentExpr); ok {
-			// Qualified zero-argument module member: math.PI.
 			if _, isVar := env.LookupVar(id.Name); !isVar {
 				if _, isMod := tc.ModuleAliases[id.Name]; isMod {
 					if _, sig, found := tc.lookupModuleMember(id.Name, e.Member); found && len(sig.Params) == 0 {
@@ -1048,6 +1140,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		if err != nil {
 			return nil, err
 		}
+		tc.pinLiteral(e.Index, PrimitiveType{Name: "i32"})
 		idxT, err := tc.inferExpr(e.Index, env)
 		if err != nil {
 			return nil, err
@@ -1074,6 +1167,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		if err != nil {
 			return nil, err
 		}
+		tc.pinLiteral(e.Start, PrimitiveType{Name: "i32"})
 		startT, err := tc.inferExpr(e.Start, env)
 		if err != nil {
 			return nil, err
@@ -1081,6 +1175,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		if !integerType(startT) {
 			return nil, fmt.Errorf("[%s] slice start index must be an integer, got '%s'", e.At, startT)
 		}
+		tc.pinLiteral(e.End, PrimitiveType{Name: "i32"})
 		endT, err := tc.inferExpr(e.End, env)
 		if err != nil {
 			return nil, err
@@ -1103,6 +1198,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 	case *SliceInitExpr:
 		e.Elem = tc.resolveType(e.Elem)
 		for i, el := range e.Elements {
+			tc.pinLiteral(el, e.Elem)
 			t, err := tc.inferExpr(el, env)
 			if err != nil {
 				return nil, err
@@ -1125,6 +1221,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			return nil, fmt.Errorf("[%s] too many array initializer elements", e.At)
 		}
 		for _, el := range e.Elements {
+			tc.pinLiteral(el, e.Elem)
 			t, err := tc.inferExpr(el, env)
 			if err != nil {
 				return nil, err
@@ -1174,6 +1271,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				return nil, fmt.Errorf("[%s] cannot initialize unexported field '%s' on struct '%s' from package '%s'", init.Val.Loc(), init.Name, e.Name, meta.Package)
 			}
 			provided[init.Name] = true
+			tc.pinLiteral(init.Val, expectedType)
 			valT, err := tc.inferExpr(init.Val, env)
 			if err != nil {
 				return nil, err

@@ -1,3 +1,4 @@
+// File: cmd/ube/run_helpers.go
 package main
 
 import (
@@ -102,6 +103,14 @@ func runWasmtimeCapture(wasmPath string, args []string) (string, error) {
 	out, readErr := os.ReadFile(outFile)
 	if readErr != nil {
 		return "", readErr
+	}
+	errBytes, _ := os.ReadFile(errFile)
+	if len(errBytes) > 0 {
+		if len(out) > 0 {
+			out = append(out, errBytes...)
+		} else {
+			out = errBytes
+		}
 	}
 	return string(out), callErr
 }

@@ -66,6 +66,10 @@ func (tc *Typechecker) markMovedIfType(expr Expr, env *TypeEnvironment, shouldMo
 func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 	switch s := stmt.(type) {
 	case *LetStmt:
+		if s.Type != nil {
+			s.Type = tc.resolveType(s.Type)
+			tc.pinLiteral(s.Value, s.Type)
+		}
 		valT, err := tc.inferExpr(s.Value, env)
 		if err != nil {
 			return err
@@ -97,7 +101,6 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			return fmt.Errorf("[%s] variable '%s' already declared in this scope", s.At, s.Name)
 		}
 		if s.Type != nil {
-			s.Type = tc.resolveType(s.Type)
 			if err := tc.validateType(s.Type, s.At); err != nil {
 				return err
 			}
@@ -156,11 +159,12 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 				return fmt.Errorf("[%s] cannot assign to a string index", s.At)
 			}
 		}
+		lhsT = tc.resolveType(lhsT)
+		tc.pinLiteral(s.RHS, lhsT)
 		rhsT, err := tc.inferExpr(s.RHS, env)
 		if err != nil {
 			return err
 		}
-		lhsT = tc.resolveType(lhsT)
 		rhsT = tc.resolveType(rhsT)
 		s.LHSType = lhsT
 		s.RHSType = rhsT
@@ -234,6 +238,9 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 	case *ReturnStmt:
 		expected := env.CurRet
 		if s.Value != nil {
+			if expected != nil {
+				tc.pinLiteral(s.Value, expected)
+			}
 			valT, err := tc.inferExpr(s.Value, env)
 			if err != nil {
 				return err
