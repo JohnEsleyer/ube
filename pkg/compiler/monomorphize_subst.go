@@ -89,11 +89,13 @@ func substituteStmt(stmt Stmt, subMap map[string]UbeType) Stmt {
 		}
 	case *IfLetStmt:
 		return &IfLetStmt{
-			At:      s.At,
-			VarName: s.VarName,
-			Expr:    substituteExpr(s.Expr, subMap),
-			Then:    substituteBlock(s.Then, subMap),
-			Else:    substituteStmt(s.Else, subMap),
+			At:       s.At,
+			VarName:  s.VarName,
+			VarType:  substituteType(s.VarType, subMap),
+			Expr:     substituteExpr(s.Expr, subMap),
+			IsResult: s.IsResult,
+			Then:     substituteBlock(s.Then, subMap),
+			Else:     substituteStmt(s.Else, subMap),
 		}
 	case *WhileStmt:
 		return &WhileStmt{
@@ -105,16 +107,21 @@ func substituteStmt(stmt Stmt, subMap map[string]UbeType) Stmt {
 		return &WhileLetStmt{
 			At:      s.At,
 			VarName: s.VarName,
+			VarType: substituteType(s.VarType, subMap),
 			Call:    substituteExpr(s.Call, subMap),
 			Body:    substituteBlock(s.Body, subMap),
 		}
 	case *ForStmt:
 		return &ForStmt{
-			At:       s.At,
-			ItemName: s.ItemName,
-			Iter:     substituteExpr(s.Iter, subMap),
-			IterType: substituteType(s.IterType, subMap),
-			Body:     substituteBlock(s.Body, subMap),
+			At:               s.At,
+			ItemName:         s.ItemName,
+			ItemType:         substituteType(s.ItemType, subMap),
+			Iter:             substituteExpr(s.Iter, subMap),
+			IterType:         substituteType(s.IterType, subMap),
+			IsCustomIterator: s.IsCustomIterator,
+			NextMethod:       s.NextMethod,
+			ReceiverIsMut:    s.ReceiverIsMut,
+			Body:             substituteBlock(s.Body, subMap),
 		}
 	case *BlockStmt:
 		return substituteBlock(s, subMap)

@@ -343,6 +343,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		default:
 			return fmt.Errorf("[%s] if-let requires optional or result type, got '%s'", s.At, optT)
 		}
+		s.VarType = unwrapped
 		thenEnv := childTypeEnvironment(env)
 		thenEnv.Vars[s.VarName] = VarInfo{Type: unwrapped, IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Expr, env), LoopDepth: thenEnv.LoopDepth}
 		if err := tc.checkBlock(s.Then, thenEnv); err != nil {
@@ -386,6 +387,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		} else if !isChanRecv {
 			return fmt.Errorf("[%s] while-let requires an optional type or channel recv(), got '%s'", s.At, cType)
 		}
+		s.VarType = unwrappedType
 		loopEnv := childTypeEnvironment(env)
 		loopEnv.LoopDepth = env.LoopDepth + 1
 		loopEnv.Vars[s.VarName] = VarInfo{Type: unwrappedType, IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Call, env), LoopDepth: loopEnv.LoopDepth}
@@ -434,6 +436,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			s.ReceiverIsMut = sig.ReceiverMut
 		}
 		s.IterType = iterT
+		s.ItemType = elemT
 		loopEnv := childTypeEnvironment(env)
 		loopEnv.LoopDepth = env.LoopDepth + 1
 		loopEnv.Vars[s.ItemName] = VarInfo{Type: elemT, IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Iter, env), LoopDepth: loopEnv.LoopDepth}

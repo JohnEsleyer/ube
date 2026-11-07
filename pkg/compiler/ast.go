@@ -236,6 +236,7 @@ func (e *IfExpr) exprNode()           {}
 type IfLetStmt struct {
 	At       SourceLocation
 	VarName  string
+	VarType  UbeType // Populated by typechecker
 	Expr     Expr
 	IsResult bool
 	Then     *BlockStmt
@@ -257,6 +258,7 @@ func (s *WhileStmt) stmtNode()           {}
 type WhileLetStmt struct {
 	At      SourceLocation
 	VarName string
+	VarType UbeType // Populated by typechecker
 	Call    Expr
 	Body    *BlockStmt
 }
@@ -267,6 +269,7 @@ func (s *WhileLetStmt) stmtNode()           {}
 type ForStmt struct {
 	At               SourceLocation
 	ItemName         string
+	ItemType         UbeType // Populated by typechecker
 	Iter             Expr
 	IterType         UbeType
 	IsCustomIterator bool

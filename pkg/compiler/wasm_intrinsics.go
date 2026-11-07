@@ -458,6 +458,10 @@ func (ctx *fnContext) callReturnUbeType(call *CallExpr) UbeType {
 		}
 	}
 	if mem, ok := call.Callee.(*MemberExpr); ok {
+		if id, ok := mem.Target.(*IdentExpr); ok && id.Name == "string" &&
+			(mem.Member == "from_bytes" || mem.Member == "from_utf8") {
+			return ResultType{Ok: StringType{}, Err: StringType{}}
+		}
 		if id, ok := mem.Target.(*IdentExpr); ok && id.Name == "StringBuilder" && mem.Member == "new" {
 			return StringBuilderType{}
 		}
@@ -470,10 +474,12 @@ func (ctx *fnContext) callReturnUbeType(call *CallExpr) UbeType {
 			}
 		}
 		if target, ok := mem.Target.(*IdentExpr); ok {
-			if prefix, ok := ctx.emitter.moduleAliases[target.Name]; ok {
-				if ret, ok := ctx.emitter.fnReturns[prefix+"."+mem.Member]; ok {
-					return ret
-				}
+			prefix := target.Name
+			if p, ok := ctx.emitter.moduleAliases[target.Name]; ok {
+				prefix = p
+			}
+			if ret, ok := ctx.emitter.fnReturns[prefix+"."+mem.Member]; ok {
+				return ret
 			}
 		}
 	}
@@ -506,10 +512,12 @@ func (ctx *fnContext) callReturnsValue(call *CallExpr) bool {
 			}
 		}
 		if target, ok := mem.Target.(*IdentExpr); ok {
-			if prefix, ok := ctx.emitter.moduleAliases[target.Name]; ok {
-				if ret, ok := ctx.emitter.fnReturns[prefix+mem.Member]; ok {
-					return ret != nil && ret.String() != "void"
-				}
+			prefix := target.Name
+			if p, ok := ctx.emitter.moduleAliases[target.Name]; ok {
+				prefix = p
+			}
+			if ret, ok := ctx.emitter.fnReturns[prefix+"."+mem.Member]; ok {
+				return ret != nil && ret.String() != "void"
 			}
 		}
 	}
@@ -602,25 +610,7 @@ func (ctx *fnContext) exprStaticType(expr Expr) UbeType {
 			return t
 		}
 	case *CallExpr:
-		if id, ok := e.Callee.(*IdentExpr); ok {
-			if t, ok := ctx.emitter.fnReturns[id.Name]; ok {
-				return t
-			}
-		}
-		if mem, ok := e.Callee.(*MemberExpr); ok {
-			if e.ReceiverType != nil {
-				if t, ok := ctx.emitter.fnReturns[e.ReceiverType.String()+"."+mem.Member]; ok {
-					return t
-				}
-			}
-			if target, ok := mem.Target.(*IdentExpr); ok {
-				if prefix, ok := ctx.emitter.moduleAliases[target.Name]; ok {
-					if t, ok := ctx.emitter.fnReturns[prefix+mem.Member]; ok {
-						return t
-					}
-				}
-			}
-		}
+		return ctx.callReturnUbeType(e)
 	case *OrElseExpr:
 		if e.PrimaryType != nil {
 			switch t := e.PrimaryType.(type) {

@@ -982,6 +982,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		if rng, ok := s.Iter.(*RangeExpr); ok {
 			itemLocal := ctx.allocLocal(valTypeI32)
 			ctx.locals[s.ItemName] = itemLocal
+			ctx.localTypes[s.ItemName] = s.ItemType
 			endLocal := ctx.allocLocal(valTypeI32)
 
 			if err := ctx.compileExpr(buf, rng.Start); err != nil {
@@ -1078,6 +1079,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 
 			itemLocal := ctx.allocLocal(valTypeI32)
 			ctx.locals[s.ItemName] = itemLocal
+			ctx.localTypes[s.ItemName] = s.ItemType
 
 			ctx.openLabel(buf, 0x02)
 			buf.WriteByte(valTypeVoid)
@@ -1148,7 +1150,10 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		ctx.openLabel(buf, 0x04)
 		buf.WriteByte(valTypeVoid)
 
-		bindingType := unwrapBindingType(ctx.exprStaticType(s.Expr))
+		bindingType := s.VarType
+		if bindingType == nil {
+			bindingType = unwrapBindingType(ctx.exprStaticType(s.Expr))
+		}
 		varLocalWasm := byte(valTypeI32)
 		if bindingType != nil {
 			switch bindingType.String() {
@@ -1222,14 +1227,38 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		buf.WriteByte(0x0d)
 		writeUleb128(buf, 1)
 
-		varLocal := ctx.allocLocal(valTypeI32)
+		bindingType := s.VarType
+		if bindingType == nil {
+			bindingType = unwrapBindingType(ctx.exprStaticType(s.Call))
+		}
+		varLocalWasm := byte(valTypeI32)
+		if bindingType != nil {
+			switch bindingType.String() {
+			case "f32":
+				varLocalWasm = valTypeF32
+			case "f64":
+				varLocalWasm = valTypeF64
+			case "i64":
+				varLocalWasm = valTypeI64
+			}
+		}
+		varLocal := ctx.allocLocal(varLocalWasm)
 		ctx.locals[s.VarName] = varLocal
-		ctx.localTypes[s.VarName] = unwrapBindingType(ctx.exprStaticType(s.Call))
+		ctx.localTypes[s.VarName] = bindingType
 		buf.WriteByte(0x20)
 		writeUleb128(buf, optLocal)
 		buf.WriteByte(0x28)
 		writeUleb128(buf, 2)
 		writeUleb128(buf, 4)
+		switch varLocalWasm {
+		case valTypeF32:
+			buf.WriteByte(0xbe) // f32.reinterpret_i32
+		case valTypeF64:
+			buf.WriteByte(0xad) // i64.extend_i32_u
+			buf.WriteByte(0xbf) // f64.reinterpret_i64
+		case valTypeI64:
+			buf.WriteByte(0xad) // i64.extend_i32_u
+		}
 		buf.WriteByte(0x21)
 		writeUleb128(buf, varLocal)
 
@@ -1378,6 +1407,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 
 			varLocal := ctx.allocLocal(valTypeI32)
 			ctx.locals[sc.VarName] = varLocal
+			ctx.localTypes[sc.VarName] = sc.ChanElem
 
 			buf.WriteByte(0x20)
 			writeUleb128(buf, chanLocal)
