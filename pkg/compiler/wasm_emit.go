@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -205,24 +206,11 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 			}
 			var params []byte
 			for _, p := range ext.Params {
-				if p.Type != nil && p.Type.String() == "i64" {
-					params = append(params, valTypeI64)
-				} else {
-					params = append(params, valTypeI32)
-				}
+				params = append(params, wasmTypeOrDefault(p.Type))
 			}
 			var results []byte
 			if ext.RetType != nil && ext.RetType.String() != "void" {
-				switch ext.RetType.String() {
-				case "f32":
-					results = append(results, valTypeF32)
-				case "f64":
-					results = append(results, valTypeF64)
-				case "i64":
-					results = append(results, valTypeI64)
-				default:
-					results = append(results, valTypeI32)
-				}
+				results = append(results, wasmTypeOrDefault(ext.RetType))
 			}
 			tIdx := e.registerType(params, results)
 			extIdx := uint32(len(e.imports))
@@ -416,7 +404,10 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 	printIntIdx := funcOffset + uint32(len(fnDecls))
 	e.fnIndices["__print_i32"] = printIntIdx
 
-	printStrIdx := printIntIdx + 1
+	printInt64Idx := printIntIdx + 1
+	e.fnIndices["__print_i64"] = printInt64Idx
+
+	printStrIdx := printInt64Idx + 1
 	e.fnIndices["__print_str"] = printStrIdx
 
 	printBoolIdx := printStrIdx + 1
@@ -431,7 +422,10 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 	intToStrIdx := strEqIdx + 1
 	e.fnIndices["__i32_to_str"] = intToStrIdx
 
-	startIdx := intToStrIdx + 1
+	int64ToStrIdx := intToStrIdx + 1
+	e.fnIndices["__i64_to_str"] = int64ToStrIdx
+
+	startIdx := int64ToStrIdx + 1
 	e.fnIndices["_start"] = startIdx
 
 	// Register types for defined functions
@@ -441,31 +435,25 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 			params = append(params, valTypeI32)
 		}
 		for _, p := range fn.Params {
-			if p.Type != nil && p.Type.String() == "f32" {
-				params = append(params, valTypeF32)
-			} else {
-				params = append(params, valTypeI32)
-			}
+			params = append(params, wasmTypeOrDefault(p.Type))
 		}
 		var results []byte
 		if fn.RetType != nil && fn.RetType.String() != "void" {
-			if fn.RetType.String() == "f32" {
-				results = append(results, valTypeF32)
-			} else {
-				results = append(results, valTypeI32)
-			}
+			results = append(results, wasmTypeOrDefault(fn.RetType))
 		}
 		e.funcs = append(e.funcs, e.registerType(params, results))
 	}
 
 	// Helper types:
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{}))
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32, valTypeI32}, []byte{}))
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{}))
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{valTypeI32}))
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{valTypeI32}))
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32}, []byte{valTypeI32}))
-	e.funcs = append(e.funcs, e.registerType([]byte{}, []byte{}))
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{}))             // __print_i32
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI64, valTypeI32}, []byte{}))             // __print_i64
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32, valTypeI32}, []byte{})) // __print_str
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{}))             // __print_bool
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{valTypeI32}))   // __str_concat
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{valTypeI32}))   // __str_eq
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32}, []byte{valTypeI32}))               // __i32_to_str
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI64}, []byte{valTypeI32}))               // __i64_to_str
+	e.funcs = append(e.funcs, e.registerType([]byte{}, []byte{}))                                   // _start
 
 	// Compile user function bodies
 	for _, fn := range fnDecls {
@@ -478,11 +466,13 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 
 	// Compile built-in helper bodies
 	e.codeBodies = append(e.codeBodies, e.buildPrintIntFunc())
+	e.codeBodies = append(e.codeBodies, e.buildPrintInt64Func())
 	e.codeBodies = append(e.codeBodies, e.buildPrintStrFunc())
 	e.codeBodies = append(e.codeBodies, e.buildPrintBoolFunc())
 	e.codeBodies = append(e.codeBodies, e.buildStrConcatFunc())
 	e.codeBodies = append(e.codeBodies, e.buildStrEqFunc())
 	e.codeBodies = append(e.codeBodies, e.buildIntToStrFunc())
+	e.codeBodies = append(e.codeBodies, e.buildInt64ToStrFunc())
 	e.codeBodies = append(e.codeBodies, e.buildStartFunc(e.fnIndices["main"]))
 
 	return e.assembleBinary()
@@ -703,29 +693,17 @@ func (ctx *fnContext) compileBlock(buf *bytes.Buffer, block *BlockStmt) error {
 func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 	switch s := stmt.(type) {
 	case *LetStmt:
-		localType := byte(valTypeI32)
 		var t UbeType
-		if s.Value != nil {
-			if inferred := ctx.inferExprType(s.Value); inferred != "" {
-				t = CustomType{Name: inferred}
-			}
-		}
-		if t == nil && s.Type != nil {
+		if s.Type != nil {
 			t = s.Type
-		}
-		if t == nil && s.ValueType != nil {
+		} else if s.ValueType != nil {
 			t = s.ValueType
-		}
-		if t != nil {
-			switch t.String() {
-			case "f32":
-				localType = valTypeF32
-			case "f64":
-				localType = valTypeF64
-			case "i64":
-				localType = valTypeI64
+		} else if s.Value != nil {
+			if inferred := ctx.inferExprType(s.Value); inferred != "" {
+				t = typeFromString(inferred)
 			}
 		}
+		localType := wasmTypeOrDefault(t)
 		valIdx := ctx.allocLocal(localType)
 		ctx.locals[s.Name] = valIdx
 		if t != nil {
@@ -755,7 +733,11 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				if err := ctx.compileExpr(buf, s.RHS); err != nil {
 					return err
 				}
-				if err := emitCompoundOp(buf, s.Op, ctx.inferExprType(s.RHS)); err != nil {
+				opType := ctx.inferExprType(s.LHS)
+				if opType == "" {
+					opType = ctx.inferExprType(s.RHS)
+				}
+				if err := emitCompoundOp(buf, s.Op, opType); err != nil {
 					return err
 				}
 			} else {
@@ -795,7 +777,11 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				if err := ctx.compileExpr(buf, s.RHS); err != nil {
 					return err
 				}
-				if err := emitCompoundOp(buf, s.Op, ctx.inferExprType(s.RHS)); err != nil {
+				opType := ctx.inferExprType(s.LHS)
+				if opType == "" {
+					opType = ctx.inferExprType(s.RHS)
+				}
+				if err := emitCompoundOp(buf, s.Op, opType); err != nil {
 					return err
 				}
 			} else if isAddressMember(fieldType) {
@@ -901,17 +887,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			// Store the return value in a local before running defers. Defers
 			// may leave their own values on the operand stack, so keeping the
 			// result there would corrupt the function's return value.
-			retValWasm := byte(valTypeI32)
-			if ctx.fn.RetType != nil {
-				switch ctx.fn.RetType.String() {
-				case "f32":
-					retValWasm = valTypeF32
-				case "f64":
-					retValWasm = valTypeF64
-				case "i64":
-					retValWasm = valTypeI64
-				}
-			}
+			retValWasm := wasmTypeOrDefault(ctx.fn.RetType)
 			retLocal := ctx.allocLocal(retValWasm)
 			if wrap {
 				if err := ctx.compileWrappedSuccess(buf, s.Value); err != nil {
@@ -1579,18 +1555,33 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		return nil
 	case *LiteralExpr:
 		switch e.Type.String() {
-		case "i32", "u8":
-			var val int32
-			fmt.Sscanf(e.Val, "%d", &val)
+		case "i8", "u8", "i16", "u16", "i32", "u32", "untyped int":
+			val, _ := strconv.ParseInt(e.Val, 0, 64)
 			buf.WriteByte(0x41)
-			writeSleb128(buf, val)
-		case "f32":
+			writeSleb128(buf, int32(val))
+		case "i64", "u64":
+			val, err := strconv.ParseInt(e.Val, 0, 64)
+			if err != nil {
+				uval, _ := strconv.ParseUint(e.Val, 0, 64)
+				val = int64(uval)
+			}
+			buf.WriteByte(0x42)
+			writeSleb128_64(buf, val)
+		case "f32", "untyped float":
 			var val float32
 			fmt.Sscanf(e.Val, "%f", &val)
 			buf.WriteByte(0x43)
 			bits := math.Float32bits(val)
 			var b [4]byte
 			binary.LittleEndian.PutUint32(b[:], bits)
+			buf.Write(b[:])
+		case "f64":
+			var val float64
+			fmt.Sscanf(e.Val, "%f", &val)
+			buf.WriteByte(0x44)
+			bits := math.Float64bits(val)
+			var b [8]byte
+			binary.LittleEndian.PutUint64(b[:], bits)
 			buf.Write(b[:])
 		case "bool":
 			buf.WriteByte(0x41)
@@ -1633,15 +1624,25 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 				buf.WriteByte(0x8c)
 			case "f64":
 				buf.WriteByte(0x9a)
+			case "i64", "u64":
+				buf.WriteByte(0x42)
+				writeSleb128_64(buf, -1)
+				buf.WriteByte(0x7e) // i64.mul
 			default:
 				buf.WriteByte(0x41)
 				writeSleb128(buf, -1)
 				buf.WriteByte(0x6c)
 			}
 		case "~":
-			buf.WriteByte(0x41)
-			writeSleb128(buf, -1)
-			buf.WriteByte(0x73)
+			if ctx.inferExprType(e.Operand) == "i64" || ctx.inferExprType(e.Operand) == "u64" {
+				buf.WriteByte(0x42)
+				writeSleb128_64(buf, -1)
+				buf.WriteByte(0x85) // i64.xor
+			} else {
+				buf.WriteByte(0x41)
+				writeSleb128(buf, -1)
+				buf.WriteByte(0x73)
+			}
 		}
 
 	case *IdentExpr:
@@ -1687,8 +1688,17 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			return err
 		}
 
-		isF32 := (e.OperandType != nil && e.OperandType.String() == "f32") || (e.Type != nil && e.Type.String() == "f32")
-		if isF32 {
+		opType := ""
+		if e.OperandType != nil {
+			opType = e.OperandType.String()
+		} else if e.Type != nil {
+			opType = e.Type.String()
+		} else if lt := ctx.inferExprType(e.Left); lt != "" {
+			opType = lt
+		}
+
+		switch opType {
+		case "f32":
 			switch e.Op {
 			case "+":
 				buf.WriteByte(0x92)
@@ -1711,7 +1721,100 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			case ">=":
 				buf.WriteByte(0x60)
 			}
-		} else {
+		case "f64":
+			switch e.Op {
+			case "+":
+				buf.WriteByte(0xa0)
+			case "-":
+				buf.WriteByte(0xa1)
+			case "*":
+				buf.WriteByte(0xa2)
+			case "/":
+				buf.WriteByte(0xa3)
+			case "==":
+				buf.WriteByte(0x61)
+			case "!=":
+				buf.WriteByte(0x62)
+			case "<":
+				buf.WriteByte(0x63)
+			case "<=":
+				buf.WriteByte(0x65)
+			case ">":
+				buf.WriteByte(0x64)
+			case ">=":
+				buf.WriteByte(0x66)
+			}
+		case "i64":
+			switch e.Op {
+			case "+":
+				buf.WriteByte(0x7c)
+			case "-":
+				buf.WriteByte(0x7d)
+			case "*":
+				buf.WriteByte(0x7e)
+			case "/":
+				buf.WriteByte(0x7f)
+			case "%":
+				buf.WriteByte(0x81)
+			case "==":
+				buf.WriteByte(0x51)
+			case "!=":
+				buf.WriteByte(0x52)
+			case "<":
+				buf.WriteByte(0x53)
+			case "<=":
+				buf.WriteByte(0x57)
+			case ">":
+				buf.WriteByte(0x55)
+			case ">=":
+				buf.WriteByte(0x59)
+			case "&":
+				buf.WriteByte(0x83)
+			case "|":
+				buf.WriteByte(0x84)
+			case "^":
+				buf.WriteByte(0x85)
+			case "<<":
+				buf.WriteByte(0x86)
+			case ">>":
+				buf.WriteByte(0x87)
+			}
+		case "u64":
+			switch e.Op {
+			case "+":
+				buf.WriteByte(0x7c)
+			case "-":
+				buf.WriteByte(0x7d)
+			case "*":
+				buf.WriteByte(0x7e)
+			case "/":
+				buf.WriteByte(0x80)
+			case "%":
+				buf.WriteByte(0x82)
+			case "==":
+				buf.WriteByte(0x51)
+			case "!=":
+				buf.WriteByte(0x52)
+			case "<":
+				buf.WriteByte(0x54)
+			case "<=":
+				buf.WriteByte(0x58)
+			case ">":
+				buf.WriteByte(0x56)
+			case ">=":
+				buf.WriteByte(0x5a)
+			case "&":
+				buf.WriteByte(0x83)
+			case "|":
+				buf.WriteByte(0x84)
+			case "^":
+				buf.WriteByte(0x85)
+			case "<<":
+				buf.WriteByte(0x86)
+			case ">>":
+				buf.WriteByte(0x88)
+			}
+		default:
 			switch e.Op {
 			case "+":
 				buf.WriteByte(0x6a)
@@ -1720,21 +1823,45 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			case "*":
 				buf.WriteByte(0x6c)
 			case "/":
-				buf.WriteByte(0x6d)
+				if opType == "u32" || opType == "u16" || opType == "u8" {
+					buf.WriteByte(0x6e)
+				} else {
+					buf.WriteByte(0x6d)
+				}
 			case "%":
-				buf.WriteByte(0x6f)
+				if opType == "u32" || opType == "u16" || opType == "u8" {
+					buf.WriteByte(0x70)
+				} else {
+					buf.WriteByte(0x6f)
+				}
 			case "==":
 				buf.WriteByte(0x46)
 			case "!=":
 				buf.WriteByte(0x47)
 			case "<":
-				buf.WriteByte(0x48)
+				if opType == "u32" || opType == "u16" || opType == "u8" {
+					buf.WriteByte(0x49)
+				} else {
+					buf.WriteByte(0x48)
+				}
 			case "<=":
-				buf.WriteByte(0x4c)
+				if opType == "u32" || opType == "u16" || opType == "u8" {
+					buf.WriteByte(0x4d)
+				} else {
+					buf.WriteByte(0x4c)
+				}
 			case ">":
-				buf.WriteByte(0x4a)
+				if opType == "u32" || opType == "u16" || opType == "u8" {
+					buf.WriteByte(0x4b)
+				} else {
+					buf.WriteByte(0x4a)
+				}
 			case ">=":
-				buf.WriteByte(0x4e)
+				if opType == "u32" || opType == "u16" || opType == "u8" {
+					buf.WriteByte(0x4f)
+				} else {
+					buf.WriteByte(0x4e)
+				}
 			case "&&", "&":
 				buf.WriteByte(0x71)
 			case "||", "|":
@@ -1744,7 +1871,11 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			case "<<":
 				buf.WriteByte(0x74)
 			case ">>":
-				buf.WriteByte(0x75)
+				if opType == "u32" || opType == "u16" || opType == "u8" {
+					buf.WriteByte(0x76)
+				} else {
+					buf.WriteByte(0x75)
+				}
 			}
 		}
 
@@ -3351,6 +3482,32 @@ func (ctx *fnContext) compilePrint(buf *bytes.Buffer, args []Expr, newline bool)
 			writeSleb128(buf, currentNL)
 			buf.WriteByte(0x10)
 			writeUleb128(buf, ctx.emitter.fnIndices["__print_bool"])
+		} else if argT == "i64" || argT == "u64" {
+			if err := ctx.compileExpr(buf, arg); err != nil {
+				return err
+			}
+			buf.WriteByte(0x41)
+			writeSleb128(buf, currentNL)
+			buf.WriteByte(0x10)
+			writeUleb128(buf, ctx.emitter.fnIndices["__print_i64"])
+		} else if argT == "f32" {
+			if err := ctx.compileExpr(buf, arg); err != nil {
+				return err
+			}
+			buf.WriteByte(0xa8) // i32.trunc_f32_s
+			buf.WriteByte(0x41)
+			writeSleb128(buf, currentNL)
+			buf.WriteByte(0x10)
+			writeUleb128(buf, ctx.emitter.fnIndices["__print_i32"])
+		} else if argT == "f64" {
+			if err := ctx.compileExpr(buf, arg); err != nil {
+				return err
+			}
+			buf.WriteByte(0xaa) // i32.trunc_f64_s
+			buf.WriteByte(0x41)
+			writeSleb128(buf, currentNL)
+			buf.WriteByte(0x10)
+			writeUleb128(buf, ctx.emitter.fnIndices["__print_i32"])
 		} else {
 			if err := ctx.compileExpr(buf, arg); err != nil {
 				return err
@@ -3923,6 +4080,188 @@ func (e *wasmEmitter) buildIntToStrFunc() []byte {
 		writeUleb128(&full, 1)
 		full.WriteByte(valTypeI32)
 	}
+	full.Write(body.Bytes())
+	full.WriteByte(0x0b)
+
+	var res bytes.Buffer
+	writeUleb128(&res, uint32(full.Len()))
+	res.Write(full.Bytes())
+	return res.Bytes()
+}
+
+// buildPrintInt64Func prints an i64 followed by an optional newline.
+// Locals: 2 = string header pointer.
+func (e *wasmEmitter) buildPrintInt64Func() []byte {
+	var body bytes.Buffer
+
+	emitLocalGet(&body, 0)
+	emitCallIdx(&body, e.fnIndices["__i64_to_str"])
+	emitLocalSet(&body, 2)
+
+	emitLocalGet(&body, 2)
+	emitI32Load(&body, 0, 2)
+	emitLocalGet(&body, 2)
+	emitI32Load(&body, 4, 2)
+	emitLocalGet(&body, 1)
+	emitCallIdx(&body, e.fnIndices["__print_str"])
+
+	body.WriteByte(0x0b)
+
+	var full bytes.Buffer
+	writeUleb128(&full, 1)
+	writeUleb128(&full, 1)
+	full.WriteByte(valTypeI32)
+	full.Write(body.Bytes())
+
+	var res bytes.Buffer
+	writeUleb128(&res, uint32(full.Len()))
+	res.Write(full.Bytes())
+	return res.Bytes()
+}
+
+// buildInt64ToStrFunc converts an i64 into a freshly allocated string header.
+// Locals: 1 = base, 2 = write position, 3 = negative flag, 4 = value.
+func (e *wasmEmitter) buildInt64ToStrFunc() []byte {
+	var body bytes.Buffer
+
+	// base = align8(global0)
+	body.WriteByte(0x23)
+	writeUleb128(&body, 0)
+	emitI32Const(&body, 7)
+	body.WriteByte(0x6a)
+	emitI32Const(&body, -8)
+	body.WriteByte(0x71)
+	emitLocalSet(&body, 1)
+
+	// global0 = base + 40
+	emitLocalGet(&body, 1)
+	emitI32Const(&body, 40)
+	body.WriteByte(0x6a)
+	body.WriteByte(0x24)
+	writeUleb128(&body, 0)
+
+	// pos = base + 40
+	emitLocalGet(&body, 1)
+	emitI32Const(&body, 40)
+	body.WriteByte(0x6a)
+	emitLocalSet(&body, 2)
+
+	// neg = 0
+	emitI32Const(&body, 0)
+	emitLocalSet(&body, 3)
+
+	// value = arg0
+	emitLocalGet(&body, 0)
+	emitLocalSet(&body, 4)
+
+	// if value == 0
+	emitLocalGet(&body, 4)
+	body.WriteByte(0x50) // i64.eqz
+	body.WriteByte(0x04)
+	body.WriteByte(valTypeVoid)
+
+	// Zero: write '0'.
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 1)
+	body.WriteByte(0x6b)
+	emitLocalSet(&body, 2)
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 48)
+	body.WriteByte(0x3a)
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 0)
+
+	body.WriteByte(0x05) // else
+
+	// Negative?
+	emitLocalGet(&body, 4)
+	body.WriteByte(0x42)
+	writeSleb128_64(&body, 0)
+	body.WriteByte(0x53) // i64.lt_s
+	body.WriteByte(0x04)
+	body.WriteByte(valTypeVoid)
+	emitI32Const(&body, 1)
+	emitLocalSet(&body, 3)
+	body.WriteByte(0x42)
+	writeSleb128_64(&body, 0)
+	emitLocalGet(&body, 4)
+	body.WriteByte(0x7d) // i64.sub
+	emitLocalSet(&body, 4)
+	body.WriteByte(0x0b)
+
+	// loop: write digits backwards.
+	body.WriteByte(0x03)
+	body.WriteByte(valTypeVoid)
+
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 1)
+	body.WriteByte(0x6b)
+	body.WriteByte(0x22) // local.tee
+	writeUleb128(&body, 2)
+	emitLocalGet(&body, 4)
+	body.WriteByte(0x42)
+	writeSleb128_64(&body, 10)
+	body.WriteByte(0x82) // i64.rem_u
+	body.WriteByte(0xa7) // i32.wrap_i64
+	emitI32Const(&body, 48)
+	body.WriteByte(0x6a)
+	body.WriteByte(0x3a) // i32.store8
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 0)
+
+	emitLocalGet(&body, 4)
+	body.WriteByte(0x42)
+	writeSleb128_64(&body, 10)
+	body.WriteByte(0x80) // i64.div_u
+	body.WriteByte(0x22) // local.tee
+	writeUleb128(&body, 4)
+	body.WriteByte(0x50) // i64.eqz
+	emitI32Eqz(&body)
+	body.WriteByte(0x0d) // br_if
+	writeUleb128(&body, 0)
+	body.WriteByte(0x0b) // end loop
+
+	// Sign.
+	emitLocalGet(&body, 3)
+	body.WriteByte(0x04)
+	body.WriteByte(valTypeVoid)
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 1)
+	body.WriteByte(0x6b)
+	body.WriteByte(0x22) // local.tee
+	writeUleb128(&body, 2)
+	emitI32Const(&body, 45)
+	body.WriteByte(0x3a)
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 0)
+	body.WriteByte(0x0b)
+
+	body.WriteByte(0x0b) // end zero if
+
+	// header.ptr = pos
+	emitLocalGet(&body, 1)
+	emitLocalGet(&body, 2)
+	emitI32Store(&body, 0, 2)
+	// header.len = base + 40 - pos
+	emitLocalGet(&body, 1)
+	emitLocalGet(&body, 1)
+	emitI32Const(&body, 40)
+	body.WriteByte(0x6a)
+	emitLocalGet(&body, 2)
+	body.WriteByte(0x6b)
+	emitI32Store(&body, 4, 2)
+	emitLocalGet(&body, 1)
+
+	var full bytes.Buffer
+	writeUleb128(&full, 4) // four locals
+	full.WriteByte(1)
+	full.WriteByte(valTypeI32)
+	full.WriteByte(1)
+	full.WriteByte(valTypeI32)
+	full.WriteByte(1)
+	full.WriteByte(valTypeI32)
+	full.WriteByte(1)
+	full.WriteByte(valTypeI64)
 	full.Write(body.Bytes())
 	full.WriteByte(0x0b)
 
@@ -4656,6 +4995,38 @@ func writeUleb128(buf *bytes.Buffer, val uint32) {
 
 func writeSleb128(buf *bytes.Buffer, val int32) {
 	buf.Write(wasm.AppendSleb128(nil, val))
+}
+
+func writeSleb128_64(buf *bytes.Buffer, val int64) {
+	buf.Write(wasm.AppendSleb128_64(nil, val))
+}
+
+// wasmTypeOrDefault maps a Ube type to its Wasm value type, falling back to
+// i32 for void/unknown types. Used for function signatures and locals so that
+// i64, f32, and f64 are represented correctly rather than coerced to i32.
+func wasmTypeOrDefault(t UbeType) byte {
+	if t != nil {
+		if wt := byte(t.WasmType()); wt != valTypeVoid {
+			return wt
+		}
+	}
+	return valTypeI32
+}
+
+// typeFromString reconstructs a primitive/string type from its name. Used
+// when only an inferred type string is available (e.g. a let binding whose
+// value type was inferred by the typechecker).
+func typeFromString(s string) UbeType {
+	switch s {
+	case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "bool", "void":
+		return PrimitiveType{Name: s}
+	case "string":
+		return StringType{}
+	case "StringBuilder":
+		return StringBuilderType{}
+	default:
+		return CustomType{Name: s}
+	}
 }
 
 // wrapStartWithLocals wraps a _start body with an i32 local declaration

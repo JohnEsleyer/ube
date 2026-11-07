@@ -152,6 +152,10 @@ func (p *Parser) parsePostfix() Expr {
 		if p.check(TokenQuestion) {
 			loc := p.advance().Loc
 			node = &TryExpr{At: loc, Operand: node}
+		} else if p.check(TokenAs) {
+			loc := p.advance().Loc
+			targetType := p.parseType()
+			node = &CastExpr{At: loc, TargetType: targetType, Expr: node}
 		} else if p.check(TokenDot) {
 			loc := p.advance().Loc
 			var member string

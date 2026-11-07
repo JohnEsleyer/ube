@@ -191,10 +191,15 @@ func (ctx *fnContext) compileSpecialCall(buf *bytes.Buffer, e *CallExpr) (bool, 
 		if len(e.Args) != 1 {
 			return true, nil
 		}
+		argT := ctx.inferExprType(e.Args[0])
 		if err := ctx.compileExpr(buf, e.Args[0]); err != nil {
 			return true, err
 		}
-		emitCallIdx(buf, ctx.emitter.fnIndices["__i32_to_str"])
+		if argT == "i64" || argT == "u64" {
+			emitCallIdx(buf, ctx.emitter.fnIndices["__i64_to_str"])
+		} else {
+			emitCallIdx(buf, ctx.emitter.fnIndices["__i32_to_str"])
+		}
 		return true, nil
 	}
 	return false, nil
@@ -432,6 +437,8 @@ func (ctx *fnContext) compileStringPart(buf *bytes.Buffer, part Expr) error {
 	case "f64":
 		buf.WriteByte(0xaa) // i32.trunc_f64_s
 		emitCallIdx(buf, ctx.emitter.fnIndices["__i32_to_str"])
+	case "i64", "u64":
+		emitCallIdx(buf, ctx.emitter.fnIndices["__i64_to_str"])
 	default:
 		emitCallIdx(buf, ctx.emitter.fnIndices["__i32_to_str"])
 	}

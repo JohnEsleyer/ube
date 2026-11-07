@@ -1,4 +1,3 @@
-
 // File: pkg/compiler/typechecker_expr.go
 package compiler
 
@@ -11,7 +10,7 @@ func printableType(t UbeType) bool {
 	switch v := t.(type) {
 	case PrimitiveType:
 		switch v.Name {
-		case "i32", "u32", "u8", "i64", "u64", "f32", "f64", "bool":
+		case "i8", "i16", "i32", "u8", "u16", "u32", "i64", "u64", "f32", "f64", "bool":
 			return true
 		}
 	case StringType, StringBuilderType:

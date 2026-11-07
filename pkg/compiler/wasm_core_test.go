@@ -609,3 +609,40 @@ fn main() {
 		t.Errorf("expected %q, got %q", want, out)
 	}
 }
+
+// TestWasmCore_MixedWidthArithmeticAndCasts verifies that i64 values flow
+// through function signatures, literals, locals, return values, casts, and
+// interpolation without being coerced to i32. A mismatch here produces a Wasm
+// validation error ("type mismatch: expected i64, found i32").
+func TestWasmCore_MixedWidthArithmeticAndCasts(t *testing.T) {
+	source := `package main
+
+fn widen(v: i32) -> i64 {
+    let w: i64 = 0
+    return w
+}
+
+fn cast_widen(v: i32) -> i64 {
+    return v as i64
+}
+
+fn main() {
+    let a: i32 = 17
+    let wide = widen(a)
+    println(f"wide = {wide}")
+    let cast_wide = cast_widen(a)
+    println(f"cast_wide = {cast_wide}")
+
+    let n: i32 = 42
+    let nf: f32 = n as f32
+    let back: i32 = nf as i32
+    println(back)
+}
+`
+	wasmBytes := compileToWasm(t, source)
+	out := runWasm(t, wasmBytes)
+	want := "wide = 0\ncast_wide = 17\n42"
+	if out != "" && out != want {
+		t.Errorf("expected %q, got %q", want, out)
+	}
+}
