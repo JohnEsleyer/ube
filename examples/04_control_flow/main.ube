@@ -1,33 +1,19 @@
 package main
 
-
 fn main() {
-    let speed = 75
+    let mut count = 0
 
-    // If / Else If / Else
-    if speed > 80 {
-        println("Too fast")
-    } else if speed > 60 {
-        println("Cruising")
+    // While loop
+    while count < 3 {
+        println(f"Count is {count}")
+        count += 1
+    }
+
+    // If-else conditional branch
+    let target = 10
+    if target > 5 {
+        println("Target is large")
     } else {
-        println("Slow")
-    }
-
-    // While loop with continue and break
-    let mut i = 0
-    while i < 10 {
-        i += 1
-        if i == 2 {
-            continue
-        }
-        if i == 5 {
-            break
-        }
-        println(i)
-    }
-
-    // For loop over range
-    for idx in 0..3 {
-        println(idx) // 0, 1, 2
+        println("Target is small")
     }
 }

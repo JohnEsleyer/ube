@@ -488,7 +488,7 @@ func formatLine(line string) string {
 		case tok.kind == tokOperator:
 			if isUnaryOperator(text, prev) {
 				switch prev {
-				case "", "(", "[", "{", ",", ":", "=", "return", "let", "if", "while", "match", "in", "else", "or_else", "=>":
+				case "", "(", "[", "{", ",", ":", "=", "return", "let", "if", "while", "match", "in", "else", "or_else", "=>", "move":
 					space = false
 				default:
 					space = !isOperator(prev)

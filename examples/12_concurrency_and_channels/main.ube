@@ -1,31 +1,22 @@
 package main
 
-
-fn worker(jobs: Chan[i32], done: Chan[bool]){
-    while let job = jobs.recv(){
-        print("Worker processed: ")
-        println(job)
+fn worker(inbox: Chan[i32], done: Chan[bool]) {
+    while let msg = inbox.recv() {
+        println(f"Worker received job ID: {msg}")
     }
     done.send(true)
 }
 
-fn main(){
-    let jobs = Chan[i32].new(5)
+fn main() {
+    let inbox = Chan[i32].new(4)
     let done = Chan[bool].new(1)
 
-    spawn worker(jobs, done)
+    spawn worker(inbox, done)
 
-    jobs.send(100)
-    jobs.send(200)
-    jobs.close()
+    inbox.send(100)
+    inbox.send(200)
+    inbox.close()
 
-    // Multiplexing channels with select using '=>'
-    select {
-         is_done = done => {
-            println("Worker completed all jobs.")
-        }
-        default => {
-            println("Worker still busy...")
-        }
-    }
+    let success = done.recv() or_else false
+    println(f"Worker finished status: {success}")
 }

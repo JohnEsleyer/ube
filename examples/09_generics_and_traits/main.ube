@@ -1,36 +1,22 @@
 package main
 
-// Generic struct
-struct Box[T] {
-    val: T
+trait Describable {
+    fn describe() -> string
 }
 
-fn (b Box[T]) unwrap() -> T {
-    return b.val
-}
-
-// Trait definition
-trait Speaker {
-    fn speak() -> string
-}
-
-struct Dog {
+struct Item {
     name: string
 }
 
-fn (d Dog) speak() -> string {
-    return "Woof!"
+fn (i Item) describe() -> string {
+    return f"Item: {i.name}"
 }
 
-// Dynamic dispatch via trait fat pointer
-fn announce(s: Speaker){
-    println(s.speak())
+fn print_description(d: Describable) {
+    println(d.describe())
 }
 
-fn main(){
-    let int_box = Box[i32]{val: 42}
-    println(int_box.unwrap()) // 42
-
-    let d = Dog{name: "Buddy"}
-    announce(d) // Woof!
+fn main() {
+    let item = Item{ name: "Health Potion" }
+    print_description(item)
 }

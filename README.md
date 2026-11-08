@@ -185,22 +185,22 @@ package main
 
 fn main() {
     let a = "Sweet Roots"
-    let b = a         // Ownership of string is moved to 'b'
+    let b = move a    // Ownership of string is moved to 'b'
     // println(a)     // COMPILE ERROR: use of moved value 'a'
     println(b)        // OK
 
     let mut message = "hello"
-    let old = message // 'message' is moved
-    message = "world" // Reassignment reactivates 'message'
-    println(message)  // OK
+    let old = move message // 'message' is moved
+    message = "world"      // Reassignment reactivates 'message'
+    println(message)       // OK
 }
 ```
 
 The complete rule set:
 
-1. **Move on assignment** — assigning a non-copy value transfers ownership.
+1. **Move on assignment** — assigning a non-copy variable transfers ownership with `move`.
 2. **Reactivation** — assigning a fresh value into a previously moved mutable variable makes it usable again.
-3. **Move on argument pass** — passing a non-copy value consumes it, unless the parameter is declared `mut` (a loan).
+3. **Move on argument pass** — passing a non-copy variable to a function parameter that takes ownership consumes it with `move`. Parameters declared `mut` are loans.
 4. **Loop boundary invariant** — a variable declared outside a loop cannot be moved inside the loop body, preventing use-after-move on subsequent iterations.
 5. **No projection consumption** — accessing a sub-field or index (`p.name`, `s[0]`) does not consume the root aggregate.
 
@@ -528,9 +528,9 @@ fn make_pair[A, B](a: A, b: B) -> Pair[A, B] {
 }
 
 fn main() {
-    let p = make_pair[i32, string](42, "Ube")
-    println(p.first)  // 42
-    println(p.second) // "Ube"
+    let p = make_pair[i32, f32](42, 3.14)
+    println(p.first)         // 42
+    println(p.second as i32) // 3
 }
 ```
 

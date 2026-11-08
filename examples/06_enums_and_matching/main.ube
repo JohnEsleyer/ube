@@ -1,34 +1,21 @@
 package main
 
-enum Status {
-    Idle,
-    Loading(i32),
-    Error(string)
+enum Command {
+    Jump(f32),
+    Say(string),
+    Quit
 }
 
-fn handle_status(s: Status){
-    match s {
-        Idle => {
-            println("Status: Idle")
-        }
-        Loading(progress) => {
-            print("Progress: ")
-            print(progress)
-            println("%")
-        }
-        Error(err_msg) => {
-            print("Failed with: ")
-            println(err_msg)
-        }
+fn process_command(cmd: Command) {
+    match cmd {
+        Jump(height) => println(f"Jumping to height {height}"),
+        Say(msg)     => println(f"Saying: {msg}"),
+        Quit         => println("Quitting program")
     }
 }
 
-fn main(){
-    let s1 = Status.Idle
-    let s2 = Status.Loading(75)
-    let s3 = Status.Error("Network timeout")
-
-    handle_status(s1)
-    handle_status(s2)
-    handle_status(s3)
+fn main() {
+    process_command(Command.Jump(5.5))
+    process_command(Command.Say("Ready!"))
+    process_command(Command.Quit)
 }

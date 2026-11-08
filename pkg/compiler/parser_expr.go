@@ -127,6 +127,11 @@ func (p *Parser) parseMultiplicative() Expr {
 
 func (p *Parser) parseUnary() Expr {
 	tok := p.peek(0)
+	if tok.Type == TokenMove {
+		loc := p.advance().Loc
+		operand := p.parseUnary()
+		return &MoveExpr{At: loc, Value: operand}
+	}
 	if tok.Type == TokenMut {
 		p.advance()
 		operand := p.parseUnary()
@@ -159,7 +164,7 @@ func (p *Parser) parsePostfix() Expr {
 		} else if p.check(TokenDot) {
 			loc := p.advance().Loc
 			var member string
-			if p.check(TokenSpawn) {
+			if p.check(TokenSpawn) || p.check(TokenMove) {
 				member = p.advance().Val
 			} else {
 				member = p.expect(TokenIdent, "Expected member name").Val

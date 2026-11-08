@@ -226,6 +226,30 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		e.Type = thenT
 		return thenT, nil
 
+	case *MoveExpr:
+		valT, err := tc.inferExpr(e.Value, env)
+		if err != nil {
+			return nil, err
+		}
+		valT = tc.resolveType(valT)
+		if tc.isCopyType(valT) {
+			return nil, fmt.Errorf("[%s] cannot move value of copy type '%s'", e.At, valT)
+		}
+		root := variableRoot(e.Value)
+		if root == "" {
+			return nil, fmt.Errorf("[%s] 'move' requires a variable to move from", e.At)
+		}
+		if vInfo, found := env.LookupVar(root); found {
+			if vInfo.Moved {
+				return nil, movedValueError(e.At, root)
+			}
+		}
+		if err := tc.markMovedIfAffine(e.Value, env); err != nil {
+			return nil, err
+		}
+		e.Type = valT
+		return valT, nil
+
 	case *PromoteExpr:
 		t, err := tc.inferExpr(e.Value, env)
 		if err != nil {
@@ -300,6 +324,12 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			t, err := tc.inferExpr(elem, env)
 			if err != nil {
 				return nil, err
+			}
+			if _, isMove := elem.(*MoveExpr); !isMove {
+				root := variableRoot(elem)
+				if root != "" && !tc.isCopyType(t) {
+					return nil, fmt.Errorf("[%s] cannot move non-copy variable '%s' into tuple element without explicit 'move'; use 'move %s'", elem.Loc(), root, root)
+				}
 			}
 			elems[i] = t
 		}
@@ -924,6 +954,12 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					if err := tc.assertCompat(ch.Elem, argT, e.At); err != nil {
 						return nil, err
 					}
+					if _, isMove := e.Args[0].(*MoveExpr); !isMove {
+						root := variableRoot(e.Args[0])
+						if root != "" && !tc.isCopyType(argT) {
+							return nil, fmt.Errorf("[%s] cannot move non-copy variable '%s' into channel send without explicit 'move'; use 'move %s'", e.Args[0].Loc(), root, root)
+						}
+					}
 					if err := tc.markMovedIfAffine(e.Args[0], env); err != nil {
 						return nil, err
 					}
@@ -958,6 +994,12 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					if err := tc.assertCompat(p.Elem, valueType, e.At); err != nil {
 						return nil, err
 					}
+					if _, isMove := e.Args[0].(*MoveExpr); !isMove {
+						root := variableRoot(e.Args[0])
+						if root != "" && !tc.isCopyType(valueType) {
+							return nil, fmt.Errorf("[%s] cannot move non-copy variable '%s' into pool spawn without explicit 'move'; use 'move %s'", e.Args[0].Loc(), root, root)
+						}
+					}
 					if err := tc.markMovedIfAffine(e.Args[0], env); err != nil {
 						return nil, err
 					}
@@ -987,7 +1029,11 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					if err := tc.assertCompat(CustomType{Name: "UbeHandle"}, handleType, e.At); err != nil {
 						return nil, err
 					}
-					if id, ok := e.Args[0].(*IdentExpr); ok {
+					despawnArg := e.Args[0]
+					if me, isM := despawnArg.(*MoveExpr); isM {
+						despawnArg = me.Value
+					}
+					if id, ok := despawnArg.(*IdentExpr); ok {
 						if err := tc.markMovedIfAffine(id, env); err != nil {
 							return nil, err
 						}
@@ -1043,6 +1089,20 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					return nil, err
 				}
 				return sig.RetType, nil
+			}
+			// Check if it's an unaliased function belonging to an imported package
+			for _, pkgName := range tc.ModuleAliases {
+				modKey := pkgName + "." + id.Name
+				if sig, ok := tc.Global.Funcs[modKey]; ok {
+					if sig.Package != "" && env.CurModule != "" && sig.Package != env.CurModule && !sig.IsPub {
+						return nil, fmt.Errorf("[%s] cannot access unexported function '%s' from package '%s'", e.At, id.Name, sig.Package)
+					}
+					id.Name = modKey
+					if err := tc.checkCallArgs(e.Args, sig.Params, sig.Escaping, env, e.At); err != nil {
+						return nil, err
+					}
+					return sig.RetType, nil
+				}
 			}
 			return nil, fmt.Errorf("[%s] Undefined function '%s'", e.At, id.Name)
 		}
@@ -1202,6 +1262,12 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			if err != nil {
 				return nil, err
 			}
+			if _, isMove := el.(*MoveExpr); !isMove {
+				root := variableRoot(el)
+				if root != "" && !tc.isCopyType(t) {
+					return nil, fmt.Errorf("[%s] cannot move non-copy variable '%s' into slice element without explicit 'move'; use 'move %s'", el.Loc(), root, root)
+				}
+			}
 			t = tc.resolveType(t)
 			if tr, isTrait := e.Elem.(TraitType); isTrait {
 				if c, isCustom := t.(CustomType); isCustom && tc.structImplementsTrait(c.Name, tr.Name) {
@@ -1224,6 +1290,12 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			t, err := tc.inferExpr(el, env)
 			if err != nil {
 				return nil, err
+			}
+			if _, isMove := el.(*MoveExpr); !isMove {
+				root := variableRoot(el)
+				if root != "" && !tc.isCopyType(t) {
+					return nil, fmt.Errorf("[%s] cannot move non-copy variable '%s' into array element without explicit 'move'; use 'move %s'", el.Loc(), root, root)
+				}
 			}
 			if err := tc.assertCompat(e.Elem, t, el.Loc()); err != nil {
 				return nil, err
@@ -1274,6 +1346,12 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			valT, err := tc.inferExpr(init.Val, env)
 			if err != nil {
 				return nil, err
+			}
+			if _, isMove := init.Val.(*MoveExpr); !isMove {
+				root := variableRoot(init.Val)
+				if root != "" && !tc.isCopyType(valT) {
+					return nil, fmt.Errorf("[%s] cannot move non-copy variable '%s' into struct field '%s' without explicit 'move'; use 'move %s'", init.Val.Loc(), root, init.Name, root)
+				}
 			}
 			if expSlice, isSlice := expectedType.(SliceType); isSlice {
 				if actArr, isArr := valT.(ArrayType); isArr && tc.assertCompat(expSlice.Elem, actArr.Elem, init.Val.Loc()) == nil {

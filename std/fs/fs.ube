@@ -96,11 +96,11 @@ pub fn (p Path) extension() -> string? {
 }
 
 pub fn (p Path) join(child: string) -> Path {
-    return Path{ raw: path_join(p.raw, child) }
+    return Path{ raw: path_join(p.raw, move child) }
 }
 
 pub fn (p Path) with_extension(ext: string) -> Path {
-    return Path{ raw: path_with_extension(p.raw, ext) }
+    return Path{ raw: path_with_extension(p.raw, move ext) }
 }
 
 pub fn path_is_absolute(p: string) -> bool {
@@ -118,9 +118,9 @@ pub fn path_is_absolute(p: string) -> bool {
 }
 
 pub fn path_join(base: string, child: string) -> string {
-    let b = Path{ raw: base }
-    let c = Path{ raw: child }
-    return path_join_paths(b, c)
+    let b = Path{ raw: move base }
+    let c = Path{ raw: move child }
+    return path_join_paths(move b, move c)
 }
 
 fn path_join_paths(b: Path, c: Path) -> string {
@@ -192,7 +192,7 @@ pub fn path_file_name(p: string) -> string? {
 }
 
 pub fn path_extension(p: string) -> string? {
-    let pp = Path{ raw: p }
+    let pp = Path{ raw: move p }
     let name = path_file_name(pp.raw) or_else ""
     if name.len == 0 {
         return none
@@ -212,7 +212,7 @@ pub fn path_extension(p: string) -> string? {
 }
 
 pub fn path_file_stem(p: string) -> string? {
-    let pp = Path{ raw: p }
+    let pp = Path{ raw: move p }
     let name = path_file_name(pp.raw) or_else ""
     if name.len == 0 {
         return none
@@ -232,7 +232,7 @@ pub fn path_file_stem(p: string) -> string? {
 }
 
 pub fn path_with_extension(p: string, new_ext: string) -> string {
-    let pp = Path{ raw: p }
+    let pp = Path{ raw: move p }
     let stem = path_file_stem(pp.raw) or_else pp.raw
     let parent = path_parent(pp.raw) or_else ""
 
@@ -240,7 +240,7 @@ pub fn path_with_extension(p: string, new_ext: string) -> string {
     if new_ext.len > 0 && new_ext[0] != 46 {
         dot_ext = f".{new_ext}"
     } else if new_ext.len > 0 {
-        dot_ext = new_ext
+        dot_ext = move new_ext
     }
 
     if parent.len > 0 {
@@ -255,7 +255,7 @@ pub fn path_clean(p: string) -> string {
         return "."
     }
 
-    let pp = Path{ raw: p }
+    let pp = Path{ raw: move p }
     let mut segments = []string{}
     let mut start = 0
     let mut i = 0
@@ -301,7 +301,7 @@ pub fn path_clean(p: string) -> string {
         if !first || path_is_absolute(pp.raw) {
             result = f"{result}/{seg}"
         } else {
-            result = seg
+            result = copy_str(seg)
         }
         first = false
     }
@@ -474,7 +474,7 @@ pub fn (f File) write_line(s: string) -> i32 ! string {
     let r1 = f.write_string(s)?
     let mut nl = []u8{}
     nl.push(10)
-    let r2 = f.write(nl)?
+    let r2 = f.write(move nl)?
     return r1 + r2
 }
 
@@ -551,7 +551,7 @@ pub fn (m Metadata) is_empty() -> bool {
 }
 
 pub fn metadata(path: string) -> Metadata ! string {
-    let p = Path{ raw: path }
+    let p = Path{ raw: move path }
     let mut stat_buf = [16]i32{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
     let errno = wasi.path_filestat_raw(p.raw, mut stat_buf)
     if errno != 0 {
@@ -616,7 +616,7 @@ pub fn (d DirEntry) full_path() -> string {
 }
 
 pub fn create_dir(dir_path: string) -> bool ! string {
-    let p = Path{ raw: dir_path }
+    let p = Path{ raw: move dir_path }
     let errno = wasi.path_create_dir_raw(p.raw)
     if errno != 0 {
         return error(wasi_error_to_string(errno, p.raw))
@@ -625,7 +625,7 @@ pub fn create_dir(dir_path: string) -> bool ! string {
 }
 
 pub fn create_dir_all(dir_path: string) -> bool ! string {
-    let p = Path{ raw: dir_path }
+    let p = Path{ raw: move dir_path }
     if exists(p.raw) {
         if is_dir(p.raw) {
             return true
@@ -634,7 +634,7 @@ pub fn create_dir_all(dir_path: string) -> bool ! string {
     }
 
     if let parent = path_parent(p.raw) {
-        let pp = Path{ raw: parent }
+        let pp = Path{ raw: move parent }
         if pp.raw != "" && pp.raw != "." && pp.raw != "/" && !exists(pp.raw) {
             create_dir_all(pp.raw)?
         }
@@ -643,7 +643,7 @@ pub fn create_dir_all(dir_path: string) -> bool ! string {
 }
 
 pub fn remove_file(path: string) -> bool ! string {
-    let p = Path{ raw: path }
+    let p = Path{ raw: move path }
     let errno = wasi.path_unlink_raw(p.raw)
     if errno != 0 {
         return error(wasi_error_to_string(errno, p.raw))
@@ -652,7 +652,7 @@ pub fn remove_file(path: string) -> bool ! string {
 }
 
 pub fn remove_dir(dir_path: string) -> bool ! string {
-    let p = Path{ raw: dir_path }
+    let p = Path{ raw: move dir_path }
     let errno = wasi.path_remove_dir_raw(p.raw)
     if errno != 0 {
         return error(wasi_error_to_string(errno, p.raw))
@@ -722,6 +722,6 @@ pub fn append_string(path: string, content: string) -> bool ! string {
 pub fn copy_file(src: string, dst: string) -> i32 ! string {
     let data = read_bytes(src)?
     let n = data.len
-    write_bytes(dst, data)?
+    write_bytes(dst, move data)?
     return n
 }

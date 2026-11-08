@@ -1,3 +1,4 @@
+// File: pkg/compiler/typechecker_safety.go
 package compiler
 
 import (
@@ -17,10 +18,30 @@ func assignmentRoot(expr Expr) string {
 		if e.Op == "mut" {
 			return assignmentRoot(e.Operand)
 		}
+	case *MoveExpr:
+		return assignmentRoot(e.Value)
 	case *TraitCoerceExpr:
 		return assignmentRoot(e.Value)
 	case *ArrayToSliceExpr:
 		return assignmentRoot(e.Value)
+	}
+	return ""
+}
+
+func variableRoot(expr Expr) string {
+	switch e := expr.(type) {
+	case *IdentExpr:
+		return e.Name
+	case *UnaryExpr:
+		if e.Op == "mut" {
+			return variableRoot(e.Operand)
+		}
+	case *MoveExpr:
+		return variableRoot(e.Value)
+	case *ArrayToSliceExpr:
+		return variableRoot(e.Value)
+	case *TraitCoerceExpr:
+		return variableRoot(e.Value)
 	}
 	return ""
 }
@@ -88,6 +109,8 @@ func (tc *Typechecker) exprDepth(expr Expr, env *TypeEnvironment) int {
 		return env.ScopeDepth
 	case *InterpolatedStringExpr:
 		return env.ScopeDepth
+	case *MoveExpr:
+		return tc.exprDepth(e.Value, env)
 	case *PromoteExpr:
 		d := tc.exprDepth(e.Value, env)
 		if d > 0 {
@@ -171,6 +194,8 @@ func exprRefRootAt(expr Expr, name string) bool {
 	switch e := expr.(type) {
 	case *IdentExpr:
 		return e.Name == name
+	case *MoveExpr:
+		return exprRefRootAt(e.Value, name)
 	case *SliceSubExpr:
 		return exprRefRootAt(e.Target, name)
 	case *UnaryExpr:
@@ -248,6 +273,8 @@ func (t *escapeTracker) isAliasExpr(expr Expr) bool {
 		if e.Op == "&" || e.Op == "mut" {
 			return t.isAliasExpr(e.Operand)
 		}
+	case *MoveExpr:
+		return t.isAliasExpr(e.Value)
 	case *PromoteExpr:
 		return t.isAliasExpr(e.Value)
 	case *TraitCoerceExpr:
@@ -372,6 +399,8 @@ func (t *escapeTracker) exprEscapes(expr Expr) bool {
 		return t.isAliasExpr(e.Arg) || t.exprEscapes(e.Arg)
 	case *RangeExpr:
 		return t.exprEscapes(e.Start) || t.exprEscapes(e.End)
+	case *MoveExpr:
+		return t.isAliasExpr(e.Value) || t.exprEscapes(e.Value)
 	case *PromoteExpr:
 		return t.exprEscapes(e.Value)
 	case *ArenaExpr:
@@ -456,6 +485,8 @@ func (t *escapeTracker) exprLocalEscapes(expr Expr) bool {
 		return t.exprLocalEscapes(e.Arg)
 	case *RangeExpr:
 		return t.exprLocalEscapes(e.Start) || t.exprLocalEscapes(e.End)
+	case *MoveExpr:
+		return t.exprLocalEscapes(e.Value)
 	case *PromoteExpr:
 		return t.exprLocalEscapes(e.Value)
 	case *ArenaExpr:

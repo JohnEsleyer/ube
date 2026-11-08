@@ -1,24 +1,17 @@
 package main
 
-
-fn main(){
-    let mut preserved = []i32{}
+fn main() {
+    let mut persistent = []i32{}
 
     arena {
         let mut scratch = []i32{}
-        scratch.push(10)
-        scratch.push(20)
+        scratch.push(42)
+        scratch.push(100)
 
-        // Copies data into parent arena before child wipes
-        preserved = promote(scratch)
-    } // Entire child arena is freed instantly in 1 instruction
+        // Deep-copy rescue from inner scratch region to outer arena region
+        persistent = promote(scratch)
+    } // Scratch memory arena wiped entirely in 1 instruction
 
-    println(preserved.len) // 2
-
-    // Arena expression form
-    let message = arena {
-        let mut s = "Hello"
-        promote(s)
-    }
-    println(message)
+    println(persistent.len) // 2
+    println(persistent[0])  // 42
 }

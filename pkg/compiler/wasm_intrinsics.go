@@ -809,7 +809,8 @@ func (ctx *fnContext) exprLeavesValue(expr Expr) bool {
 	case *TryExpr, *OrElseExpr, *ErrorExpr, *InterpolatedStringExpr,
 		*StructInitExpr, *SliceInitExpr, *ArrayInitExpr, *TupleExpr,
 		*BinaryExpr, *UnaryExpr, *MemberExpr, *IndexExpr, *SliceSubExpr,
-		*RangeExpr, *TraitCoerceExpr, *ArrayToSliceExpr, *PromoteExpr, *ArenaExpr, *CastExpr:
+		*RangeExpr, *TraitCoerceExpr, *ArrayToSliceExpr, *PromoteExpr,
+		*MoveExpr, *ArenaExpr, *CastExpr:
 		return true
 	case *LiteralExpr:
 		return e.Type == nil || e.Type.String() != "void"
@@ -847,7 +848,9 @@ func (ctx *fnContext) compileWrappedSuccess(buf *bytes.Buffer, value Expr) error
 	emitLocalSet(buf, valLocal)
 
 	resLocal := ctx.allocLocal(valTypeI32)
-	ctx.emitAlloc(buf, 8, resLocal)
+	// Result/Optional payloads are 64-bit capable: offset 0 holds the tag and
+	// offset 4 holds the value. Allocate enough room for an f64/i64 payload.
+	ctx.emitAlloc(buf, 16, resLocal)
 	emitLocalGet(buf, resLocal)
 	emitI32Const(buf, 1)
 	emitI32Store(buf, 0, 2)
@@ -856,17 +859,39 @@ func (ctx *fnContext) compileWrappedSuccess(buf *bytes.Buffer, value Expr) error
 	emitLocalGet(buf, valLocal)
 	switch valLocalType {
 	case valTypeF32:
-		buf.WriteByte(0xbc) // i32.reinterpret_f32
+		buf.WriteByte(0x38) // f32.store
+		writeUleb128(buf, 2)
+		writeUleb128(buf, 4)
 	case valTypeF64:
-		buf.WriteByte(0xbd) // i64.reinterpret_f64
-		buf.WriteByte(0xa7) // i32.wrap_i64
+		buf.WriteByte(0x39) // f64.store
+		writeUleb128(buf, 3)
+		writeUleb128(buf, 4)
 	case valTypeI64:
-		buf.WriteByte(0xa7) // i32.wrap_i64
+		buf.WriteByte(0x37) // i64.store
+		writeUleb128(buf, 3)
+		writeUleb128(buf, 4)
+	default:
+		emitI32Store(buf, 4, 2)
 	}
-	emitI32Store(buf, 4, 2)
 
 	emitLocalGet(buf, resLocal)
 	return nil
+}
+
+// wasmTypeForUbe maps a Ube value type to the Wasm local type used to hold it.
+func wasmTypeForUbe(t UbeType) byte {
+	if t == nil {
+		return valTypeI32
+	}
+	switch t.String() {
+	case "f32":
+		return valTypeF32
+	case "f64":
+		return valTypeF64
+	case "i64", "u64":
+		return valTypeI64
+	}
+	return valTypeI32
 }
 
 // exprStaticType recovers the type of common expressions for codegen paths

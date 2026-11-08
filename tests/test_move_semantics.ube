@@ -1,0 +1,79 @@
+// File: tests/test_move_semantics.ube 
+
+package main
+
+struct Packet {
+    payload: string,
+    code:    i32
+}
+
+fn consume_packet(p: Packet) -> string {
+    return p.payload
+}
+
+fn test_move_string_assignment() {
+    let a = "hello ube"
+    let b = move a
+    if b != "hello ube" {
+        println("FAILED: test_move_string_assignment")
+        return
+    }
+    println("PASS: test_move_string_assignment")
+}
+
+fn test_move_reassignment_reactivation() {
+    let mut s = "first"
+    let old = move s
+    s = "second"
+    if old != "first" || s != "second" {
+        println("FAILED: test_move_reassignment_reactivation")
+        return
+    }
+    println("PASS: test_move_reassignment_reactivation")
+}
+
+fn test_move_slice_assignment() {
+    let mut s1 = []i32{}
+    s1.push(10)
+    s1.push(20)
+    let s2 = move s1
+    if s2.len != 2 || s2[0] != 10 || s2[1] != 20 {
+        println("FAILED: test_move_slice_assignment")
+        return
+    }
+    println("PASS: test_move_slice_assignment")
+}
+
+fn test_move_struct_field() {
+    let title = "header_data"
+    let p = Packet{
+        payload: move title,
+        code:    200
+    }
+    if p.code != 200 || p.payload != "header_data" {
+        println("FAILED: test_move_struct_field")
+        return
+    }
+    println("PASS: test_move_struct_field")
+}
+
+fn test_move_consuming_call() {
+    let pkt = Packet{
+        payload: "payload_bytes",
+        code:    204
+    }
+    let res = consume_packet(move pkt)
+    if res != "payload_bytes" {
+        println("FAILED: test_move_consuming_call")
+        return
+    }
+    println("PASS: test_move_consuming_call")
+}
+
+fn main() {
+    test_move_string_assignment()
+    test_move_reassignment_reactivation()
+    test_move_slice_assignment()
+    test_move_struct_field()
+    test_move_consuming_call()
+}

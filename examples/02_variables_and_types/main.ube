@@ -1,41 +1,19 @@
 package main
 
-
-fn main(){
-    // Primitive Copy Types (i32, f32, bool)
-    // Primitives implement copy semantics and can be copied/read repeatedly.
-
-    let release_year: i32 = 2025
+fn main() {
+    // Immutable bindings by default
+    let year: i32 = 2026
     let pi: f32 = 3.14159
-    let is_fast: bool = true
+    let active: bool = true
 
-    println(release_year)
-    println(pi)
-    println(is_fast)
+    // Type inference
+    let name = "Ube Language"
 
-    // Mutable Primitives
-    let mut counter = 10
-    counter += 5
-    counter *= 2
-    println(counter) // 30
+    // Mutable variable binding
+    let mut score = 100
+    score += 50
+    score *= 2
 
-    // Affine Types (string)
-    // In Ube, string literals and strings are arena-backed and owned.
-    let language: string = "Ube"
-    println(language)
-
-    // Move Semantics Demonstration
-    let a = "Grounded Systems"
-    let b = a  // 'a' is moved to 'b'; 'a' is now statically dead
-
-    println(b) // OK
-    // println(a) // Compile error if uncommented: use of moved variable 'a'
-
-    // Re-assigning to a mutable variable reactivates it:
-    let mut status = "init"
-    let prev = status // 'status' is moved
-    status = "running" // 'status is reactivated by reassignment
-
-    println(status)
-
+    println(f"Year: {year}, Active: {active}")
+    println(f"Score: {score}")
 }

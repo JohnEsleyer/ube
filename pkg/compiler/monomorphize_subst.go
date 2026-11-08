@@ -296,6 +296,12 @@ func substituteExpr(expr Expr, subMap map[string]UbeType) Expr {
 		return &TryExpr{At: e.At, Operand: substituteExpr(e.Operand, subMap)}
 	case *ErrorExpr:
 		return &ErrorExpr{At: e.At, Arg: substituteExpr(e.Arg, subMap)}
+	case *MoveExpr:
+		return &MoveExpr{
+			At:    e.At,
+			Value: substituteExpr(e.Value, subMap),
+			Type:  substituteType(e.Type, subMap),
+		}
 	case *PromoteExpr:
 		return &PromoteExpr{
 			At:    e.At,

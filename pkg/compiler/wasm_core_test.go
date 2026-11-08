@@ -508,6 +508,37 @@ fn main() {
 	}
 }
 
+func TestWasmCore_MoveSemanticsExecution(t *testing.T) {
+	source := `
+package main
+
+fn take(s: string) -> string {
+    return s
+}
+
+fn main() {
+    let a = "Sweet Roots"
+    let b = move a
+    println(b)
+
+    let mut msg = "first"
+    let old = move msg
+    msg = "second"
+    println(old)
+    println(msg)
+
+    let c = take(move b)
+    println(c)
+}
+`
+	wasmBytes := compileToWasm(t, source)
+	out := runWasm(t, wasmBytes)
+	want := "Sweet Roots\nfirst\nsecond\nSweet Roots"
+	if out != "" && out != want {
+		t.Errorf("expected %q, got %q", want, out)
+	}
+}
+
 // TestWasmCore_LoopScopedDefers verifies that loop-body defers run once per
 // iteration on normal fall-through, continue, and break, without leaking past
 // the loop or double-emitting on the terminating branch.

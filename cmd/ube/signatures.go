@@ -31,7 +31,7 @@ func analyzeFnFlow(fn *compiler.FnDecl) (calls []string, flow []string) {
 	sort.Strings(calls)
 
 	orderedFlowTags := []string{
-		"spawn", "select", "arena", "promote", "match",
+		"spawn", "select", "arena", "promote", "match", "move",
 		"if-let", "while-let", "for-in", "while", "try?", "or_else", "defer",
 	}
 	for _, tag := range orderedFlowTags {
@@ -161,6 +161,9 @@ func (v *flowVisitor) walkExpr(ex compiler.Expr) {
 		v.walkExpr(e.Fallback)
 	case *compiler.ErrorExpr:
 		v.walkExpr(e.Arg)
+	case *compiler.MoveExpr:
+		v.flow["move"] = true
+		v.walkExpr(e.Value)
 	case *compiler.PromoteExpr:
 		v.flow["promote"] = true
 		v.walkExpr(e.Value)

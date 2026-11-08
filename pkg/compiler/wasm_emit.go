@@ -790,7 +790,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				if err := emitCompoundOp(buf, s.Op, opType); err != nil {
 					return err
 				}
-			} else if isAddressMember(fieldType) {
+			} else if ctx.isInlineAggregate(fieldType) {
 				// mem.copy(base+offset, src_ptr, sizeofInline).
 				// base was already pushed by the outer compileExpr(mem.Target);
 				// move it into a local so offset can be added before RHS runs.
@@ -1577,6 +1577,8 @@ func emitCompoundOp(buf *bytes.Buffer, op string, operandType string) error {
 
 func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 	switch e := expr.(type) {
+	case *MoveExpr:
+		return ctx.compileExpr(buf, e.Value)
 	case *CastExpr:
 		if err := ctx.compileExpr(buf, e.Expr); err != nil {
 			return err
@@ -2083,7 +2085,7 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			return fmt.Errorf("unknown field %s on struct %s", fieldKey, structName)
 		}
 		fieldType := meta.fieldTypes[fieldKey]
-		if isAddressMember(fieldType) {
+		if ctx.isInlineAggregate(fieldType) {
 			// Compound-valued field (nested struct or fixed array): return a
 			// pointer into the owner's inline storage, not a scalar load.
 			if err := ctx.compileExpr(buf, e.Target); err != nil {
@@ -2343,7 +2345,7 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		for _, f := range e.Fields {
 			offset := meta.fieldOffsets[f.Name]
 			fieldType := meta.fieldTypes[f.Name]
-			if isAddressMember(fieldType) {
+			if ctx.isInlineAggregate(fieldType) {
 				// mem.copy(structBase+offset, src_ptr, sizeofInline).
 				// Stack order: [dst, src, len] then memory.copy.
 				buf.WriteByte(0x20)
@@ -2438,6 +2440,8 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		writeUleb128(buf, fatLocal)
 
 	case *TryExpr:
+		okType := unwrapBindingType(ctx.exprStaticType(e.Operand))
+		resWasm := wasmTypeForUbe(okType)
 		resLocal := ctx.allocLocal(valTypeI32)
 		if err := ctx.compileExpr(buf, e.Operand); err != nil {
 			return err
@@ -2463,9 +2467,24 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 
 		buf.WriteByte(0x20)
 		writeUleb128(buf, resLocal)
-		buf.WriteByte(0x28)
-		writeUleb128(buf, 2)
-		writeUleb128(buf, 4)
+		switch resWasm {
+		case valTypeF32:
+			buf.WriteByte(0x2a) // f32.load
+			writeUleb128(buf, 2)
+			writeUleb128(buf, 4)
+		case valTypeF64:
+			buf.WriteByte(0x2b) // f64.load
+			writeUleb128(buf, 3)
+			writeUleb128(buf, 4)
+		case valTypeI64:
+			buf.WriteByte(0x29) // i64.load
+			writeUleb128(buf, 3)
+			writeUleb128(buf, 4)
+		default:
+			buf.WriteByte(0x28) // i32.load
+			writeUleb128(buf, 2)
+			writeUleb128(buf, 4)
+		}
 
 	case *OrElseExpr:
 		resWasm := byte(valTypeI32)
@@ -2497,17 +2516,23 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 
 		buf.WriteByte(0x20)
 		writeUleb128(buf, optLocal)
-		buf.WriteByte(0x28)
-		writeUleb128(buf, 2)
-		writeUleb128(buf, 4)
 		switch resWasm {
 		case valTypeF32:
-			buf.WriteByte(0xbe)
+			buf.WriteByte(0x2a) // f32.load
+			writeUleb128(buf, 2)
+			writeUleb128(buf, 4)
 		case valTypeF64:
-			buf.WriteByte(0xad)
-			buf.WriteByte(0xbf)
+			buf.WriteByte(0x2b) // f64.load
+			writeUleb128(buf, 3)
+			writeUleb128(buf, 4)
 		case valTypeI64:
-			buf.WriteByte(0xad)
+			buf.WriteByte(0x29) // i64.load
+			writeUleb128(buf, 3)
+			writeUleb128(buf, 4)
+		default:
+			buf.WriteByte(0x28) // i32.load
+			writeUleb128(buf, 2)
+			writeUleb128(buf, 4)
 		}
 		buf.WriteByte(0x21)
 		writeUleb128(buf, resLocal)
@@ -3606,9 +3631,15 @@ func (ctx *fnContext) compilePrint(buf *bytes.Buffer, args []Expr, newline bool)
 // field offset. Reading such a field must return a pointer into the owner's
 // storage, and writing one must copy the value into that storage; a scalar
 // load/store would touch only the first word and corrupt memory.
-func isAddressMember(t UbeType) bool {
-	switch t.(type) {
-	case CustomType, ArrayType:
+// isInlineAggregate reports whether a struct field stores the aggregate's
+// bytes inline. Named structs are inline; enums are represented as a pointer
+// to a {tag, payload} header and must be stored as a plain i32 pointer.
+func (ctx *fnContext) isInlineAggregate(t UbeType) bool {
+	switch tt := t.(type) {
+	case CustomType:
+		_, isStruct := ctx.emitter.structs[tt.Name]
+		return isStruct
+	case ArrayType:
 		return true
 	}
 	return false
@@ -3798,6 +3829,11 @@ func (ctx *fnContext) inferExprType(expr Expr) string {
 		return ""
 	}
 	switch e := expr.(type) {
+	case *MoveExpr:
+		if e.Type != nil {
+			return e.Type.String()
+		}
+		return ctx.inferExprType(e.Value)
 	case *CastExpr:
 		if e.TargetType != nil {
 			return e.TargetType.String()

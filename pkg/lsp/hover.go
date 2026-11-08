@@ -70,6 +70,7 @@ func Hover(uri, source string, p lspPosition) any {
 		"str_starts_with": "`fn str_starts_with(s: string, prefix: string) -> bool`\n*Checks if string starts with prefix.*",
 		"str_ends_with":   "`fn str_ends_with(s: string, suffix: string) -> bool`\n*Checks if string ends with suffix.*",
 		"arena":           "`arena { ... }`\n*Lexical memory arena block. Reclaimed on block exit in one instruction.*",
+		"move":            "`move <var>`\n*Explicitly transfers ownership of a non-copy value, invalidating the source variable.*",
 		"spawn":           "`spawn fn(args...)`\n*Schedules a concurrent Vine fiber onto the worker thread pool.*",
 		"package":         "`package <name>`\n*Declares the package this file belongs to. Every .ube file in a directory must declare the same package.*",
 		"pub":             "`pub`\n*Exports a declaration outside of its package.*",

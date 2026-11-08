@@ -529,6 +529,15 @@ type PromoteExpr struct {
 func (e *PromoteExpr) Loc() SourceLocation { return e.At }
 func (e *PromoteExpr) exprNode()           {}
 
+type MoveExpr struct {
+	At    SourceLocation
+	Value Expr
+	Type  UbeType
+}
+
+func (e *MoveExpr) Loc() SourceLocation { return e.At }
+func (e *MoveExpr) exprNode()           {}
+
 type ArenaExpr struct {
 	At   SourceLocation
 	Body *BlockStmt

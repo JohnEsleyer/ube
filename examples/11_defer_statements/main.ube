@@ -1,20 +1,15 @@
 package main
 
-
-fn work(){
-    println("1. Enter function")
-    defer println("4. Exit function cleanup")
-
-    let mut i = 0
-    while i < 2 {
-        defer println("Loop iteration cleanup")
-        i += 1
-    }
-
-    println("2. Work in progress")
-
+fn cleanup_task() {
+    println("Executing deferred cleanup...")
 }
 
-fn main(){
-    work()
+fn run_workflow() {
+    defer cleanup_task()
+    println("Working inside workflow block...")
+}
+
+fn main() {
+    run_workflow()
+    println("Workflow completed.")
 }

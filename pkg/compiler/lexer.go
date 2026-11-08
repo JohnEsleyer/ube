@@ -26,6 +26,7 @@ var keywords = map[string]TokenType{
 	"continue": TokenContinue,
 	"arena":    TokenArena,
 	"promote":  TokenPromote,
+	"move":     TokenMove,
 	"spawn":    TokenSpawn,
 	"select":   TokenSelect,
 	"extern":   TokenExtern,

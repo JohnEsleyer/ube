@@ -54,6 +54,9 @@ ube_guide.md
 # playground
 /_playground
 
+# wasm sandbox
+/_wasm_sandbox
+
 
 # Compiled C / C++ / Go / Rust binaries
 *.exe

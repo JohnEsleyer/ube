@@ -1,0 +1,256 @@
+package collections
+
+// File: std/collections/collections_ext.ube
+//
+// Additional slice-backed collections. Like the core collections these are
+// arena-friendly and avoid raw pointers. Generic collections cannot compare
+// arbitrary `T` for removal, so `Set[T]` is append-only; `len()` reports the
+// number of distinct values.
+
+// ---------------------------------------------------------------------------
+// Queue: FIFO with an index cursor. Popped storage is retained so the queue
+// can grow without moving elements.
+// ---------------------------------------------------------------------------
+
+pub struct Queue[T] {
+    pub items: []T,
+    pub head: i32
+}
+
+pub fn queue_new[T]() -> Queue[T] {
+    return Queue[T] {
+        items: []T{},
+        head: 0
+    }
+}
+
+pub fn (mut q Queue[T]) push(item: T) {
+    q.items.push(item)
+}
+
+pub fn (mut q Queue[T]) pop() -> T? {
+    if q.head >= q.items.len {
+        return none
+    }
+    let item = q.items[q.head]
+    q.head += 1
+    return item
+}
+
+pub fn (q Queue[T]) peek() -> T? {
+    if q.head >= q.items.len {
+        return none
+    }
+    return q.items[q.head]
+}
+
+pub fn (q Queue[T]) len() -> i32 {
+    return q.items.len - q.head
+}
+
+pub fn (q Queue[T]) is_empty() -> bool {
+    return q.head >= q.items.len
+}
+
+// Iterator protocol: `for item in queue { ... }` dequeues until empty.
+pub fn (mut q Queue[T]) next() -> T? {
+    return q.pop()
+}
+
+// ---------------------------------------------------------------------------
+// Set: append-only set view. `add` always appends; lookups scan and `len`
+// counts distinct values. This keeps generic affine values single-use.
+// ---------------------------------------------------------------------------
+
+pub struct Set[T] {
+    pub items: []T
+}
+
+pub fn set_new[T]() -> Set[T] {
+    return Set[T] {
+        items: []T{}
+    }
+}
+
+pub fn (mut s Set[T]) add(item: T) {
+    s.items.push(item)
+}
+
+pub fn (s Set[T]) has(key: T) -> bool {
+    let mut i = 0
+    while i < s.items.len {
+        if s.items[i] == key {
+            return true
+        }
+        i += 1
+    }
+    return false
+}
+
+pub fn (s Set[T]) len() -> i32 {
+    let mut count = 0
+    let mut i = 0
+    while i < s.items.len {
+        let mut seen = false
+        let mut j = 0
+        let current = s.items[i]
+        while j < i {
+            let previous = s.items[j]
+            if previous == current {
+                seen = true
+                break
+            }
+            j += 1
+        }
+        if !seen {
+            count += 1
+        }
+        i += 1
+    }
+    return count
+}
+
+pub fn (s Set[T]) is_empty() -> bool {
+    return s.items.len == 0
+}
+
+// ---------------------------------------------------------------------------
+// IntHeap: concrete binary min-heap. Generic heaps would need a comparator
+// abstraction that the current compiler cannot express safely.
+// ---------------------------------------------------------------------------
+
+pub struct IntHeap {
+    pub items: []i32
+}
+
+pub fn heap_new() -> IntHeap {
+    return IntHeap {
+        items: []i32{}
+    }
+}
+
+pub fn (h IntHeap) len() -> i32 {
+    return h.items.len
+}
+
+pub fn (h IntHeap) is_empty() -> bool {
+    return h.items.len == 0
+}
+
+pub fn (h IntHeap) peek() -> i32? {
+    if h.items.len == 0 {
+        return none
+    }
+    return h.items[0]
+}
+
+pub fn (mut h IntHeap) push(value: i32) {
+    h.items.push(value)
+    let mut idx = h.items.len - 1
+    while idx > 0 {
+        let parent = (idx - 1) / 2
+        let parent_val = h.items[parent]
+        let child_val = h.items[idx]
+        if parent_val <= child_val {
+            break
+        }
+        let tmp = h.items[parent]
+        h.items[parent] = h.items[idx]
+        h.items[idx] = tmp
+        idx = parent
+    }
+}
+
+pub fn (mut h IntHeap) pop() -> i32? {
+    if h.items.len == 0 {
+        return none
+    }
+    let top = h.items[0]
+    let last = h.items.pop() or_else 0
+    if h.items.len > 0 {
+        h.items[0] = last
+        let mut idx = 0
+        while true {
+            let left = idx * 2 + 1
+            let right = idx * 2 + 2
+            let mut smallest = idx
+            if left < h.items.len {
+                let left_val = h.items[left]
+                let small_val = h.items[smallest]
+                if left_val < small_val {
+                    smallest = left
+                }
+            }
+            if right < h.items.len {
+                let right_val = h.items[right]
+                let small_val = h.items[smallest]
+                if right_val < small_val {
+                    smallest = right
+                }
+            }
+            if smallest == idx {
+                break
+            }
+            let tmp = h.items[idx]
+            h.items[idx] = h.items[smallest]
+            h.items[smallest] = tmp
+            idx = smallest
+        }
+    }
+    return top
+}
+
+// ---------------------------------------------------------------------------
+// Small sorting helpers for concrete numeric slices.
+// ---------------------------------------------------------------------------
+
+pub fn sort_i32(mut items: []i32) {
+    let mut i = 1
+    while i < items.len {
+        let value = items[i]
+        let mut j = i - 1
+        while j >= 0 && items[j] > value {
+            items[j + 1] = items[j]
+            j -= 1
+        }
+        items[j + 1] = value
+        i += 1
+    }
+}
+
+pub fn sort_f32(mut items: []f32) {
+    let mut i = 1
+    while i < items.len {
+        let value = items[i]
+        let mut j = i - 1
+        while j >= 0 && items[j] > value {
+            items[j + 1] = items[j]
+            j -= 1
+        }
+        items[j + 1] = value
+        i += 1
+    }
+}
+
+pub fn reverse_i32(mut items: []i32) {
+    let mut left = 0
+    let mut right = items.len - 1
+    while left < right {
+        let tmp = items[left]
+        items[left] = items[right]
+        items[right] = tmp
+        left += 1
+        right -= 1
+    }
+}
+
+pub fn contains_i32(items: []i32, value: i32) -> bool {
+    let mut i = 0
+    while i < items.len {
+        if items[i] == value {
+            return true
+        }
+        i += 1
+    }
+    return false
+}

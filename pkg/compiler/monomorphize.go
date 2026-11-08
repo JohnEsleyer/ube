@@ -229,6 +229,8 @@ func (m *Monomorphizer) Process(prog *Program) error {
 				return nil
 			}
 			switch e := expr.(type) {
+			case *MoveExpr:
+				return scanExpr(e.Value)
 			case *StructInitExpr:
 				if len(e.TypeArgs) > 0 {
 					args := make([]UbeType, len(e.TypeArgs))

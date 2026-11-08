@@ -112,7 +112,7 @@ pub fn (s Stdout) write_string(str: string) -> i32 ! string {
 pub fn (s Stdout) write_line(str: string) -> i32 ! string {
     let mut b = str.bytes()
     b.push(10)
-    return wasi.fd_write_bytes(s.fd, b)
+    return wasi.fd_write_bytes(s.fd, move b)
 }
 
 pub fn (s Stdout) flush() -> bool ! string {
@@ -147,7 +147,7 @@ pub fn (s Stderr) write_string(str: string) -> i32 ! string {
 pub fn (s Stderr) write_line(str: string) -> i32 ! string {
     let mut b = str.bytes()
     b.push(10)
-    return wasi.fd_write_bytes(s.fd, b)
+    return wasi.fd_write_bytes(s.fd, move b)
 }
 
 pub fn (s Stderr) flush() -> bool ! string {
@@ -214,7 +214,7 @@ pub fn (f File) write_string(s: string) -> i32 ! string {
 pub fn (f File) write_line(s: string) -> i32 ! string {
     let mut b = s.bytes()
     b.push(10)
-    return f.write(b)
+    return f.write(move b)
 }
 
 pub fn (f File) flush() -> bool ! string {
@@ -269,7 +269,7 @@ pub struct BytesReader {
 
 pub fn bytes_reader_new(data: []u8) -> BytesReader {
     return BytesReader {
-        data: data,
+        data: move data,
         pos: 0
     }
 }
@@ -421,7 +421,7 @@ pub fn bytes_writer_with_capacity(capacity: i32) -> BytesWriter {
 
 pub fn (mut w BytesWriter) write(data: []u8) -> i32 ! string {
     let n = data.len
-    w.buf.write_bytes(data)
+    w.buf.write_bytes(move data)
     return n
 }
 
@@ -437,7 +437,7 @@ pub fn (mut w BytesWriter) write_string(s: string) -> i32 ! string {
 pub fn (mut w BytesWriter) write_line(s: string) -> i32 ! string {
     let mut b = s.bytes()
     b.push(10)
-    return w.write(b)
+    return w.write(move b)
 }
 
 pub fn (w BytesWriter) flush() -> bool ! string {
@@ -478,7 +478,7 @@ pub struct StringReader {
 
 pub fn string_reader_new(s: string) -> StringReader {
     return StringReader {
-        s: s,
+        s: move s,
         pos: 0
     }
 }
@@ -623,9 +623,9 @@ pub fn buf_reader_new_with_capacity(fd: i32, capacity: i32) -> BufReader {
         i += 1
     }
     return BufReader {
-        fd: fd,
-        buf: b,
-        pos: 0,
+        fd:    fd,
+        buf:   move b,
+        pos:   0,
         limit: 0
     }
 }
@@ -744,8 +744,8 @@ pub fn buf_writer_new_with_capacity(fd: i32, capacity: i32) -> BufWriter {
         i += 1
     }
     return BufWriter {
-        fd: fd,
-        buf: b,
+        fd:    fd,
+        buf:   move b,
         count: 0
     }
 }
@@ -760,7 +760,7 @@ pub fn (mut w BufWriter) flush() -> bool ! string {
         to_write.push(w.buf[i])
         i += 1
     }
-    let res = wasi.fd_write_bytes(w.fd, to_write)
+    let res = wasi.fd_write_bytes(w.fd, move to_write)
     if let written = res {
         w.count = 0
         return true
@@ -810,7 +810,7 @@ pub fn (mut w BufWriter) write_string(s: string) -> i32 ! string {
 pub fn (mut w BufWriter) write_line(s: string) -> i32 ! string {
     let mut b = s.bytes()
     b.push(10)
-    return w.write(b)
+    return w.write(move b)
 }
 
 pub fn (w BufWriter) buffered() -> i32 {
@@ -918,7 +918,7 @@ pub fn write_all_bytes(fd: i32, data: []u8) -> bool ! string {
             chunk.push(data[i])
             i += 1
         }
-        let res = wasi.fd_write_bytes(fd, chunk)
+        let res = wasi.fd_write_bytes(fd, move chunk)
         if let n = res {
             if n <= 0 {
                 return error("zero bytes written to fd")
@@ -954,7 +954,7 @@ pub fn copy(mut dst: BytesWriter, mut src: BytesReader) -> i32 {
                 chunk.push(buf[j])
                 j += 1
             }
-            if let written = dst.write(chunk) {
+            if let written = dst.write(move chunk) {
                 total += written
             } else {
                 break
@@ -986,7 +986,7 @@ pub fn copy_fd(dst_fd: i32, src_fd: i32) -> i32 {
                 slice_to_write.push(chunk[j])
                 j += 1
             }
-            let w_res = wasi.fd_write_bytes(dst_fd, slice_to_write)
+            let w_res = wasi.fd_write_bytes(dst_fd, move slice_to_write)
             if let written = w_res {
                 total += written
             } else {

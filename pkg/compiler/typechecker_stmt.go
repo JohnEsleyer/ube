@@ -87,11 +87,25 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			if s.Type != nil {
 				return fmt.Errorf("[%s] destructured variables cannot have a type annotation", s.At)
 			}
+			if _, isMove := s.Value.(*MoveExpr); !isMove {
+				root := variableRoot(s.Value)
+				if root != "" && !tc.isCopyType(valT) {
+					if _, isCall := s.Value.(*CallExpr); !isCall {
+						return fmt.Errorf("[%s] cannot move non-copy variable '%s' without explicit 'move'; use 'move %s'", s.At, root, root)
+					}
+				}
+			}
+			if err := tc.markMovedIfAffine(s.Value, env); err != nil {
+				return err
+			}
 			for i, name := range s.Names {
 				if _, exists := env.Vars[name]; exists {
 					return fmt.Errorf("[%s] variable '%s' already declared in this scope", s.At, name)
 				}
 				elemT := tupleT.Elems[i].WithRegion(env.ScopeDepth)
+				if tc.hasLifetime(elemT) && tc.exprDepth(s.Value, env) > env.ScopeDepth {
+					return fmt.Errorf("[%s] Safety Error: value rooted at scope depth %d cannot escape into '%s' at depth %d", s.At, tc.exprDepth(s.Value, env), name, env.ScopeDepth)
+				}
 				env.Vars[name] = VarInfo{Type: elemT, IsMut: s.Mut, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Value, env), LoopDepth: env.LoopDepth, Moved: false}
 			}
 			return nil
@@ -125,6 +139,14 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 				return fmt.Errorf("[%s] variable '%s' requires a type annotation when initialized with none", s.At, s.Name)
 			}
 		}
+		if _, isMove := s.Value.(*MoveExpr); !isMove {
+			root := variableRoot(s.Value)
+			if root != "" && !tc.isCopyType(valT) {
+				if _, isCall := s.Value.(*CallExpr); !isCall {
+					return fmt.Errorf("[%s] cannot move non-copy variable '%s' without explicit 'move'; use 'move %s'", s.At, root, root)
+				}
+			}
+		}
 		valT = valT.WithRegion(env.ScopeDepth)
 		if err := tc.markMovedIfAffine(s.Value, env); err != nil {
 			return err
@@ -133,7 +155,6 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			return fmt.Errorf("[%s] Safety Error: value rooted at scope depth %d cannot escape into '%s' at depth %d", s.At, tc.exprDepth(s.Value, env), s.Name, env.ScopeDepth)
 		}
 		env.Vars[s.Name] = VarInfo{Type: valT, IsMut: s.Mut, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Value, env), LoopDepth: env.LoopDepth, Moved: false}
-
 	case *DeferStmt:
 		if _, ok := s.Call.(*CallExpr); !ok {
 			return fmt.Errorf("[%s] defer requires a function call", s.At)
@@ -170,6 +191,14 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		s.RHSType = rhsT
 		if s.Op == "" {
 			s.Op = "="
+		}
+		if s.Op == "=" {
+			if _, isMove := s.RHS.(*MoveExpr); !isMove {
+				root := variableRoot(s.RHS)
+				if root != "" && !tc.isCopyType(rhsT) {
+					return fmt.Errorf("[%s] cannot move non-copy variable '%s' without explicit 'move'; use 'move %s'", s.At, root, root)
+				}
+			}
 		}
 		if s.Op != "=" {
 			if s.Op == "+=" && lhsT.String() == "string" && rhsT.String() == "string" {

@@ -96,6 +96,12 @@ func (tc *Typechecker) checkCallArgsWithReceiver(receiver Expr, receiverMut bool
 		if !paramMut {
 			escapes := i < len(escaping) && escaping[i]
 			if escapes {
+				if _, isMove := arg.(*MoveExpr); !isMove {
+					root := variableRoot(arg)
+					if root != "" && !tc.isCopyType(actual) {
+						return fmt.Errorf("[%s] cannot move non-copy variable '%s' into parameter '%s' without explicit 'move'; use 'move %s'", arg.Loc(), root, params[i].Name, root)
+					}
+				}
 				if err := tc.markMovedIfAffine(arg, env); err != nil {
 					return err
 				}
@@ -193,6 +199,8 @@ func (tc *Typechecker) pinLiteral(expr Expr, target UbeType) bool {
 			e.OperandType = target
 			return true
 		}
+	case *MoveExpr:
+		return tc.pinLiteral(e.Value, target)
 	case *CastExpr:
 		return tc.pinLiteral(e.Expr, e.TargetType)
 	case *IfExpr:

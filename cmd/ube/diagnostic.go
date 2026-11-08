@@ -55,6 +55,11 @@ func classifyMessage(msg string) (class, fields string) {
 			return "type_mismatch", "expected:" + m[1] + "|got:" + m[2]
 		}
 		return "type_mismatch", ""
+	case strings.Contains(msg, "without explicit 'move'"):
+		if m := reQuotedVar.FindStringSubmatch(msg); m != nil {
+			return "move_required", "var:" + m[1]
+		}
+		return "move_required", ""
 	case strings.Contains(msg, "use of moved value"):
 		if m := reQuotedVar.FindStringSubmatch(msg); m != nil {
 			return "use_after_move", "var:" + m[1]

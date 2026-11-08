@@ -1,0 +1,143 @@
+package random
+
+// File: std/random/random.ube
+//
+// Deterministic pseudo-random numbers plus WASI entropy access.
+//
+// `Rng` uses xorshift64* (Marsaglia/Vigna). It is fast, has a small state,
+// and is suitable for simulations, games, sampling, and test data — not for
+// cryptography. Use `entropy_u64` / `entropy_bytes` when OS randomness is
+// required.
+
+pub struct Rng {
+    pub state: u64
+}
+
+pub fn seeded(seed: u64) -> Rng {
+    let mut s = seed
+    if s == 0 {
+        s = 0x9E3779B97F4A7C15
+    }
+    return Rng{ state: s }
+}
+
+pub fn from_entropy() -> Rng {
+    return seeded(entropy_u64())
+}
+
+pub fn (mut r Rng) next_u64() -> u64 {
+    let mut x = r.state
+    x = x ^ (x >> 12)
+    x = x ^ (x << 25)
+    x = x ^ (x >> 27)
+    r.state = x
+    let multiplier: u64 = 2685821657736338717
+    return x * multiplier
+}
+
+pub fn (mut r Rng) next_u32() -> u32 {
+    return (r.next_u64() >> 32) as u32
+}
+
+pub fn (mut r Rng) next_bool() -> bool {
+    return (r.next_u64() & 1) == 1
+}
+
+// next_f64 returns a value in [0.0, 1.0).
+pub fn (mut r Rng) next_f64() -> f64 {
+    let bits = r.next_u64() >> 11
+    return (bits as f64) / 9007199254740992.0
+}
+
+// next_i32_range returns a value in [low, high). If the range is empty or
+// inverted, `low` is returned.
+pub fn (mut r Rng) next_i32_range(low: i32, high: i32) -> i32 {
+    if high <= low {
+        return low
+    }
+    let span_i = high - low
+    let span: u64 = span_i as u64
+    let remainder = r.next_u64() % span
+    return low + (remainder as i32)
+}
+
+pub fn (mut r Rng) fill_u8(mut out: []u8) {
+    let mut i = 0
+    while i < out.len {
+        let value = r.next_u64()
+        let masked = value & 255
+        out[i] = masked as u8
+        i += 1
+    }
+}
+
+pub fn (mut r Rng) shuffle_u8(mut items: []u8) {
+    if items.len < 2 {
+        return
+    }
+    let mut i = items.len - 1
+    while i > 0 {
+        let j = r.next_i32_range(0, i + 1)
+        let tmp = items[i]
+        items[i] = items[j]
+        items[j] = tmp
+        i -= 1
+    }
+}
+
+// entropy_u64 reads 64 bits from the WASI random device.
+pub fn entropy_u64() -> u64 {
+    return random_get_u64()
+}
+
+// entropy_bytes fills a caller-provided buffer with OS randomness.
+pub fn entropy_bytes(mut out: []u8) {
+    let mut i = 0
+    while i < out.len {
+        let value = random_get_u64()
+        let mut k = 0
+        while k < 8 && i < out.len {
+            let shift = k * 8
+            let b = value >> shift
+            let masked = b & 255
+            out[i] = masked as u8
+            i += 1
+            k += 1
+        }
+    }
+}
+
+// Convenience helpers backed by fresh OS entropy. Prefer a reusable `Rng`
+// when generating many values.
+pub fn u64_value() -> u64 {
+    return entropy_u64()
+}
+
+pub fn i32_range(low: i32, high: i32) -> i32 {
+    if high <= low {
+        return low
+    }
+    let span_i = high - low
+    let span: u64 = span_i as u64
+    let remainder = entropy_u64() % span
+    return low + (remainder as i32)
+}
+
+pub fn f64_value() -> f64 {
+    let bits = entropy_u64() >> 11
+    return (bits as f64) / 9007199254740992.0
+}
+
+pub fn bytes(count: i32) -> []u8 {
+    let mut out = []u8{}
+    if count <= 0 {
+        return out
+    }
+    let mut i = 0
+    while i < count {
+        out.push(0)
+        i += 1
+    }
+    entropy_bytes(mut out)
+    return out
+}

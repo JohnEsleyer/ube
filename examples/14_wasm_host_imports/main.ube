@@ -1,21 +1,9 @@
 package main
 
-// WebAssembly Host Environment Imports (Wasm Host Functions / WASI)
-extern fn abs(n: i32) -> i32
-extern fn sinf(rad: f32) -> f32
-extern fn rand() -> i32
+extern fn time_now_ms() -> i64
+extern fn host_log(msg: string)
 
 fn main() {
-    let negative: i32 = -42
-    let angle: f32 = 0.0
-
-    // Calling sandboxed Host functions
-    let positive = abs(negative)
-    println(positive) // 42
-
-    let sin_val = sinf(angle)
-    println(sin_val)  // 0.0
-
-    let random_num = rand()
-    println(random_num)
+    let timestamp = time_now_ms()
+    println(f"Current host epoch milliseconds: {timestamp}")
 }

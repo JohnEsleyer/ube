@@ -1,3 +1,5 @@
+// File: pkg/compiler/compiler_unit_test.go
+
 package compiler_test
 
 import (
@@ -161,7 +163,7 @@ package main
 
 fn main() {
     let a = "resource"
-    let b = a
+    let b = move a
     let c = a
 }
 `
@@ -176,6 +178,102 @@ fn main() {
 	}
 	if !strings.Contains(err.Error(), "use of moved") {
 		t.Errorf("expected 'use of moved' error, got: %v", err)
+	}
+}
+
+func TestTypechecker_MoveKeywordExplicit(t *testing.T) {
+	source := `
+package main
+
+fn main() {
+    let a = "hello"
+    let b = move a
+    println(b)
+}
+`
+	lexer := compiler.NewLexer("test.ube", source)
+	tokens, err := lexer.Tokenize()
+	if err != nil {
+		t.Fatalf("lex error: %v", err)
+	}
+	prog, err := compiler.NewParser(tokens).ParseProgram()
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+	tc := compiler.NewTypechecker()
+	if err := tc.Check(prog); err != nil {
+		t.Fatalf("expected valid move, got: %v", err)
+	}
+}
+
+func TestTypechecker_ImplicitMoveRejected(t *testing.T) {
+	source := `
+package main
+
+fn main() {
+    let a = "hello"
+    let b = a
+}
+`
+	lexer := compiler.NewLexer("test.ube", source)
+	tokens, _ := lexer.Tokenize()
+	prog, _ := compiler.NewParser(tokens).ParseProgram()
+
+	tc := compiler.NewTypechecker()
+	err := tc.Check(prog)
+	if err == nil {
+		t.Fatal("expected error for implicit move of 'a', got nil")
+	}
+	if !strings.Contains(err.Error(), "without explicit 'move'") {
+		t.Errorf("expected explicit move error, got: %v", err)
+	}
+}
+
+func TestTypechecker_MoveCopyTypeRejected(t *testing.T) {
+	source := `
+package main
+
+fn main() {
+    let x = 42
+    let y = move x
+}
+`
+	lexer := compiler.NewLexer("test.ube", source)
+	tokens, _ := lexer.Tokenize()
+	prog, _ := compiler.NewParser(tokens).ParseProgram()
+
+	tc := compiler.NewTypechecker()
+	err := tc.Check(prog)
+	if err == nil {
+		t.Fatal("expected error when moving copy type, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot move value of copy type") {
+		t.Errorf("expected copy type move error, got: %v", err)
+	}
+}
+
+func TestTypechecker_MoveLoopInvariant(t *testing.T) {
+	source := `
+package main
+
+fn main() {
+    let a = "outer"
+    while true {
+        let b = move a
+    }
+}
+`
+	lexer := compiler.NewLexer("test.ube", source)
+	tokens, _ := lexer.Tokenize()
+	prog, _ := compiler.NewParser(tokens).ParseProgram()
+
+	tc := compiler.NewTypechecker()
+	err := tc.Check(prog)
+	if err == nil {
+		t.Fatal("expected loop move error, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot move variable 'a' inside a loop") {
+		t.Errorf("expected loop move error, got: %v", err)
 	}
 }
 

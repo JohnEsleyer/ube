@@ -1,0 +1,627 @@
+package json
+
+// File: std/encoding/json/json.ube
+//
+// Small self-contained JSON parser and serializer.
+//
+// The value model is deliberately explicit (`json.Value`) instead of using a
+// dynamic `any` type, so accessors are checked by the compiler. Numbers are
+// stored as f64; `Number` wraps a struct because enum payload slots are
+// word-sized on the current Wasm backend.
+
+pub struct Num {
+    pub v: f64
+}
+
+pub struct Entry {
+    pub key: string,
+    pub val: Value
+}
+
+pub enum Value {
+    Null,
+    Bool(bool),
+    Number(Num),
+    Text(string),
+    Array([]Value),
+    Object([]Entry)
+}
+
+pub fn null_value() -> Value {
+    return Value.Null
+}
+
+pub fn bool_val(b: bool) -> Value {
+    return Value.Bool(b)
+}
+
+pub fn number(v: f64) -> Value {
+    return Value.Number(Num{ v: v })
+}
+
+pub fn int_value(v: i64) -> Value {
+    return Value.Number(Num{ v: v as f64 })
+}
+
+pub fn str_value(s: string) -> Value {
+    return Value.Text(s)
+}
+
+pub fn array(items: []Value) -> Value {
+    return Value.Array(items)
+}
+
+pub fn object(entries: []Entry) -> Value {
+    return Value.Object(entries)
+}
+
+pub fn is_null(v: Value) -> bool {
+    match v {
+        Null => { return true }
+        Bool(b) => { return false }
+        Number(n) => { return false }
+        Text(s) => { return false }
+        Array(items) => { return false }
+        Object(entries) => { return false }
+    }
+}
+
+pub fn as_bool(v: Value) -> bool? {
+    match v {
+        Null => { return none }
+        Bool(b) => { return b }
+        Number(n) => { return none }
+        Text(s) => { return none }
+        Array(items) => { return none }
+        Object(entries) => { return none }
+    }
+}
+
+pub fn as_f64(v: Value) -> f64? {
+    match v {
+        Null => { return none }
+        Bool(b) => { return none }
+        Number(n) => { return n.v }
+        Text(s) => { return none }
+        Array(items) => { return none }
+        Object(entries) => { return none }
+    }
+}
+
+pub fn as_i64(v: Value) -> i64? {
+    match v {
+        Null => { return none }
+        Bool(b) => { return none }
+        Number(n) => { return n.v as i64 }
+        Text(s) => { return none }
+        Array(items) => { return none }
+        Object(entries) => { return none }
+    }
+}
+
+pub fn as_string(v: Value) -> string? {
+    match v {
+        Null => { return none }
+        Bool(b) => { return none }
+        Number(n) => { return none }
+        Text(s) => { return s }
+        Array(items) => { return none }
+        Object(entries) => { return none }
+    }
+}
+
+pub fn len(v: Value) -> i32 {
+    match v {
+        Null => { return 0 }
+        Bool(b) => { return 0 }
+        Number(n) => { return 0 }
+        Text(s) => { return s.len }
+        Array(items) => { return items.len }
+        Object(entries) => { return entries.len }
+    }
+}
+
+pub fn at(v: Value, idx: i32) -> Value? {
+    match v {
+        Null => { return none }
+        Bool(b) => { return none }
+        Number(n) => { return none }
+        Text(s) => { return none }
+        Array(items) => {
+            if idx < 0 || idx >= items.len {
+                return none
+            }
+            return items[idx]
+        }
+        Object(entries) => { return none }
+    }
+}
+
+pub fn get(v: Value, key: string) -> Value? {
+    match v {
+        Null => { return none }
+        Bool(b) => { return none }
+        Number(n) => { return none }
+        Text(s) => { return none }
+        Array(items) => { return none }
+        Object(entries) => {
+            let mut i = 0
+            while i < entries.len {
+                if entries[i].key == key {
+                    return entries[i].val
+                }
+                i += 1
+            }
+            return none
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Serialization
+// ---------------------------------------------------------------------------
+
+fn append_json_string(mut sb: StringBuilder, s: string) {
+    sb.append_char(34)
+    let mut i = 0
+    while i < s.len {
+        let c = s[i]
+        if c == 34 {
+            sb.append_char(92)
+            sb.append_char(34)
+        } else if c == 92 {
+            sb.append_char(92)
+            sb.append_char(92)
+        } else if c == 10 {
+            sb.append_char(92)
+            sb.append_char(110)
+        } else if c == 13 {
+            sb.append_char(92)
+            sb.append_char(114)
+        } else if c == 9 {
+            sb.append_char(92)
+            sb.append_char(116)
+        } else if c < 32 {
+            sb.append_char(92)
+            sb.append_char(117)
+            sb.append_char(48)
+            sb.append_char(48)
+            sb.append_char(hex_digit((c as i32) >> 4))
+            sb.append_char(hex_digit((c as i32) & 15))
+        } else {
+            sb.append_char(c as i32)
+        }
+        i += 1
+    }
+    sb.append_char(34)
+}
+
+fn hex_digit(v: i32) -> i32 {
+    if v < 10 {
+        return 48 + v
+    }
+    return 97 + (v - 10)
+}
+
+fn append_number(mut sb: StringBuilder, n: f64) {
+    let mut x = n
+    if x < 0.0 {
+        sb.append_char(45)
+        x = -x
+    }
+    let whole = x as i64
+    sb.append_int(whole)
+    let mut frac = x - (whole as f64)
+    if frac > 0.0 {
+        sb.append_char(46)
+        let mut digits = 0
+        while digits < 12 && frac > 0.000000000001 {
+            frac = frac * 10.0
+            let d = frac as i32
+            sb.append_char(48 + d)
+            frac = frac - (d as f64)
+            digits += 1
+        }
+    }
+}
+
+fn write_value(mut sb: StringBuilder, v: Value) {
+    match v {
+        Null => {
+            sb.append_str("null")
+        }
+        Bool(b) => {
+            if b {
+                sb.append_str("true")
+            } else {
+                sb.append_str("false")
+            }
+        }
+        Number(n) => {
+            append_number(mut sb, n.v)
+        }
+        Text(s) => {
+            append_json_string(mut sb, s)
+        }
+        Array(items) => {
+            sb.append_char(91)
+            let mut i = 0
+            while i < items.len {
+                if i > 0 {
+                    sb.append_char(44)
+                }
+                write_value(mut sb, items[i])
+                i += 1
+            }
+            sb.append_char(93)
+        }
+        Object(entries) => {
+            sb.append_char(123)
+            let mut i = 0
+            while i < entries.len {
+                if i > 0 {
+                    sb.append_char(44)
+                }
+                append_json_string(mut sb, entries[i].key)
+                sb.append_char(58)
+                write_value(mut sb, entries[i].val)
+                i += 1
+            }
+            sb.append_char(125)
+        }
+    }
+}
+
+pub fn stringify(v: Value) -> string {
+    let mut sb = StringBuilder.new(64)
+    write_value(mut sb, v)
+    return sb.to_string()
+}
+
+pub fn encode(v: Value) -> string {
+    return stringify(v)
+}
+
+// ---------------------------------------------------------------------------
+// Parsing
+// ---------------------------------------------------------------------------
+
+struct Parser {
+    pub src: string,
+    pub pos: i32
+}
+
+fn parser_new(src: string) -> Parser {
+    return Parser{ src: src, pos: 0 }
+}
+
+fn (mut p Parser) at_end() -> bool {
+    return p.pos >= p.src.len
+}
+
+fn (mut p Parser) peek() -> u8 {
+    if p.pos >= p.src.len {
+        return 0
+    }
+    return p.src[p.pos]
+}
+
+fn (mut p Parser) skip_ws() {
+    while p.pos < p.src.len {
+        let c = p.src[p.pos]
+        if c == 32 || c == 9 || c == 10 || c == 13 {
+            p.pos += 1
+        } else {
+            break
+        }
+    }
+}
+
+fn (mut p Parser) expect(c: u8) -> bool {
+    if p.pos >= p.src.len || p.src[p.pos] != c {
+        return false
+    }
+    p.pos += 1
+    return true
+}
+
+fn (mut p Parser) consume_word(word: string) -> bool {
+    if p.pos + word.len > p.src.len {
+        return false
+    }
+    let mut i = 0
+    while i < word.len {
+        if p.src[p.pos + i] != word[i] {
+            return false
+        }
+        i += 1
+    }
+    p.pos += word.len
+    return true
+}
+
+fn is_digit(c: u8) -> bool {
+    return c >= 48 && c <= 57
+}
+
+fn (mut p Parser) parse_number() -> f64 ! string {
+    let start = p.pos
+    if p.peek() == 45 {
+        p.pos += 1
+    }
+    if p.at_end() || !is_digit(p.peek()) {
+        return error("invalid JSON number")
+    }
+    while !p.at_end() && is_digit(p.peek()) {
+        p.pos += 1
+    }
+    if p.peek() == 46 {
+        p.pos += 1
+        if p.at_end() || !is_digit(p.peek()) {
+            return error("invalid JSON fraction")
+        }
+        while !p.at_end() && is_digit(p.peek()) {
+            p.pos += 1
+        }
+    }
+    if p.peek() == 101 || p.peek() == 69 {
+        p.pos += 1
+        if p.peek() == 43 || p.peek() == 45 {
+            p.pos += 1
+        }
+        if p.at_end() || !is_digit(p.peek()) {
+            return error("invalid JSON exponent")
+        }
+        while !p.at_end() && is_digit(p.peek()) {
+            p.pos += 1
+        }
+    }
+    return parse_float(p.src[start:p.pos])
+}
+
+fn parse_float(s: string) -> f64 ! string {
+    let mut i = 0
+    let mut sign: f64 = 1.0
+    if i < s.len && s[i] == 45 {
+        sign = -1.0
+        i += 1
+    }
+    let mut value: f64 = 0.0
+    let mut digits = 0
+    while i < s.len && is_digit(s[i]) {
+        let d = (s[i] as i32) - 48
+        value = value * 10.0 + (d as f64)
+        i += 1
+        digits += 1
+    }
+    if i < s.len && s[i] == 46 {
+        i += 1
+        let mut scale: f64 = 0.1
+        while i < s.len && is_digit(s[i]) {
+            let d = (s[i] as i32) - 48
+            value = value + (d as f64) * scale
+            scale = scale * 0.1
+            i += 1
+            digits += 1
+        }
+    }
+    if digits == 0 {
+        return error("invalid JSON number")
+    }
+    let mut exponent = 0
+    let mut exp_sign = 1
+    if i < s.len && (s[i] == 101 || s[i] == 69) {
+        i += 1
+        if i < s.len && s[i] == 43 {
+            i += 1
+        } else if i < s.len && s[i] == 45 {
+            exp_sign = -1
+            i += 1
+        }
+        while i < s.len && is_digit(s[i]) {
+            let d = (s[i] as i32) - 48
+            exponent = exponent * 10 + d
+            i += 1
+        }
+    }
+    let mut result: f64 = value
+    let mut e = 0
+    while e < exponent {
+        if exp_sign > 0 {
+            result = result * 10.0
+        } else {
+            result = result / 10.0
+        }
+        e += 1
+    }
+    return sign * result
+}
+
+fn append_utf8(mut sb: StringBuilder, cp: i32) {
+    if cp < 0x80 {
+        sb.append_char(cp)
+    } else if cp < 0x800 {
+        sb.append_char(0xC0 | (cp >> 6))
+        sb.append_char(0x80 | (cp & 0x3F))
+    } else if cp < 0x10000 {
+        sb.append_char(0xE0 | (cp >> 12))
+        sb.append_char(0x80 | ((cp >> 6) & 0x3F))
+        sb.append_char(0x80 | (cp & 0x3F))
+    } else {
+        sb.append_char(0xF0 | (cp >> 18))
+        sb.append_char(0x80 | ((cp >> 12) & 0x3F))
+        sb.append_char(0x80 | ((cp >> 6) & 0x3F))
+        sb.append_char(0x80 | (cp & 0x3F))
+    }
+}
+
+fn hex_value(c: u8) -> i32 {
+    if c >= 48 && c <= 57 {
+        return (c as i32) - 48
+    }
+    if c >= 97 && c <= 102 {
+        return (c as i32) - 97 + 10
+    }
+    if c >= 65 && c <= 70 {
+        return (c as i32) - 65 + 10
+    }
+    return -1
+}
+
+fn (mut p Parser) parse_string() -> string ! string {
+    if !p.expect(34) {
+        return error("expected JSON string")
+    }
+    let mut sb = StringBuilder.new(32)
+    while p.pos < p.src.len {
+        let c = p.src[p.pos]
+        p.pos += 1
+        if c == 34 {
+            return sb.to_string()
+        }
+        if c == 92 {
+            if p.at_end() {
+                return error("unterminated JSON escape")
+            }
+            let esc = p.src[p.pos]
+            p.pos += 1
+            if esc == 34 {
+                sb.append_char(34)
+            } else if esc == 92 {
+                sb.append_char(92)
+            } else if esc == 47 {
+                sb.append_char(47)
+            } else if esc == 98 {
+                sb.append_char(8)
+            } else if esc == 102 {
+                sb.append_char(12)
+            } else if esc == 110 {
+                sb.append_char(10)
+            } else if esc == 114 {
+                sb.append_char(13)
+            } else if esc == 116 {
+                sb.append_char(9)
+            } else if esc == 117 {
+                if p.pos + 4 > p.src.len {
+                    return error("truncated JSON unicode escape")
+                }
+                let mut cp = 0
+                let mut k = 0
+                while k < 4 {
+                    let h = hex_value(p.src[p.pos + k])
+                    if h < 0 {
+                        return error("invalid JSON unicode escape")
+                    }
+                    cp = (cp << 4) | h
+                    k += 1
+                }
+                p.pos += 4
+                append_utf8(mut sb, cp)
+            } else {
+                return error("invalid JSON escape")
+            }
+        } else {
+            sb.append_char(c as i32)
+        }
+    }
+    return error("unterminated JSON string")
+}
+
+fn (mut p Parser) parse_value() -> Value ! string {
+    p.skip_ws()
+    if p.at_end() {
+        return error("unexpected end of JSON input")
+    }
+    let c = p.peek()
+    if c == 110 {
+        if !p.consume_word("null") {
+            return error("invalid JSON literal")
+        }
+        return Value.Null
+    }
+    if c == 116 {
+        if !p.consume_word("true") {
+            return error("invalid JSON literal")
+        }
+        return Value.Bool(true)
+    }
+    if c == 102 {
+        if !p.consume_word("false") {
+            return error("invalid JSON literal")
+        }
+        return Value.Bool(false)
+    }
+    if c == 34 {
+        let s = p.parse_string()?
+        return Value.Text(s)
+    }
+    if c == 91 {
+        p.pos += 1
+        let mut items = []Value{}
+        p.skip_ws()
+        if p.peek() == 93 {
+            p.pos += 1
+            return Value.Array(items)
+        }
+        while true {
+            let item = p.parse_value()?
+            items.push(item)
+            p.skip_ws()
+            if p.peek() == 44 {
+                p.pos += 1
+                continue
+            }
+            if p.peek() == 93 {
+                p.pos += 1
+                break
+            }
+            return error("expected ',' or ']' in JSON array")
+        }
+        return Value.Array(items)
+    }
+    if c == 123 {
+        p.pos += 1
+        let mut entries = []Entry{}
+        p.skip_ws()
+        if p.peek() == 125 {
+            p.pos += 1
+            return Value.Object(entries)
+        }
+        while true {
+            p.skip_ws()
+            let key = p.parse_string()?
+            p.skip_ws()
+            if !p.expect(58) {
+                return error("expected ':' in JSON object")
+            }
+            let val = p.parse_value()?
+            entries.push(Entry{ key: key, val: val })
+            p.skip_ws()
+            if p.peek() == 44 {
+                p.pos += 1
+                continue
+            }
+            if p.peek() == 125 {
+                p.pos += 1
+                break
+            }
+            return error("expected ',' or '}' in JSON object")
+        }
+        return Value.Object(entries)
+    }
+    if c == 45 || is_digit(c) {
+        let n = p.parse_number()?
+        return Value.Number(Num{ v: n })
+    }
+    return error("unexpected character in JSON input")
+}
+
+pub fn parse(src: string) -> Value ! string {
+    let mut p = parser_new(src)
+    let value = p.parse_value()?
+    p.skip_ws()
+    if !p.at_end() {
+        return error("trailing characters after JSON value")
+    }
+    return value
+}

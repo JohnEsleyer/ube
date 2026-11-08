@@ -1,0 +1,183 @@
+package lz4
+
+// File: std/compress/lz4/lz4.ube
+//
+// LZ4 block-format compression and decompression.
+//
+// This is the raw LZ4 block format (no frame header), suitable for embedding
+// in application formats. The compressor uses a small hash table and greedy
+// 4-byte matches; the decompressor supports overlapping copies as required by
+// the format.
+
+fn push_length(mut out: []u8, value: i32) {
+    let mut remaining = value
+    while remaining >= 255 {
+        out.push(255)
+        remaining -= 255
+    }
+    out.push(remaining as u8)
+}
+
+pub fn compress_bound(size: i32) -> i32 {
+    return size + size / 255 + 16
+}
+
+pub fn compress(input: []u8) -> []u8 {
+    let mut out = []u8{}
+    let n = input.len
+    if n == 0 {
+        out.push(0)
+        return out
+    }
+
+    let mut table = []i32{}
+    let mut i = 0
+    while i < 4096 {
+        table.push(-1)
+        i += 1
+    }
+
+    let mut anchor = 0
+    let mut pos = 0
+    let mut match_limit = n - 5
+    if match_limit < 0 {
+        match_limit = 0
+    }
+
+    while pos < match_limit {
+        let v: u32 = (input[pos] as u32) |
+            ((input[pos + 1] as u32) << 8) |
+            ((input[pos + 2] as u32) << 16) |
+            ((input[pos + 3] as u32) << 24)
+        let prime: u32 = 2654435761
+        let h = ((v * prime) >> 20) as i32
+        let candidate = table[h]
+        table[h] = pos
+
+        let mut same = false
+        if candidate >= 0 {
+            same = input[candidate] == input[pos] &&
+                input[candidate + 1] == input[pos + 1] &&
+                input[candidate + 2] == input[pos + 2] &&
+                input[candidate + 3] == input[pos + 3]
+        }
+
+        if same && pos - candidate <= 65535 {
+            let mut match_len = 4
+            while pos + match_len < n - 5 && input[candidate + match_len] == input[pos + match_len] {
+                match_len += 1
+            }
+
+            let literal_len = pos - anchor
+            let match_code = match_len - 4
+            let lit_nibble = if literal_len < 15 { literal_len } else { 15 }
+            let match_nibble = if match_code < 15 { match_code } else { 15 }
+            out.push(((lit_nibble << 4) | match_nibble) as u8)
+
+            if literal_len >= 15 {
+                push_length(mut out, literal_len - 15)
+            }
+            let mut lit = anchor
+            while lit < pos {
+                out.push(input[lit])
+                lit += 1
+            }
+
+            let offset = (pos - candidate) as u16
+            out.push((offset & 255) as u8)
+            out.push(((offset >> 8) & 255) as u8)
+
+            if match_code >= 15 {
+                push_length(mut out, match_code - 15)
+            }
+
+            pos += match_len
+            anchor = pos
+        } else {
+            pos += 1
+        }
+    }
+
+    let literal_len = n - anchor
+    let lit_nibble = if literal_len < 15 { literal_len } else { 15 }
+    out.push((lit_nibble << 4) as u8)
+    if literal_len >= 15 {
+        push_length(mut out, literal_len - 15)
+    }
+    let mut lit = anchor
+    while lit < n {
+        out.push(input[lit])
+        lit += 1
+    }
+    return out
+}
+
+pub fn decompress(input: []u8) -> []u8 ! string {
+    let mut out = []u8{}
+    let mut pos = 0
+    while pos < input.len {
+        let token = input[pos] as i32
+        pos += 1
+
+        let mut literal_len = (token >> 4) & 15
+        if literal_len == 15 {
+            while true {
+                if pos >= input.len {
+                    return error("truncated LZ4 literal length")
+                }
+                let b = input[pos] as i32
+                pos += 1
+                literal_len += b
+                if b != 255 {
+                    break
+                }
+            }
+        }
+
+        if pos + literal_len > input.len {
+            return error("truncated LZ4 literal data")
+        }
+        let mut lit = 0
+        while lit < literal_len {
+            out.push(input[pos + lit])
+            lit += 1
+        }
+        pos += literal_len
+
+        // A block may end after its final literal run.
+        if pos >= input.len {
+            break
+        }
+        if pos + 2 > input.len {
+            return error("truncated LZ4 match offset")
+        }
+        let offset = (input[pos] as i32) | ((input[pos + 1] as i32) << 8)
+        pos += 2
+        if offset == 0 || offset > out.len {
+            return error("invalid LZ4 match offset")
+        }
+
+        let mut match_len = (token & 15) + 4
+        if (token & 15) == 15 {
+            while true {
+                if pos >= input.len {
+                    return error("truncated LZ4 match length")
+                }
+                let b = input[pos] as i32
+                pos += 1
+                match_len += b
+                if b != 255 {
+                    break
+                }
+            }
+        }
+
+        let start = out.len - offset
+        let mut k = 0
+        while k < match_len {
+            out.push(out[start + k])
+            k += 1
+        }
+    }
+    return out
+}

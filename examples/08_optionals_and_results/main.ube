@@ -1,39 +1,29 @@
 package main
 
-// Optional return (value or null)
-fn find_user(id: i32) -> string? {
-    if id == 1 {
-        return "Alice"
+fn parse_port(code: i32) -> i32 ! string {
+    if code < 1024 || code > 65535 {
+        return error("invalid network port range")
     }
-    return null
+    return code
 }
 
-// Result return (success or typed error)
-fn parse_port(s: string) -> i32 ! string {
-    if s == "invalid" {
-        return error("Malformed port")
+fn find_item(id: i32) -> string? {
+    if id == 7 {
+        return "Excalibur"
     }
-    return 8080
+    return none
 }
 
-fn start_server() -> bool ! string {
-    // '?' propagates errors up to the caller
-    let port = parse_port("8080")?
-    println(port)
-    return true
-}
+fn main() {
+    // Result handling via or_else fallback
+    let port = parse_port(80) or_else 8080 // Note: standard fallback operator is 'or_else'
+    let safe_port = parse_port(-1) or_else 3000
+    println(safe_port) // 3000
 
-fn main(){
-    // If-let unwrapping for optionals
-    if let user = find_user(1){
-        println(user) // Alice
+    // Optional unwrapping via if let
+    if let item = find_item(7) {
+        println(f"Found item: {item}")
+    } else {
+        println("Item not found")
     }
-
-    // Defaulting with or or_else
-    let user2 = find_user(99) or_else "Guest"
-    println(user2) // Guest
-
-    // Defaulting results with or_else
-    let port = parse_port("invalid") or_else 3000
-    println(port) // 3000
 }

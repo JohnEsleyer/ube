@@ -1,81 +1,106 @@
-# Textify Configuration
-#
-# output_file: Path where the merged codebase text will be saved.
-# dirs:        Directory-specific configurations. Keys are paths relative to root.
-#
-# Rule Options:
-#   enabled:            (bool)   If false, this directory and its children are skipped.
-#   include:            ([list]) Specific files/globs to Force Include (overrides gitignore & extensions).
-#   exclude:            ([list]) Specific files/globs to Force Exclude (highest priority).
-#   extensions:         ([list]) Allow-list of extensions (e.g., [go, js]). If empty, all text files are allowed.
-#   exclude_extensions: ([list]) Block-list of extensions (e.g., [log, tmp]).
-#
-# Usage:
-#   - Run 'textify scan' to detect new folders and update this file.
-#   - Run 'textify start' to generate the output file.
-
 output_file: codebase.txt
-dirs:
-    .:
-        enabled: true
-        extensions:
-            - html
-            - gitignore
-            - ube
-            - h
-            - md
-            - svg
-            - go
-            - py
+format: tags
+tree: true
+max_file_size: 512000
 
-    assets:
-        enabled: false
-        extensions:
-            - svg
-    bin:
-        enabled: false
-    docs:
-        enabled: true
-    editors:
-        enabled: true
-        extensions:
-            - json
-            - code-snippets
-            - md
-            - py
-            - svg
-    editors:
-        enabled: false
-    editors/vscode/node_modules:
-        enabled: false
-    examples:
-        enabled: true
-        extensions:
-            - ube
-    src:
-        enabled: true
-        extensions:
-            - py
-            - h
-    tests:
-        enabled: true
-        extensions:
-            - ube
-    web:
-        enabled: true
-        extensions:
-            - html
-    _dev:
-        enabled: true
-        extensions:
-          - md
-          - txt
-    site:
-        enabled: true
-        extensions:
-          - html
-          - js
-          - css
-    site/node_modules:
-        enabled: false
-        extensions:
+# # Group extraction modes (Signatures vs Full Code)
+# signatures_groups:
+#   - wasm_binary
+#   - formatter
+#   - lsp
+
+# full_code_groups:
+#   - _wasm_sandbox
+#   - tests
+#   - cli
+#   - compiler
+
+# Group mode mappings
+groups:
+  cli: full
+  compiler: full
+  wasm_binary: signatures
+  lsp: signatures
+  formatter: signatures
+  wasm_sandbox: full
+  tests: full
+  docs: full
+
+dirs:
+  # CLI Entrypoints & Commands
+  cmd/ube:
+    enabled: true
+    group: cli
+    extensions:
+      - go
+      - txt
+      - md
+
+  # Core Compiler Engine (Frontend, Typechecker, Monomorphizer, Wasm Emitter)
+  pkg/compiler:
+    enabled: true
+    group: compiler
+    extensions:
+      - go
+      - ube
+      - txt
+      - md
+
+  # Low-Level WebAssembly Binary Encoder & LEB128 Buffers
+  pkg/wasm:
+    enabled: true
+    group: wasm_binary
+    extensions:
+      - go
+      - txt
+      - md
+
+  # Language Server Protocol Implementation
+  pkg/lsp:
+    enabled: true
+    group: lsp
+    extensions:
+      - go
+      - txt
+      - md
+
+  # Canonical Code Formatter
+  pkg/formatter:
+    enabled: true
+    group: formatter
+    extensions:
+      - go
+      - txt
+      - md
+
+  # WebAssembly Isolated Sandbox & Reference Laboratory
+  _wasm_sandbox:
+    enabled: false
+    group: wasm_sandbox
+    extensions:
+      - ube
+      - txt
+      - md
+      - wat
+      - sh
+
+  # Language Integration Test Suite
+  tests:
+    enabled: true
+    group: tests
+    extensions:
+      - ube
+      - txt
+      - md
+
+  # Architecture Specifications, Post-Mortems & Plans
+  _dev:
+    enabled: true
+    group: docs
+    extensions:
+      - txt
+      - md
+  
+  # Editor
+  editors:
+    enabled: false
