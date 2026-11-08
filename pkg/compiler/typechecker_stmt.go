@@ -65,6 +65,8 @@ func (tc *Typechecker) markMovedIfType(expr Expr, env *TypeEnvironment, shouldMo
 
 func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 	switch s := stmt.(type) {
+	case *BlockStmt:
+		return tc.checkBlock(s, env)
 	case *LetStmt:
 		if s.Type != nil {
 			s.Type = tc.resolveType(s.Type)

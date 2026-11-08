@@ -96,7 +96,7 @@ dirs:
 
   # Architecture Specifications, Post-Mortems & Plans
   _dev:
-    enabled: true
+    enabled: false
     group: docs
     extensions:
       - txt

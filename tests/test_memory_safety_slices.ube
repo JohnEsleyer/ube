@@ -1,0 +1,122 @@
+package main
+
+import "std/env"
+
+fn assert(cond: bool) {
+    if !cond {
+        env.exit(1)
+    }
+}
+
+fn test_slice_massive_geometric_growth() {
+    let mut nums = []i32{}
+
+    let mut i = 0
+    while i < 300 {
+        nums.push(i * 3)
+        i += 1
+    }
+
+    assert(nums.len == 300)
+
+    let mut check_i = 0
+    while check_i < 300 {
+        assert(nums[check_i] == check_i * 3)
+        check_i += 1
+    }
+}
+
+fn test_slice_u8_alignment_and_stride() {
+    let mut bytes = []u8{}
+
+    let mut i = 0
+    while i < 128 {
+        bytes.push(u8(i))
+        i += 1
+    }
+
+    assert(bytes.len == 128)
+
+    let mut j = 0
+    while j < 128 {
+        assert(bytes[j] == u8(j))
+        j += 1
+    }
+}
+
+fn test_interleaved_slice_allocations() {
+    let mut s1 = []i32{}
+    let mut s2 = []i32{}
+
+    let mut i = 0
+    while i < 100 {
+        s1.push(i + 1000)
+        s2.push(i + 2000)
+        s1.push(i + 3000)
+        s2.push(i + 4000)
+        i += 1
+    }
+
+    assert(s1.len == 200)
+    assert(s2.len == 200)
+
+    let mut k = 0
+    while k < 100 {
+        assert(s1[k * 2] == k + 1000)
+        assert(s1[k * 2 + 1] == k + 3000)
+        assert(s2[k * 2] == k + 2000)
+        assert(s2[k * 2 + 1] == k + 4000)
+        k += 1
+    }
+}
+
+fn test_slice_pop_push_boundaries() {
+    let mut s = []i32{}
+
+    if let _ = s.pop() {
+        assert(false)
+    }
+
+    s.push(11)
+    s.push(22)
+    s.push(33)
+    assert(s.len == 3)
+
+    if let p1 = s.pop() {
+        assert(p1 == 33)
+    } else {
+        assert(false)
+    }
+
+    if let p2 = s.pop() {
+        assert(p2 == 22)
+    } else {
+        assert(false)
+    }
+
+    assert(s.len == 1)
+    assert(s[0] == 11)
+
+    s.push(44)
+    assert(s.len == 2)
+    assert(s[1] == 44)
+
+    if let p3 = s.pop() {
+        assert(p3 == 44)
+    }
+    if let p4 = s.pop() {
+        assert(p4 == 11)
+    }
+
+    assert(s.len == 0)
+    if let _ = s.pop() {
+        assert(false)
+    }
+}
+
+fn main() {
+    test_slice_massive_geometric_growth()
+    test_slice_u8_alignment_and_stride()
+    test_interleaved_slice_allocations()
+    test_slice_pop_push_boundaries()
+}

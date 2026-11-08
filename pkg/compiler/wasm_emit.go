@@ -698,6 +698,8 @@ func (ctx *fnContext) compileBlock(buf *bytes.Buffer, block *BlockStmt) error {
 
 func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 	switch s := stmt.(type) {
+	case *BlockStmt:
+		return ctx.compileBlock(buf, s)
 	case *LetStmt:
 		var t UbeType
 		if s.Type != nil {

@@ -1,0 +1,151 @@
+package main
+
+import "std/env"
+
+fn assert(cond: bool) {
+    if !cond {
+        env.exit(1)
+    }
+}
+
+struct Session {
+    id:          i32,
+    token:       string,
+    permissions: []i32
+}
+
+fn append_numbers(mut target: []i32, start: i32, count: i32) {
+    let mut i = 0
+    while i < count {
+        target.push(start + i)
+        i += 1
+    }
+}
+
+fn sum_and_consume(data: []i32) -> i32 {
+    let mut total = 0
+    for v in data {
+        total += v
+    }
+    return total
+}
+
+fn test_affine_chain_of_moves() {
+    let mut s1 = []i32{}
+    s1.push(10)
+    s1.push(20)
+
+    let s2 = move s1
+    let s3 = move s2
+    let s4 = move s3
+
+    assert(s4.len == 2)
+    assert(s4[0] == 10)
+    assert(s4[1] == 20)
+}
+
+fn test_affine_reactivation_after_move() {
+    let mut buffer = []i32{}
+    buffer.push(100)
+
+    let old = move buffer
+    assert(old.len == 1)
+    assert(old[0] == 100)
+
+    buffer = []i32{}
+    buffer.push(200)
+    buffer.push(300)
+    assert(buffer.len == 2)
+    assert(buffer[0] == 200)
+    assert(buffer[1] == 300)
+
+    let newer = move buffer
+    assert(newer.len == 2)
+
+    buffer = []i32{}
+    buffer.push(400)
+    assert(buffer.len == 1)
+    assert(buffer[0] == 400)
+}
+
+fn test_affine_loan_mut_slice() {
+    let mut items = []i32{}
+    items.push(1)
+
+    append_numbers(mut items, 2, 3)
+    assert(items.len == 4)
+    assert(items[1] == 2)
+    assert(items[2] == 3)
+    assert(items[3] == 4)
+
+    append_numbers(mut items, 10, 2)
+    assert(items.len == 6)
+    assert(items[4] == 10)
+    assert(items[5] == 11)
+
+    let total = sum_and_consume(move items)
+    assert(total == 31)
+}
+
+fn test_affine_struct_with_multiple_non_copy() {
+    let mut perms = []i32{}
+    perms.push(1)
+    perms.push(2)
+
+    let mut sess = Session{
+        id:          1001,
+        token:       "auth_token_xyz",
+        permissions: move perms
+    }
+
+    assert(sess.id == 1001)
+    assert(sess.token == "auth_token_xyz")
+    assert(sess.permissions.len == 2)
+
+    let archived = move sess
+    assert(archived.id == 1001)
+    assert(archived.permissions[0] == 1)
+
+    let mut fresh_perms = []i32{}
+    fresh_perms.push(9)
+    sess = Session{
+        id:          1002,
+        token:       "refreshed_token",
+        permissions: move fresh_perms
+    }
+    assert(sess.id == 1002)
+    assert(sess.token == "refreshed_token")
+    assert(sess.permissions.len == 1)
+}
+
+fn test_affine_sequential_reactivations() {
+    let mut slot = []i32{}
+    slot.push(77)
+
+    let consumed = move slot
+    assert(consumed[0] == 77)
+
+    // Linear reassignment reactivates the binding
+    slot = []i32{}
+    slot.push(1)
+    assert(slot.len == 1)
+    assert(slot[0] == 1)
+
+    // Move again
+    let consumed2 = move slot
+    assert(consumed2[0] == 1)
+
+    // Reactivate a second time
+    slot = []i32{}
+    slot.push(2)
+    assert(slot.len == 1)
+    assert(slot[0] == 2)
+}
+
+fn main() {
+    test_affine_chain_of_moves()
+    test_affine_reactivation_after_move()
+    test_affine_loan_mut_slice()
+    test_affine_struct_with_multiple_non_copy()
+    test_affine_sequential_reactivations()
+}

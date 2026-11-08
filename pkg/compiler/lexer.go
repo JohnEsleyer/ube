@@ -1,3 +1,5 @@
+// File: pkg/compiler/lexer.go
+
 package compiler
 
 import (

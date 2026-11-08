@@ -2,8 +2,7 @@
 
 package compiler
 
-import (
-)
+import ()
 
 func (p *Parser) parseBlock() *BlockStmt {
 	loc := p.expect(TokenLBrace, "Expected '{' to begin block").Loc
@@ -19,6 +18,8 @@ func (p *Parser) parseStmt() Stmt {
 	tok := p.peek(0)
 
 	switch tok.Type {
+	case TokenLBrace:
+		return p.parseBlock()
 	case TokenLet:
 		return p.parseLetStmt()
 	case TokenReturn:

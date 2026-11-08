@@ -1,0 +1,119 @@
+package main
+
+import "std/env"
+
+fn assert(cond: bool) {
+    if !cond {
+        env.exit(1)
+    }
+}
+
+fn test_deeply_nested_arenas_promotion() {
+    let mut root_data = []i32{}
+
+    arena {
+        let mut level1 = []i32{}
+
+        arena {
+            let mut level2 = []i32{}
+
+            arena {
+                let mut scratch = []i32{}
+                scratch.push(101)
+                scratch.push(102)
+                scratch.push(103)
+                level2 = promote(scratch)
+            }
+
+            assert(level2.len == 3)
+            assert(level2[0] == 101)
+            level2.push(201)
+
+            level1 = promote(level2)
+        }
+
+        assert(level1.len == 4)
+        assert(level1[3] == 201)
+        level1.push(301)
+
+        root_data = promote(level1)
+    }
+
+    assert(root_data.len == 5)
+    assert(root_data[0] == 101)
+    assert(root_data[1] == 102)
+    assert(root_data[2] == 103)
+    assert(root_data[3] == 201)
+    assert(root_data[4] == 301)
+}
+
+fn test_unpromoted_scratch_isolation() {
+    let mut persistent = []i32{}
+    persistent.push(1)
+    persistent.push(2)
+
+    arena {
+        let mut scratch = []i32{}
+        let mut i = 0
+        while i < 150 {
+            scratch.push(999)
+            i += 1
+        }
+        assert(scratch.len == 150)
+    }
+
+    assert(persistent.len == 2)
+    assert(persistent[0] == 1)
+    assert(persistent[1] == 2)
+
+    persistent.push(3)
+    assert(persistent.len == 3)
+    assert(persistent[2] == 3)
+}
+
+fn test_loop_arena_reclamation() {
+    let mut collected_sums = []i32{}
+
+    let mut iter = 0
+    while iter < 50 {
+        let mut sum = 0
+        arena {
+            let mut scratch = []i32{}
+            let mut j = 0
+            while j < 20 {
+                scratch.push(iter * 10 + j)
+                j += 1
+            }
+            for val in scratch {
+                sum += val
+            }
+        }
+        collected_sums.push(sum)
+        iter += 1
+    }
+
+    assert(collected_sums.len == 50)
+    assert(collected_sums[0] == 190)
+    assert(collected_sums[1] == 390)
+}
+
+fn test_arena_scratch_string_promotion() {
+    let mut final_message = ""
+
+    arena {
+        let prefix = "Memory"
+        let mid = "Safety"
+        let suffix = "Verified"
+        let full = f"{prefix}_{mid}_{suffix}"
+        final_message = promote(full)
+    }
+
+    assert(final_message == "Memory_Safety_Verified")
+}
+
+fn main() {
+    test_deeply_nested_arenas_promotion()
+    test_unpromoted_scratch_isolation()
+    test_loop_arena_reclamation()
+    test_arena_scratch_string_promotion()
+}

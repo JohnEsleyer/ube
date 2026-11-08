@@ -1,3 +1,5 @@
+// File: pkg/compiler/token.go
+
 package compiler
 
 import "fmt"

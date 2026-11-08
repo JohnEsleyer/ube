@@ -1,0 +1,135 @@
+package main
+
+import "std/env"
+
+fn assert(cond: bool) {
+    if !cond {
+        env.exit(1)
+    }
+}
+
+struct TraceTracker {
+    log: []i32
+}
+
+fn (mut t TraceTracker) record(val: i32) {
+    t.log.push(val)
+}
+
+fn test_defer_strict_lifo() {
+    let mut tracker = TraceTracker{ log: []i32{} }
+
+    {
+        defer tracker.record(1)
+        defer tracker.record(2)
+        defer tracker.record(3)
+        defer tracker.record(4)
+        tracker.record(100)
+    }
+
+    assert(tracker.log.len == 5)
+    assert(tracker.log[0] == 100)
+    assert(tracker.log[1] == 4)
+    assert(tracker.log[2] == 3)
+    assert(tracker.log[3] == 2)
+    assert(tracker.log[4] == 1)
+}
+
+fn test_defer_loop_iteration_cleanup() {
+    let mut tracker = TraceTracker{ log: []i32{} }
+
+    let mut i = 0
+    while i < 3 {
+        defer tracker.record(100 + i)
+        tracker.record(i)
+        i += 1
+    }
+
+    // Defer runs at the end of each iteration (after i is incremented)
+    assert(tracker.log.len == 6)
+    assert(tracker.log[0] == 0)
+    assert(tracker.log[1] == 101)
+    assert(tracker.log[2] == 1)
+    assert(tracker.log[3] == 102)
+    assert(tracker.log[4] == 2)
+    assert(tracker.log[5] == 103)
+}
+
+fn test_defer_on_break_and_continue() {
+    let mut tracker = TraceTracker{ log: []i32{} }
+
+    let mut i = 0
+    while i < 5 {
+        i += 1
+        defer tracker.record(i)
+
+        if i == 2 {
+            continue
+        }
+        if i == 4 {
+            break
+        }
+    }
+
+    assert(tracker.log.len == 4)
+    assert(tracker.log[0] == 1)
+    assert(tracker.log[1] == 2)
+    assert(tracker.log[2] == 3)
+    assert(tracker.log[3] == 4)
+}
+
+fn helper_early_return(mut tracker: TraceTracker, trigger: bool) -> i32 {
+    defer tracker.record(1)
+
+    if trigger {
+        defer tracker.record(2)
+        return 42
+    }
+
+    defer tracker.record(3)
+    return 100
+}
+
+fn test_defer_early_return_unwinding() {
+    let mut tracker = TraceTracker{ log: []i32{} }
+    let res = helper_early_return(tracker, true)
+    assert(res == 42)
+    assert(tracker.log.len == 2)
+    assert(tracker.log[0] == 2)
+    assert(tracker.log[1] == 1)
+}
+
+fn fail_op() -> i32 ! string {
+    return error("boom")
+}
+
+fn helper_try_propagation(mut tracker: TraceTracker) -> i32 ! string {
+    defer tracker.record(10)
+    defer tracker.record(20)
+
+    let val = fail_op()?
+
+    defer tracker.record(30)
+    return val + 1
+}
+
+fn test_defer_try_operator_unwinding() {
+    let mut tracker = TraceTracker{ log: []i32{} }
+    let res = helper_try_propagation(tracker)
+
+    if let _ = res {
+        assert(false)
+    } else {
+        assert(tracker.log.len == 2)
+        assert(tracker.log[0] == 20)
+        assert(tracker.log[1] == 10)
+    }
+}
+
+fn main() {
+    test_defer_strict_lifo()
+    test_defer_loop_iteration_cleanup()
+    test_defer_on_break_and_continue()
+    test_defer_early_return_unwinding()
+    test_defer_try_operator_unwinding()
+}
