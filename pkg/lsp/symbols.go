@@ -3,6 +3,9 @@
 package lsp
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/JohnEsleyer/ube/pkg/compiler"
 )
 
@@ -136,6 +139,83 @@ func Definition(uri, source string, p lspPosition) any {
 	return nil
 }
 
+func makeLspRange(startLine, startChar, endLine, endChar int) map[string]any {
+	return map[string]any{
+		"start": map[string]int{"line": startLine, "character": startChar},
+		"end":   map[string]int{"line": endLine, "character": endChar},
+	}
+}
+
+// findIdentifierOnLine returns the byte column of ident in line, requiring
+// word boundaries on both sides. It returns -1 when no standalone match exists.
+func findIdentifierOnLine(line, ident string) int {
+	if ident == "" {
+		return -1
+	}
+	idx := 0
+	for idx < len(line) {
+		pos := strings.Index(line[idx:], ident)
+		if pos == -1 {
+			return -1
+		}
+		actualPos := idx + pos
+		leftOK := actualPos == 0 || !isWord(line[actualPos-1])
+		rightEnd := actualPos + len(ident)
+		rightOK := rightEnd >= len(line) || !isWord(line[rightEnd])
+		if leftOK && rightOK {
+			return actualPos
+		}
+		idx = actualPos + 1
+	}
+	return -1
+}
+
+// findMatchingBrace scans forward from startLine and returns the line and
+// end-of-line column of the brace that closes the first opening brace.
+func findMatchingBrace(lines []string, startLine int) (int, int) {
+	depth := 0
+	foundOpen := false
+	for l := startLine; l < len(lines); l++ {
+		line := lines[l]
+		inString := false
+		var quoteChar byte
+		for c := 0; c < len(line); c++ {
+			ch := line[c]
+			if inString {
+				if ch == '\\' && c+1 < len(line) {
+					c++
+					continue
+				}
+				if ch == quoteChar {
+					inString = false
+				}
+				continue
+			}
+			if ch == '"' || ch == '`' {
+				inString = true
+				quoteChar = ch
+				continue
+			}
+			if ch == '/' && c+1 < len(line) && line[c+1] == '/' {
+				break
+			}
+			if ch == '{' {
+				depth++
+				foundOpen = true
+			} else if ch == '}' {
+				depth--
+				if foundOpen && depth <= 0 {
+					return l, len(line)
+				}
+			}
+		}
+	}
+	if startLine < len(lines) {
+		return startLine, len(lines[startLine])
+	}
+	return startLine, 0
+}
+
 func DocumentSymbols(uri, source string) []documentSymbol {
 	symbols := []documentSymbol{}
 	tokens, err := compiler.NewLexer(uri, source).Tokenize()
@@ -146,131 +226,358 @@ func DocumentSymbols(uri, source string) []documentSymbol {
 	if err != nil {
 		return symbols
 	}
+	sourceLines := strings.Split(source, "\n")
+	numLines := len(sourceLines)
+	if numLines == 0 {
+		return symbols
+	}
+
+	clampLine := func(line int) int {
+		if line < 0 {
+			return 0
+		}
+		if line >= numLines {
+			return numLines - 1
+		}
+		return line
+	}
+
 	for _, decl := range prog.Decls {
 		loc := decl.Loc()
+		startLine := clampLine(loc.Line - 1)
+		lineText := sourceLines[startLine]
+
 		switch d := decl.(type) {
 		case *compiler.PackageDecl:
-			symbols = append(symbols, documentSymbol{
-				Name:   d.Name,
-				Detail: "package " + d.Name,
-				Kind:   4, // Package
-				Range: map[string]any{
-					"start": map[string]int{"line": loc.Line - 1, "character": 0},
-					"end":   map[string]int{"line": loc.Line - 1, "character": loc.Col - 1 + len("package ") + len(d.Name)},
-				},
-				SelectionRange: map[string]any{
-					"start": map[string]int{"line": loc.Line - 1, "character": loc.Col - 1 + len("package ")},
-					"end":   map[string]int{"line": loc.Line - 1, "character": loc.Col - 1 + len("package ") + len(d.Name)},
-				},
-			})
-		case *compiler.ImportDecl:
-			name := d.Path
-			if d.Alias != "" {
-				name = d.Alias + " (" + d.Path + ")"
+			nameCol := findIdentifierOnLine(lineText, d.Name)
+			if nameCol == -1 {
+				nameCol = strings.Index(lineText, d.Name)
 			}
+			if nameCol == -1 {
+				nameCol = 0
+			}
+			nameLen := len(d.Name)
+			if nameCol+nameLen > len(lineText) {
+				nameLen = len(lineText) - nameCol
+				if nameLen < 0 {
+					nameLen = 0
+				}
+			}
+
 			symbols = append(symbols, documentSymbol{
-				Name:   name,
-				Detail: "import",
-				Kind:   2, // Module
-				Range: map[string]any{
-					"start": map[string]int{"line": loc.Line - 1, "character": 0},
-					"end":   map[string]int{"line": loc.Line - 1, "character": loc.Col - 1 + len("import")},
-				},
-				SelectionRange: map[string]any{
-					"start": map[string]int{"line": loc.Line - 1, "character": loc.Col - 1},
-					"end":   map[string]int{"line": loc.Line - 1, "character": loc.Col - 1 + len(d.Path)},
-				},
+				Name:           d.Name,
+				Detail:         "package " + d.Name,
+				Kind:           4, // Package
+				Range:          makeLspRange(startLine, 0, startLine, len(lineText)),
+				SelectionRange: makeLspRange(startLine, nameCol, startLine, nameCol+nameLen),
 			})
+
+		case *compiler.ImportDecl:
+			targetName := d.Path
+			if d.Alias != "" {
+				targetName = d.Alias
+			}
+			nameCol := findIdentifierOnLine(lineText, targetName)
+			if nameCol == -1 {
+				nameCol = strings.Index(lineText, targetName)
+			}
+			if nameCol == -1 {
+				nameCol = strings.Index(lineText, d.Path)
+			}
+			if nameCol == -1 {
+				nameCol = 0
+			}
+			targetLen := len(targetName)
+			if nameCol+targetLen > len(lineText) {
+				targetLen = len(lineText) - nameCol
+				if targetLen < 0 {
+					targetLen = 0
+				}
+			}
+
+			dispName := d.Path
+			if d.Alias != "" {
+				dispName = d.Alias + " (" + d.Path + ")"
+			}
+
+			symbols = append(symbols, documentSymbol{
+				Name:           dispName,
+				Detail:         "import",
+				Kind:           2, // Module
+				Range:          makeLspRange(startLine, 0, startLine, len(lineText)),
+				SelectionRange: makeLspRange(startLine, nameCol, startLine, nameCol+targetLen),
+			})
+
 		case *compiler.TraitDecl:
+			endLine, endChar := findMatchingBrace(sourceLines, startLine)
+			tName := shortName(d.Name)
+			nameCol := findIdentifierOnLine(lineText, tName)
+			if nameCol == -1 {
+				nameCol = strings.Index(lineText, tName)
+			}
+			if nameCol == -1 {
+				nameCol = 0
+			}
+			nameLen := len(tName)
+			if nameCol+nameLen > len(lineText) {
+				nameLen = len(lineText) - nameCol
+				if nameLen < 0 {
+					nameLen = 0
+				}
+			}
+
 			methods := []documentSymbol{}
 			for _, m := range d.Methods {
-				mLoc := m.At
+				mLine := clampLine(m.At.Line - 1)
+				if mLine < startLine {
+					mLine = startLine
+				}
+				if mLine > endLine {
+					mLine = endLine
+				}
+				mLineText := sourceLines[mLine]
+				mNameCol := findIdentifierOnLine(mLineText, m.Name)
+				if mNameCol == -1 {
+					mNameCol = strings.Index(mLineText, m.Name)
+				}
+				if mNameCol == -1 {
+					mNameCol = 0
+				}
+				mNameLen := len(m.Name)
+				if mNameCol+mNameLen > len(mLineText) {
+					mNameLen = len(mLineText) - mNameCol
+					if mNameLen < 0 {
+						mNameLen = 0
+					}
+				}
+
+				detail := "fn"
+				if m.RetType != nil {
+					detail = "fn -> " + m.RetType.String()
+				}
+
 				methods = append(methods, documentSymbol{
-					Name:   m.Name,
-					Detail: "fn",
-					Kind:   6, // Method
-					Range: map[string]any{
-						"start": map[string]int{"line": mLoc.Line - 1, "character": mLoc.Col - 1},
-						"end":   map[string]int{"line": mLoc.Line - 1, "character": mLoc.Col - 1 + len(m.Name)},
-					},
-					SelectionRange: map[string]any{
-						"start": map[string]int{"line": mLoc.Line - 1, "character": mLoc.Col - 1},
-						"end":   map[string]int{"line": mLoc.Line - 1, "character": mLoc.Col - 1 + len(m.Name)},
-					},
+					Name:           m.Name,
+					Detail:         detail,
+					Kind:           6, // Method
+					Range:          makeLspRange(mLine, 0, mLine, len(mLineText)),
+					SelectionRange: makeLspRange(mLine, mNameCol, mLine, mNameCol+mNameLen),
 				})
 			}
+
 			symbols = append(symbols, documentSymbol{
-				Name:     d.Name,
-				Detail:   "trait",
-				Kind:     11, // Interface
-				Children: methods,
-				Range: map[string]any{
-					"start": map[string]int{"line": loc.Line - 1, "character": loc.Col - 1},
-					"end":   map[string]int{"line": loc.Line - 1, "character": loc.Col - 1 + len(d.Name)},
-				},
-				SelectionRange: map[string]any{
-					"start": map[string]int{"line": loc.Line - 1, "character": loc.Col - 1},
-					"end":   map[string]int{"line": loc.Line - 1, "character": loc.Col - 1 + len(d.Name)},
-				},
+				Name:           tName,
+				Detail:         "trait",
+				Kind:           11, // Interface
+				Children:       methods,
+				Range:          makeLspRange(startLine, 0, endLine, endChar),
+				SelectionRange: makeLspRange(startLine, nameCol, startLine, nameCol+nameLen),
 			})
+
 		case *compiler.FnDecl:
+			endLine := startLine
+			endChar := len(lineText)
+			if d.Body != nil {
+				endLine, endChar = findMatchingBrace(sourceLines, startLine)
+			}
+
+			fnName := shortName(d.Name)
+			nameCol := findIdentifierOnLine(lineText, fnName)
+			if nameCol == -1 {
+				nameCol = strings.Index(lineText, fnName)
+			}
+			if nameCol == -1 {
+				nameCol = 0
+			}
+			nameLen := len(fnName)
+			if nameCol+nameLen > len(lineText) {
+				nameLen = len(lineText) - nameCol
+				if nameLen < 0 {
+					nameLen = 0
+				}
+			}
+
+			kind := 12 // Function
+			detail := "fn"
+			if d.Receiver != nil {
+				kind = 6 // Method
+				detail = fmt.Sprintf("(%s) fn", d.Receiver.Type)
+			}
+			if d.RetType != nil && d.RetType.String() != "void" {
+				detail += " -> " + d.RetType.String()
+			}
+
 			symbols = append(symbols, documentSymbol{
-				Name:   d.Name,
-				Detail: "fn",
-				Kind:   12, // Function
-				Range: map[string]any{
-					"start": map[string]int{"line": loc.Line - 1, "character": 0},
-					"end":   map[string]int{"line": loc.Line - 1, "character": 20},
-				},
-				SelectionRange: map[string]any{
-					"start": map[string]int{"line": loc.Line - 1, "character": loc.Col - 1},
-					"end":   map[string]int{"line": loc.Line - 1, "character": loc.Col - 1 + len(d.Name)},
-				},
+				Name:           fnName,
+				Detail:         detail,
+				Kind:           kind,
+				Range:          makeLspRange(startLine, 0, endLine, endChar),
+				SelectionRange: makeLspRange(startLine, nameCol, startLine, nameCol+nameLen),
 			})
+
 		case *compiler.StructDecl:
+			endLine, endChar := findMatchingBrace(sourceLines, startLine)
+			sName := shortName(d.Name)
+			nameCol := findIdentifierOnLine(lineText, sName)
+			if nameCol == -1 {
+				nameCol = strings.Index(lineText, sName)
+			}
+			if nameCol == -1 {
+				nameCol = 0
+			}
+			nameLen := len(sName)
+			if nameCol+nameLen > len(lineText) {
+				nameLen = len(lineText) - nameCol
+				if nameLen < 0 {
+					nameLen = 0
+				}
+			}
+
 			fields := []documentSymbol{}
+			searchLine := startLine
 			for _, f := range d.Fields {
+				fLine := -1
+				fCol := -1
+				for l := searchLine; l <= endLine && l < numLines; l++ {
+					col := findIdentifierOnLine(sourceLines[l], f.Name)
+					if col != -1 {
+						fLine = l
+						fCol = col
+						searchLine = l
+						break
+					}
+				}
+				if fLine == -1 {
+					fLine = startLine
+					fCol = 0
+				}
+				fLineText := sourceLines[fLine]
+				fNameLen := len(f.Name)
+				if fCol+fNameLen > len(fLineText) {
+					fNameLen = len(fLineText) - fCol
+					if fNameLen < 0 {
+						fNameLen = 0
+					}
+				}
+
 				fields = append(fields, documentSymbol{
-					Name:   f.Name,
-					Detail: f.Type.String(),
-					Kind:   8, // Field
-					Range: map[string]any{
-						"start": map[string]int{"line": loc.Line - 1, "character": 0},
-						"end":   map[string]int{"line": loc.Line - 1, "character": 20},
-					},
-					SelectionRange: map[string]any{
-						"start": map[string]int{"line": loc.Line - 1, "character": 0},
-						"end":   map[string]int{"line": loc.Line - 1, "character": len(f.Name)},
-					},
+					Name:           f.Name,
+					Detail:         f.Type.String(),
+					Kind:           8, // Field
+					Range:          makeLspRange(fLine, 0, fLine, len(fLineText)),
+					SelectionRange: makeLspRange(fLine, fCol, fLine, fCol+fNameLen),
 				})
 			}
+
 			symbols = append(symbols, documentSymbol{
-				Name:     d.Name,
-				Detail:   "struct",
-				Kind:     23, // Struct
-				Children: fields,
-				Range: map[string]any{
-					"start": map[string]int{"line": loc.Line - 1, "character": 0},
-					"end":   map[string]int{"line": loc.Line - 1, "character": 20},
-				},
-				SelectionRange: map[string]any{
-					"start": map[string]int{"line": loc.Line - 1, "character": loc.Col - 1},
-					"end":   map[string]int{"line": loc.Line - 1, "character": loc.Col - 1 + len(d.Name)},
-				},
+				Name:           sName,
+				Detail:         "struct",
+				Kind:           23, // Struct
+				Children:       fields,
+				Range:          makeLspRange(startLine, 0, endLine, endChar),
+				SelectionRange: makeLspRange(startLine, nameCol, startLine, nameCol+nameLen),
 			})
+
 		case *compiler.EnumDecl:
+			endLine, endChar := findMatchingBrace(sourceLines, startLine)
+			eName := shortName(d.Name)
+			nameCol := findIdentifierOnLine(lineText, eName)
+			if nameCol == -1 {
+				nameCol = strings.Index(lineText, eName)
+			}
+			if nameCol == -1 {
+				nameCol = 0
+			}
+			nameLen := len(eName)
+			if nameCol+nameLen > len(lineText) {
+				nameLen = len(lineText) - nameCol
+				if nameLen < 0 {
+					nameLen = 0
+				}
+			}
+
+			variants := []documentSymbol{}
+			searchLine := startLine
+			for _, v := range d.Variants {
+				vLine := -1
+				vCol := -1
+				for l := searchLine; l <= endLine && l < numLines; l++ {
+					col := findIdentifierOnLine(sourceLines[l], v.Name)
+					if col != -1 {
+						vLine = l
+						vCol = col
+						searchLine = l
+						break
+					}
+				}
+				if vLine == -1 {
+					vLine = startLine
+					vCol = 0
+				}
+				vLineText := sourceLines[vLine]
+				vNameLen := len(v.Name)
+				if vCol+vNameLen > len(vLineText) {
+					vNameLen = len(vLineText) - vCol
+					if vNameLen < 0 {
+						vNameLen = 0
+					}
+				}
+
+				detail := ""
+				if len(v.Types) > 0 {
+					var tStrs []string
+					for _, vt := range v.Types {
+						tStrs = append(tStrs, vt.String())
+					}
+					detail = "(" + strings.Join(tStrs, ", ") + ")"
+				}
+
+				variants = append(variants, documentSymbol{
+					Name:           v.Name,
+					Detail:         detail,
+					Kind:           22, // EnumMember
+					Range:          makeLspRange(vLine, 0, vLine, len(vLineText)),
+					SelectionRange: makeLspRange(vLine, vCol, vLine, vCol+vNameLen),
+				})
+			}
+
 			symbols = append(symbols, documentSymbol{
-				Name:   d.Name,
-				Detail: "enum",
-				Kind:   10, // Enum
-				Range: map[string]any{
-					"start": map[string]int{"line": loc.Line - 1, "character": 0},
-					"end":   map[string]int{"line": loc.Line - 1, "character": 20},
-				},
-				SelectionRange: map[string]any{
-					"start": map[string]int{"line": loc.Line - 1, "character": loc.Col - 1},
-					"end":   map[string]int{"line": loc.Line - 1, "character": loc.Col - 1 + len(d.Name)},
-				},
+				Name:           eName,
+				Detail:         "enum",
+				Kind:           10, // Enum
+				Children:       variants,
+				Range:          makeLspRange(startLine, 0, endLine, endChar),
+				SelectionRange: makeLspRange(startLine, nameCol, startLine, nameCol+nameLen),
+			})
+
+		case *compiler.ExternFnDecl:
+			fnName := d.Name
+			nameCol := findIdentifierOnLine(lineText, fnName)
+			if nameCol == -1 {
+				nameCol = strings.Index(lineText, fnName)
+			}
+			if nameCol == -1 {
+				nameCol = 0
+			}
+			nameLen := len(fnName)
+			if nameCol+nameLen > len(lineText) {
+				nameLen = len(lineText) - nameCol
+				if nameLen < 0 {
+					nameLen = 0
+				}
+			}
+
+			detail := "extern fn"
+			if d.RetType != nil && d.RetType.String() != "void" {
+				detail += " -> " + d.RetType.String()
+			}
+
+			symbols = append(symbols, documentSymbol{
+				Name:           fnName,
+				Detail:         detail,
+				Kind:           12, // Function
+				Range:          makeLspRange(startLine, 0, startLine, len(lineText)),
+				SelectionRange: makeLspRange(startLine, nameCol, startLine, nameCol+nameLen),
 			})
 		}
 	}

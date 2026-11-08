@@ -199,3 +199,74 @@ func TestLSP_SignatureHelp_QualifiedCall(t *testing.T) {
 		t.Errorf("expected clamp signature, got %v", sig)
 	}
 }
+
+func TestLSP_DocumentSymbols_Containment(t *testing.T) {
+	source := `package main
+
+import "./helpers" as geo
+import "std/collections"
+
+struct VeryLongStructNameForTestingContainment {
+    very_long_field_name_one: i32,
+    very_long_field_name_two: string,
+}
+
+enum ActionChoice {
+    FirstVariant(i32),
+    SecondVariantWithVeryLongName(f32, f32),
+}
+
+trait ActionPerformer {
+    fn perform_very_long_action_name(x: i32) -> bool
+}
+
+fn test_qualified_struct_instantiation_with_very_long_function_name() {
+    let x = 10
+}
+`
+	syms := DocumentSymbols("file:///main.ube", source)
+	if len(syms) == 0 {
+		t.Fatal("expected document symbols, got none")
+	}
+
+	var validateSymbol func(s documentSymbol)
+	validateSymbol = func(s documentSymbol) {
+		rStart := s.Range["start"].(map[string]int)
+		rEnd := s.Range["end"].(map[string]int)
+		sStart := s.SelectionRange["start"].(map[string]int)
+		sEnd := s.SelectionRange["end"].(map[string]int)
+
+		// selectionRange must start at or after range start.
+		if sStart["line"] < rStart["line"] || (sStart["line"] == rStart["line"] && sStart["character"] < rStart["character"]) {
+			t.Fatalf("symbol %s: selectionRange start (%d:%d) precedes range start (%d:%d)",
+				s.Name, sStart["line"], sStart["character"], rStart["line"], rStart["character"])
+		}
+
+		// selectionRange must end at or before range end.
+		if sEnd["line"] > rEnd["line"] || (sEnd["line"] == rEnd["line"] && sEnd["character"] > rEnd["character"]) {
+			t.Fatalf("symbol %s: selectionRange end (%d:%d) exceeds range end (%d:%d)",
+				s.Name, sEnd["line"], sEnd["character"], rEnd["line"], rEnd["character"])
+		}
+
+		// Children must be contained in the parent range.
+		for _, child := range s.Children {
+			cStart := child.Range["start"].(map[string]int)
+			cEnd := child.Range["end"].(map[string]int)
+
+			if cStart["line"] < rStart["line"] || (cStart["line"] == rStart["line"] && cStart["character"] < rStart["character"]) {
+				t.Fatalf("child %s of %s: range start (%d:%d) precedes parent start (%d:%d)",
+					child.Name, s.Name, cStart["line"], cStart["character"], rStart["line"], rStart["character"])
+			}
+			if cEnd["line"] > rEnd["line"] || (cEnd["line"] == rEnd["line"] && cEnd["character"] > rEnd["character"]) {
+				t.Fatalf("child %s of %s: range end (%d:%d) exceeds parent end (%d:%d)",
+					child.Name, s.Name, cEnd["line"], cEnd["character"], rEnd["line"], rEnd["character"])
+			}
+
+			validateSymbol(child)
+		}
+	}
+
+	for _, s := range syms {
+		validateSymbol(s)
+	}
+}
