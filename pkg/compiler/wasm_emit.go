@@ -3065,7 +3065,28 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 					optHdr := ctx.allocLocal(valTypeI32)
 					ctx.emitAlloc(buf, 8, optHdr)
 
-					// header.len = header.len - 1
+					// if header.len == 0 { optHdr[0] = 0 } else { ... }
+					buf.WriteByte(0x20)
+					writeUleb128(buf, slLocal)
+					buf.WriteByte(0x28) // i32.load header.len
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 4)
+					buf.WriteByte(0x45) // i32.eqz
+					buf.WriteByte(0x04) // if
+					buf.WriteByte(valTypeVoid)
+
+					// Empty slice: optHdr[0] = 0 (none)
+					buf.WriteByte(0x20)
+					writeUleb128(buf, optHdr)
+					buf.WriteByte(0x41)
+					writeSleb128(buf, 0)
+					buf.WriteByte(0x36)
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 0)
+
+					buf.WriteByte(0x05) // else
+
+					// Non-empty: header.len = header.len - 1
 					buf.WriteByte(0x20)
 					writeUleb128(buf, slLocal)
 					buf.WriteByte(0x20)
@@ -3080,7 +3101,7 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 					writeUleb128(buf, 2)
 					writeUleb128(buf, 4)
 
-					// optHdr[0] = 1
+					// optHdr[0] = 1 (some)
 					buf.WriteByte(0x20)
 					writeUleb128(buf, optHdr)
 					buf.WriteByte(0x41)
@@ -3114,6 +3135,8 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 					buf.WriteByte(0x36)
 					writeUleb128(buf, 2)
 					writeUleb128(buf, 4)
+
+					buf.WriteByte(0x0b) // end if
 
 					buf.WriteByte(0x20)
 					writeUleb128(buf, optHdr)
