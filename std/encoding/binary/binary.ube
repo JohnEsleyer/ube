@@ -1,0 +1,226 @@
+package binary
+
+// File: std/encoding/binary/binary.ube
+//
+// Zero-allocation little-endian and big-endian primitive readers/writers for
+// byte buffers, plus a stateful ByteReader convenience wrapper.
+
+pub fn read_u8(data: []u8, offset: i32) -> u8 {
+    return data[offset]
+}
+
+pub fn read_u16_le(data: []u8, offset: i32) -> u16 {
+    let b0 = data[offset] as u16
+    let b1 = data[offset + 1] as u16
+    return b0 | (b1 << 8)
+}
+
+pub fn read_u16_be(data: []u8, offset: i32) -> u16 {
+    let b0 = data[offset] as u16
+    let b1 = data[offset + 1] as u16
+    return (b0 << 8) | b1
+}
+
+pub fn read_i16_le(data: []u8, offset: i32) -> i16 {
+    return read_u16_le(data, offset) as i16
+}
+
+pub fn read_i16_be(data: []u8, offset: i32) -> i16 {
+    return read_u16_be(data, offset) as i16
+}
+
+pub fn read_u32_le(data: []u8, offset: i32) -> u32 {
+    let b0 = data[offset] as u32
+    let b1 = data[offset + 1] as u32
+    let b2 = data[offset + 2] as u32
+    let b3 = data[offset + 3] as u32
+    return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+}
+
+pub fn read_u32_be(data: []u8, offset: i32) -> u32 {
+    let b0 = data[offset] as u32
+    let b1 = data[offset + 1] as u32
+    let b2 = data[offset + 2] as u32
+    let b3 = data[offset + 3] as u32
+    return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
+}
+
+pub fn read_i32_le(data: []u8, offset: i32) -> i32 {
+    return read_u32_le(data, offset) as i32
+}
+
+pub fn read_i32_be(data: []u8, offset: i32) -> i32 {
+    return read_u32_be(data, offset) as i32
+}
+
+pub fn read_u64_le(data: []u8, offset: i32) -> u64 {
+    let l = read_u32_le(data, offset) as u64
+    let h = read_u32_le(data, offset + 4) as u64
+    return l | (h << 32)
+}
+
+pub fn read_u64_be(data: []u8, offset: i32) -> u64 {
+    let h = read_u32_be(data, offset) as u64
+    let l = read_u32_be(data, offset + 4) as u64
+    return (h << 32) | l
+}
+
+pub fn read_i64_le(data: []u8, offset: i32) -> i64 {
+    return read_u64_le(data, offset) as i64
+}
+
+pub fn read_i64_be(data: []u8, offset: i32) -> i64 {
+    return read_u64_be(data, offset) as i64
+}
+
+pub fn read_f32_le(data: []u8, offset: i32) -> f32 {
+    return read_u32_le(data, offset) as f32
+}
+
+pub fn read_f32_be(data: []u8, offset: i32) -> f32 {
+    return read_u32_be(data, offset) as f32
+}
+
+pub fn write_u16_le(mut buf: []u8, offset: i32, val: u16) {
+    buf[offset] = (val & 255) as u8
+    buf[offset + 1] = ((val >> 8) & 255) as u8
+}
+
+pub fn write_u16_be(mut buf: []u8, offset: i32, val: u16) {
+    buf[offset] = ((val >> 8) & 255) as u8
+    buf[offset + 1] = (val & 255) as u8
+}
+
+pub fn write_u32_le(mut buf: []u8, offset: i32, val: u32) {
+    buf[offset] = (val & 255) as u8
+    buf[offset + 1] = ((val >> 8) & 255) as u8
+    buf[offset + 2] = ((val >> 16) & 255) as u8
+    buf[offset + 3] = ((val >> 24) & 255) as u8
+}
+
+pub fn write_u32_be(mut buf: []u8, offset: i32, val: u32) {
+    buf[offset] = ((val >> 24) & 255) as u8
+    buf[offset + 1] = ((val >> 16) & 255) as u8
+    buf[offset + 2] = ((val >> 8) & 255) as u8
+    buf[offset + 3] = (val & 255) as u8
+}
+
+pub fn write_i32_le(mut buf: []u8, offset: i32, val: i32) {
+    write_u32_le(mut buf, offset, val as u32)
+}
+
+pub fn write_i32_be(mut buf: []u8, offset: i32, val: i32) {
+    write_u32_be(mut buf, offset, val as u32)
+}
+
+pub fn put_u8(mut buf: []u8, val: u8) {
+    buf.push(val)
+}
+
+pub fn put_u16_le(mut buf: []u8, val: u16) {
+    buf.push((val & 255) as u8)
+    buf.push(((val >> 8) & 255) as u8)
+}
+
+pub fn put_u16_be(mut buf: []u8, val: u16) {
+    buf.push(((val >> 8) & 255) as u8)
+    buf.push((val & 255) as u8)
+}
+
+pub fn put_u32_le(mut buf: []u8, val: u32) {
+    buf.push((val & 255) as u8)
+    buf.push(((val >> 8) & 255) as u8)
+    buf.push(((val >> 16) & 255) as u8)
+    buf.push(((val >> 24) & 255) as u8)
+}
+
+pub fn put_u32_be(mut buf: []u8, val: u32) {
+    buf.push(((val >> 24) & 255) as u8)
+    buf.push(((val >> 16) & 255) as u8)
+    buf.push(((val >> 8) & 255) as u8)
+    buf.push((val & 255) as u8)
+}
+
+pub fn put_i32_le(mut buf: []u8, val: i32) {
+    put_u32_le(mut buf, val as u32)
+}
+
+pub fn put_i32_be(mut buf: []u8, val: i32) {
+    put_u32_be(mut buf, val as u32)
+}
+
+pub fn put_u64_le(mut buf: []u8, val: u64) {
+    put_u32_le(mut buf, (val & 0xFFFFFFFF) as u32)
+    put_u32_le(mut buf, ((val >> 32) & 0xFFFFFFFF) as u32)
+}
+
+pub fn put_u64_be(mut buf: []u8, val: u64) {
+    put_u32_be(mut buf, ((val >> 32) & 0xFFFFFFFF) as u32)
+    put_u32_be(mut buf, (val & 0xFFFFFFFF) as u32)
+}
+
+pub fn put_i64_le(mut buf: []u8, val: i64) {
+    put_u64_le(mut buf, val as u64)
+}
+
+pub fn put_i64_be(mut buf: []u8, val: i64) {
+    put_u64_be(mut buf, val as u64)
+}
+
+pub struct ByteReader {
+    pub data: []u8,
+    pub pos: i32
+}
+
+pub fn reader_new(data: []u8) -> ByteReader {
+    return ByteReader{ data: data, pos: 0 }
+}
+
+pub fn (r ByteReader) remaining() -> i32 {
+    return r.data.len - r.pos
+}
+
+pub fn (mut r ByteReader) read_u8() -> u8 ! string {
+    if r.pos >= r.data.len {
+        return error("unexpected end of binary data")
+    }
+    let b = r.data[r.pos]
+    r.pos += 1
+    return b
+}
+
+pub fn (mut r ByteReader) read_u16_le() -> u16 ! string {
+    if r.pos + 2 > r.data.len {
+        return error("unexpected end of binary data")
+    }
+    let v = read_u16_le(r.data, r.pos)
+    r.pos += 2
+    return v
+}
+
+pub fn (mut r ByteReader) read_u32_le() -> u32 ! string {
+    if r.pos + 4 > r.data.len {
+        return error("unexpected end of binary data")
+    }
+    let v = read_u32_le(r.data, r.pos)
+    r.pos += 4
+    return v
+}
+
+pub fn (mut r ByteReader) read_i32_le() -> i32 ! string {
+    return r.read_u32_le()? as i32
+}
+
+pub fn (mut r ByteReader) read_bytes(count: i32) -> []u8 ! string {
+    if r.pos + count > r.data.len {
+        return error("unexpected end of binary data")
+    }
+    let mut out = []u8{}
+    let mut i = 0
+    while i < count {
+        out.push(r.data[r.pos + i])
+        i += 1
+    }
+    r.pos += count
+    return out
+}

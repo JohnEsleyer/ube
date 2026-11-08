@@ -159,6 +159,16 @@ func (m *Monomorphizer) Process(prog *Program) error {
 					}
 					return CustomType{Name: name}, nil
 				}
+				// Generic literals parsed inside a template keep their
+				// unqualified base name. Resolve it through the same
+				// short-name fallback used by specializeStruct.
+				if _, _, ok := m.lookupGenericStructByShortName(v.Base); ok {
+					name, _, err := m.specializeStruct(v.Base, args, &pending)
+					if err != nil {
+						return nil, err
+					}
+					return CustomType{Name: name}, nil
+				}
 				return GenericInstanceType{Base: v.Base, TypeArgs: args}, nil
 			case SliceType:
 				el, err := scanType(v.Elem)

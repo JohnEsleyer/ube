@@ -1,0 +1,116 @@
+package hash
+
+// File: std/hash/hash.ube
+//
+// Non-cryptographic hashing for hash tables, checksums, and asset validation.
+
+pub fn fnv1a_32(data: []u8) -> u32 {
+    let mut h: u32 = 2166136261
+    for b in data {
+        h = h ^ (b as u32)
+        h = h * 16777619
+    }
+    return h
+}
+
+pub fn fnv1a_32_str(s: string) -> u32 {
+    return fnv1a_32(s.bytes())
+}
+
+pub fn fnv1a_64(data: []u8) -> u64 {
+    let mut h: u64 = 14695981039346656037
+    let prime: u64 = 1099511628211
+    for b in data {
+        h = h ^ (b as u64)
+        h = h * prime
+    }
+    return h
+}
+
+pub fn fnv1a_64_str(s: string) -> u64 {
+    return fnv1a_64(s.bytes())
+}
+
+pub fn murmur3_32(data: []u8, seed: u32) -> u32 {
+    let mut h: u32 = seed
+    let c1: u32 = 0xcc9e2d51
+    let c2: u32 = 0x1b873593
+
+    let nblocks = data.len / 4
+    let mut i = 0
+    while i < nblocks {
+        let off = i * 4
+        let b0 = data[off] as u32
+        let b1 = data[off + 1] as u32
+        let b2 = data[off + 2] as u32
+        let b3 = data[off + 3] as u32
+        let mut k: u32 = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+
+        k = k * c1
+        k = (k << 15) | (k >> 17)
+        k = k * c2
+
+        h = h ^ k
+        h = (h << 13) | (h >> 19)
+        h = h * 5 + 0xe6546b64
+        i += 1
+    }
+
+    let tail_off = nblocks * 4
+    let rem = data.len & 3
+    let mut k1: u32 = 0
+    if rem >= 3 {
+        k1 = k1 ^ ((data[tail_off + 2] as u32) << 16)
+    }
+    if rem >= 2 {
+        k1 = k1 ^ ((data[tail_off + 1] as u32) << 8)
+    }
+    if rem >= 1 {
+        k1 = k1 ^ (data[tail_off] as u32)
+        k1 = k1 * c1
+        k1 = (k1 << 15) | (k1 >> 17)
+        k1 = k1 * c2
+        h = h ^ k1
+    }
+
+    h = h ^ (data.len as u32)
+    h = h ^ (h >> 16)
+    h = h * 0x85ebca6b
+    h = h ^ (h >> 13)
+    h = h * 0xc2b2ae35
+    h = h ^ (h >> 16)
+    return h
+}
+
+pub fn murmur3_32_str(s: string, seed: u32) -> u32 {
+    return murmur3_32(s.bytes(), seed)
+}
+
+pub fn crc32(data: []u8) -> u32 {
+    let mut crc: u32 = 0xFFFFFFFF
+    for b in data {
+        crc = crc ^ (b as u32)
+        let mut j = 0
+        while j < 8 {
+            let mask = -((crc & 1) as i32) as u32
+            crc = (crc >> 1) ^ (0xEDB88320 & mask)
+            j += 1
+        }
+    }
+    return crc ^ 0xFFFFFFFF
+}
+
+pub fn crc32_str(s: string) -> u32 {
+    return crc32(s.bytes())
+}
+
+pub fn adler32(data: []u8) -> u32 {
+    let mut a: u32 = 1
+    let mut b: u32 = 0
+    let mod_val: u32 = 65521
+    for byte_val in data {
+        a = (a + (byte_val as u32)) % mod_val
+        b = (b + a) % mod_val
+    }
+    return (b << 16) | a
+}

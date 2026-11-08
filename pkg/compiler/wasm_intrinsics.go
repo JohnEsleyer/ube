@@ -167,6 +167,20 @@ func (ctx *fnContext) compileSpecialCall(buf *bytes.Buffer, e *CallExpr) (bool, 
 	}
 
 	switch id.Name {
+	case "time_now_ms":
+		return true, ctx.compileClockNow(buf, 0, true) // CLOCK_REALTIME, milliseconds
+	case "time_now_ns":
+		return true, ctx.compileClockNow(buf, 1, false) // CLOCK_MONOTONIC, nanoseconds
+	case "exit_process":
+		return true, ctx.compileExitProcess(buf, e.Args)
+	case "sleep_ms":
+		return true, ctx.compileSleepMs(buf, e.Args)
+	case "os_args":
+		return true, ctx.compileWasiStringList(buf, "args_sizes_get", "args_get")
+	case "os_environ":
+		return true, ctx.compileWasiStringList(buf, "environ_sizes_get", "environ_get")
+	case "random_get_u64":
+		return true, ctx.compileRandomU64(buf)
 	case "wasi_fd_write_raw", "wasi_fd_read_raw", "wasi_fd_write_string_raw":
 		return true, ctx.compileFdIO(buf, id.Name, e.Args)
 	case "wasi_path_open_raw":
@@ -203,6 +217,263 @@ func (ctx *fnContext) compileSpecialCall(buf *bytes.Buffer, e *CallExpr) (bool, 
 		return true, nil
 	}
 	return false, nil
+}
+
+// compileClockNow emits clock_time_get(clockID, precision, out) and leaves the
+// resulting i64 nanosecond timestamp on the stack. When millis is true the
+// value is divided by 1_000_000 to produce milliseconds.
+func (ctx *fnContext) compileClockNow(buf *bytes.Buffer, clockID int32, millis bool) error {
+	emitI32Const(buf, clockID)
+	buf.WriteByte(0x42) // i64.const precision (1ns)
+	writeSleb128_64(buf, 1)
+	emitI32Const(buf, scratchSeekPos)
+	emitCallIdx(buf, ctx.wasiIdx("clock_time_get"))
+	buf.WriteByte(0x1a) // drop errno
+
+	emitI32Const(buf, scratchSeekPos)
+	buf.WriteByte(0x29) // i64.load
+	writeUleb128(buf, 3)
+	writeUleb128(buf, 0)
+	if millis {
+		buf.WriteByte(0x42) // i64.const 1_000_000
+		writeSleb128_64(buf, 1000000)
+		buf.WriteByte(0x80) // i64.div_u
+	}
+	return nil
+}
+
+// compileExitProcess calls WASI proc_exit and marks the following code
+// unreachable. proc_exit is noreturn, so the unreachable instruction keeps the
+// enclosing block well-typed.
+func (ctx *fnContext) compileExitProcess(buf *bytes.Buffer, args []Expr) error {
+	if len(args) != 1 {
+		return nil
+	}
+	if err := ctx.compileExpr(buf, args[0]); err != nil {
+		return err
+	}
+	emitCallIdx(buf, ctx.wasiIdx("proc_exit"))
+	buf.WriteByte(0x00) // unreachable
+	return nil
+}
+
+// compileSleepMs busy-waits on CLOCK_MONOTONIC. WASI preview1 exposes no
+// portable sleep syscall, but poll_oneoff is overkill for the short delays
+// used by benchmarks and tests; a monotonic spin is deterministic and keeps
+// the runtime surface small.
+func (ctx *fnContext) compileSleepMs(buf *bytes.Buffer, args []Expr) error {
+	if len(args) != 1 {
+		return nil
+	}
+	msLocal := ctx.allocLocal(valTypeI64)
+	if err := ctx.compileExpr(buf, args[0]); err != nil {
+		return err
+	}
+	buf.WriteByte(0xad) // i64.extend_i32_s
+	buf.WriteByte(0x42) // i64.const 1_000_000
+	writeSleb128_64(buf, 1000000)
+	buf.WriteByte(0x7e) // i64.mul
+	buf.WriteByte(0x21)
+	writeUleb128(buf, msLocal)
+
+	startLocal := ctx.allocLocal(valTypeI64)
+	emitI32Const(buf, 1) // CLOCK_MONOTONIC
+	buf.WriteByte(0x42)
+	writeSleb128_64(buf, 1)
+	emitI32Const(buf, scratchSeekPos)
+	emitCallIdx(buf, ctx.wasiIdx("clock_time_get"))
+	buf.WriteByte(0x1a)
+	emitI32Const(buf, scratchSeekPos)
+	buf.WriteByte(0x29) // i64.load
+	writeUleb128(buf, 3)
+	writeUleb128(buf, 0)
+	buf.WriteByte(0x21)
+	writeUleb128(buf, startLocal)
+
+	buf.WriteByte(0x02) // block
+	buf.WriteByte(valTypeVoid)
+	buf.WriteByte(0x03) // loop
+	buf.WriteByte(valTypeVoid)
+
+	emitI32Const(buf, 1)
+	buf.WriteByte(0x42)
+	writeSleb128_64(buf, 1)
+	emitI32Const(buf, scratchSeekPos)
+	emitCallIdx(buf, ctx.wasiIdx("clock_time_get"))
+	buf.WriteByte(0x1a)
+	emitI32Const(buf, scratchSeekPos)
+	buf.WriteByte(0x29)
+	writeUleb128(buf, 3)
+	writeUleb128(buf, 0)
+	buf.WriteByte(0x20) // local.get start
+	writeUleb128(buf, startLocal)
+	buf.WriteByte(0x7d) // i64.sub
+	buf.WriteByte(0x20) // local.get target
+	writeUleb128(buf, msLocal)
+	buf.WriteByte(0x59) // i64.ge_s
+	buf.WriteByte(0x0d) // br_if exit
+	writeUleb128(buf, 1)
+	buf.WriteByte(0x0c) // br loop
+	writeUleb128(buf, 0)
+	buf.WriteByte(0x0b) // end loop
+	buf.WriteByte(0x0b) // end block
+	return nil
+}
+
+// compileRandomU64 reads eight bytes from WASI random_get and returns them as
+// a u64. Used by std/random's entropy-seeded constructor.
+func (ctx *fnContext) compileRandomU64(buf *bytes.Buffer) error {
+	ptr := ctx.allocLocal(valTypeI32)
+	ctx.emitAlloc(buf, 8, ptr)
+	emitLocalGet(buf, ptr)
+	emitI32Const(buf, 8)
+	emitCallIdx(buf, ctx.wasiIdx("random_get"))
+	buf.WriteByte(0x1a) // drop errno
+	emitLocalGet(buf, ptr)
+	buf.WriteByte(0x29) // i64.load
+	writeUleb128(buf, 3)
+	writeUleb128(buf, 0)
+	return nil
+}
+
+// compileWasiStringList reads a WASI string vector (argv or environ) into a
+// freshly allocated []string. The returned slice header is {ptr, len, cap};
+// each element is a 4-byte pointer to an 8-byte string header {ptr, len}.
+func (ctx *fnContext) compileWasiStringList(buf *bytes.Buffer, sizesName, getName string) error {
+	sizesLocal := ctx.allocLocal(valTypeI32)
+	ctx.emitAlloc(buf, 8, sizesLocal)
+	emitLocalGet(buf, sizesLocal)
+	emitLocalGet(buf, sizesLocal)
+	emitI32Const(buf, 4)
+	buf.WriteByte(0x6a) // i32.add
+	emitCallIdx(buf, ctx.wasiIdx(sizesName))
+	buf.WriteByte(0x1a) // drop errno
+
+	countLocal := ctx.allocLocal(valTypeI32)
+	emitLocalGet(buf, sizesLocal)
+	emitI32Load(buf, 0, 2)
+	emitLocalSet(buf, countLocal)
+
+	bufSizeLocal := ctx.allocLocal(valTypeI32)
+	emitLocalGet(buf, sizesLocal)
+	emitI32Load(buf, 4, 2)
+	emitLocalSet(buf, bufSizeLocal)
+
+	ptrArraySizeLocal := ctx.allocLocal(valTypeI32)
+	emitLocalGet(buf, countLocal)
+	emitI32Const(buf, 4)
+	buf.WriteByte(0x6c) // i32.mul
+	emitLocalSet(buf, ptrArraySizeLocal)
+
+	ptrArrayLocal := ctx.allocLocal(valTypeI32)
+	ctx.emitAllocDyn(buf, ptrArraySizeLocal, ptrArrayLocal)
+
+	rawBufLocal := ctx.allocLocal(valTypeI32)
+	ctx.emitAllocDyn(buf, bufSizeLocal, rawBufLocal)
+
+	emitLocalGet(buf, ptrArrayLocal)
+	emitLocalGet(buf, rawBufLocal)
+	emitCallIdx(buf, ctx.wasiIdx(getName))
+	buf.WriteByte(0x1a) // drop errno
+
+	headerSizeLocal := ctx.allocLocal(valTypeI32)
+	emitLocalGet(buf, countLocal)
+	emitI32Const(buf, 8)
+	buf.WriteByte(0x6c) // i32.mul
+	emitLocalSet(buf, headerSizeLocal)
+
+	headersLocal := ctx.allocLocal(valTypeI32)
+	ctx.emitAllocDyn(buf, headerSizeLocal, headersLocal)
+
+	idxLocal := ctx.allocLocal(valTypeI32)
+	emitI32Const(buf, 0)
+	emitLocalSet(buf, idxLocal)
+
+	buf.WriteByte(0x02) // block exit
+	buf.WriteByte(valTypeVoid)
+	buf.WriteByte(0x03) // loop
+	buf.WriteByte(valTypeVoid)
+
+	// if idx >= count { break }
+	emitLocalGet(buf, idxLocal)
+	emitLocalGet(buf, countLocal)
+	buf.WriteByte(0x4f) // i32.ge_u
+	buf.WriteByte(0x0d) // br_if
+	writeUleb128(buf, 1)
+
+	strPtrLocal := ctx.allocLocal(valTypeI32)
+	emitLocalGet(buf, ptrArrayLocal)
+	emitLocalGet(buf, idxLocal)
+	emitI32Const(buf, 4)
+	buf.WriteByte(0x6c) // i32.mul
+	buf.WriteByte(0x6a) // i32.add
+	emitI32Load(buf, 0, 2)
+	emitLocalSet(buf, strPtrLocal)
+
+	lenLocal := ctx.allocLocal(valTypeI32)
+	emitI32Const(buf, 0)
+	emitLocalSet(buf, lenLocal)
+
+	buf.WriteByte(0x02) // block strlen-exit
+	buf.WriteByte(valTypeVoid)
+	buf.WriteByte(0x03) // loop strlen
+	buf.WriteByte(valTypeVoid)
+	emitLocalGet(buf, strPtrLocal)
+	emitLocalGet(buf, lenLocal)
+	buf.WriteByte(0x6a) // i32.add
+	buf.WriteByte(0x2d) // i32.load8_u
+	writeUleb128(buf, 0)
+	writeUleb128(buf, 0)
+	buf.WriteByte(0x45) // i32.eqz
+	buf.WriteByte(0x0d) // br_if strlen-exit
+	writeUleb128(buf, 1)
+	emitLocalGet(buf, lenLocal)
+	emitI32Const(buf, 1)
+	buf.WriteByte(0x6a)
+	emitLocalSet(buf, lenLocal)
+	buf.WriteByte(0x0c) // continue
+	writeUleb128(buf, 0)
+	buf.WriteByte(0x0b) // end loop
+	buf.WriteByte(0x0b) // end block
+
+	// headers[idx] = { strPtr, len }
+	emitLocalGet(buf, headersLocal)
+	emitLocalGet(buf, idxLocal)
+	emitI32Const(buf, 8)
+	buf.WriteByte(0x6c)
+	buf.WriteByte(0x6a)
+	emitLocalGet(buf, strPtrLocal)
+	emitI32Store(buf, 0, 2)
+	emitLocalGet(buf, headersLocal)
+	emitLocalGet(buf, idxLocal)
+	emitI32Const(buf, 8)
+	buf.WriteByte(0x6c)
+	buf.WriteByte(0x6a)
+	emitLocalGet(buf, lenLocal)
+	emitI32Store(buf, 4, 2)
+
+	emitLocalGet(buf, idxLocal)
+	emitI32Const(buf, 1)
+	buf.WriteByte(0x6a)
+	emitLocalSet(buf, idxLocal)
+	buf.WriteByte(0x0c) // continue outer
+	writeUleb128(buf, 0)
+	buf.WriteByte(0x0b) // end loop
+	buf.WriteByte(0x0b) // end block
+
+	sliceLocal := ctx.allocLocal(valTypeI32)
+	ctx.emitAlloc(buf, 12, sliceLocal)
+	emitLocalGet(buf, sliceLocal)
+	emitLocalGet(buf, headersLocal)
+	emitI32Store(buf, 0, 2)
+	emitLocalGet(buf, sliceLocal)
+	emitLocalGet(buf, countLocal)
+	emitI32Store(buf, 4, 2)
+	emitLocalGet(buf, sliceLocal)
+	emitLocalGet(buf, countLocal)
+	emitI32Store(buf, 8, 2)
+	emitLocalGet(buf, sliceLocal)
+	return nil
 }
 
 func (ctx *fnContext) compileFdIO(buf *bytes.Buffer, name string, args []Expr) error {
@@ -493,7 +764,7 @@ func (ctx *fnContext) callReturnsValue(call *CallExpr) bool {
 	}
 	if id, ok := call.Callee.(*IdentExpr); ok {
 		switch id.Name {
-		case "println", "print":
+		case "println", "print", "sleep_ms", "exit_process":
 			return false
 		}
 		if ret, ok := ctx.emitter.fnReturns[id.Name]; ok {

@@ -1,0 +1,58 @@
+package hex
+
+// File: std/encoding/hex/hex.ube
+//
+// Hexadecimal encoding/decoding for byte buffers and strings.
+
+pub fn encode(data: []u8) -> string {
+    let hex_chars = "0123456789abcdef"
+    let mut sb = StringBuilder.new(data.len * 2)
+    for b in data {
+        let hi = ((b >> 4) & 15) as i32
+        let lo = (b & 15) as i32
+        sb.append_char(hex_chars[hi] as i32)
+        sb.append_char(hex_chars[lo] as i32)
+    }
+    return sb.to_string()
+}
+
+pub fn encode_string(s: string) -> string {
+    return encode(s.bytes())
+}
+
+fn hex_val(c: u8) -> i32 {
+    let v = c as i32
+    if v >= 48 && v <= 57 {
+        return v - 48
+    }
+    if v >= 97 && v <= 102 {
+        return v - 97 + 10
+    }
+    if v >= 65 && v <= 70 {
+        return v - 65 + 10
+    }
+    return -1
+}
+
+pub fn decode(s: string) -> []u8 ! string {
+    if s.len % 2 != 0 {
+        return error("hex string must have an even length")
+    }
+    let mut out = []u8{}
+    let mut i = 0
+    while i < s.len {
+        let h = hex_val(s[i])
+        let l = hex_val(s[i + 1])
+        if h < 0 || l < 0 {
+            return error("invalid hex character")
+        }
+        out.push(((h << 4) | l) as u8)
+        i += 2
+    }
+    return out
+}
+
+pub fn decode_string(s: string) -> string ! string {
+    let bytes = decode(s)?
+    return string.from_bytes(bytes)?
+}

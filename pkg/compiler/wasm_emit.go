@@ -189,6 +189,12 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 	e.registerWasiImport("path_remove_directory", []byte{valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
 	e.registerWasiImport("path_filestat_get", []byte{valTypeI32, valTypeI32, valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
 	e.registerWasiImport("proc_exit", []byte{valTypeI32}, []byte{})
+	// Process/environment primitives used by std/env and std/random.
+	e.registerWasiImport("args_sizes_get", []byte{valTypeI32, valTypeI32}, []byte{valTypeI32})
+	e.registerWasiImport("args_get", []byte{valTypeI32, valTypeI32}, []byte{valTypeI32})
+	e.registerWasiImport("environ_sizes_get", []byte{valTypeI32, valTypeI32}, []byte{valTypeI32})
+	e.registerWasiImport("environ_get", []byte{valTypeI32, valTypeI32}, []byte{valTypeI32})
+	e.registerWasiImport("random_get", []byte{valTypeI32, valTypeI32}, []byte{valTypeI32})
 
 	// Register user host imports (extern fn)
 	for _, decl := range prog.Decls {
@@ -1077,7 +1083,35 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			buf.WriteByte(0x21)
 			writeUleb128(buf, idxLocal)
 
-			itemLocal := ctx.allocLocal(valTypeI32)
+			// Element width and load opcode depend on the slice/array
+			// element type. []u8 (and string) iterate byte-wise, while
+			// []i64/f64 need 8-byte loads.
+			elemWidth := int32(4)
+			loadOp := byte(0x28) // i32.load
+			loadAlign := uint32(2)
+			itemWasm := byte(valTypeI32)
+			if s.ItemType != nil {
+				switch s.ItemType.String() {
+				case "u8", "i8", "bool":
+					elemWidth = 1
+					loadOp = 0x2d // i32.load8_u
+					loadAlign = 0
+				case "i64", "u64":
+					elemWidth = 8
+					loadOp = 0x29 // i64.load
+					loadAlign = 3
+					itemWasm = valTypeI64
+				case "f64":
+					elemWidth = 8
+					loadOp = 0x2b // f64.load
+					loadAlign = 3
+					itemWasm = valTypeF64
+				case "f32":
+					loadOp = 0x2a // f32.load
+					itemWasm = valTypeF32
+				}
+			}
+			itemLocal := ctx.allocLocal(itemWasm)
 			ctx.locals[s.ItemName] = itemLocal
 			ctx.localTypes[s.ItemName] = s.ItemType
 
@@ -1102,11 +1136,11 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			buf.WriteByte(0x20)
 			writeUleb128(buf, idxLocal)
 			buf.WriteByte(0x41)
-			writeSleb128(buf, 4)
+			writeSleb128(buf, elemWidth)
 			buf.WriteByte(0x6c)
 			buf.WriteByte(0x6a)
-			buf.WriteByte(0x28)
-			writeUleb128(buf, 2)
+			buf.WriteByte(loadOp)
+			writeUleb128(buf, loadAlign)
 			writeUleb128(buf, 0)
 			buf.WriteByte(0x21)
 			writeUleb128(buf, itemLocal)
@@ -1711,13 +1745,6 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			return nil
 		}
 
-		if err := ctx.compileExpr(buf, e.Left); err != nil {
-			return err
-		}
-		if err := ctx.compileExpr(buf, e.Right); err != nil {
-			return err
-		}
-
 		opType := ""
 		if e.OperandType != nil {
 			opType = e.OperandType.String()
@@ -1725,6 +1752,29 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			opType = e.Type.String()
 		} else if lt := ctx.inferExprType(e.Left); lt != "" {
 			opType = lt
+		}
+
+		if err := ctx.compileExpr(buf, e.Left); err != nil {
+			return err
+		}
+		if err := ctx.compileExpr(buf, e.Right); err != nil {
+			return err
+		}
+
+		// Mixed-width arithmetic: when the operation is evaluated at 64-bit
+		// width but the right operand was emitted as a 32-bit integer (for
+		// example a literal shift count or bit mask), widen it to i64.
+		if opType == "i64" || opType == "u64" {
+			rt := ctx.inferExprType(e.Right)
+			switch rt {
+			case "", "i64", "u64", "f32", "f64":
+			default:
+				if opType == "u64" {
+					buf.WriteByte(0xad) // i64.extend_i32_u
+				} else {
+					buf.WriteByte(0xac) // i64.extend_i32_s
+				}
+			}
 		}
 
 		switch opType {

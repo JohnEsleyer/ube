@@ -144,6 +144,8 @@ func NewTypechecker() *Typechecker {
 	tc.Global.Funcs["read_file"] = FuncSignature{Params: []FieldDecl{{Name: "path", Type: str}}, RetType: ResultType{Ok: str, Err: str}}
 	tc.Global.Funcs["write_file"] = FuncSignature{Params: []FieldDecl{{Name: "path", Type: str}, {Name: "content", Type: str}}, RetType: ResultType{Ok: boolType, Err: str}}
 	tc.Global.Funcs["os_args"] = FuncSignature{RetType: SliceType{Elem: str}}
+	tc.Global.Funcs["os_environ"] = FuncSignature{RetType: SliceType{Elem: str}}
+	tc.Global.Funcs["random_get_u64"] = FuncSignature{RetType: PrimitiveType{Name: "u64"}}
 	tc.Global.Funcs["env_get"] = FuncSignature{Params: []FieldDecl{{Name: "key", Type: str}}, RetType: OptionalType{Inner: str}}
 	tc.Global.Funcs["file_exists"] = FuncSignature{Params: []FieldDecl{{Name: "path", Type: str}}, RetType: boolType}
 	tc.Global.Funcs["path_join"] = FuncSignature{Params: []FieldDecl{{Name: "a", Type: str}, {Name: "b", Type: str}}, RetType: str}

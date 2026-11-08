@@ -59,28 +59,39 @@ pub fn map_new[K, V]() -> SimpleMap[K, V] {
 }
 
 pub fn (mut m SimpleMap[K, V]) put(key: K, val: V) {
-    let mut i = 0
-    while i < m.entries.len {
-        if m.entries[i].key == key {
-            m.entries[i].val = val
-            return
-        }
-        i += 1
-    }
+    // Append-only storage keeps the move checker happy (the generic value can
+    // only be consumed once). get() scans from the end so the last write wins.
     m.entries.push(Pair[K, V]{ key: key, val: val })
 }
 
 pub fn (m SimpleMap[K, V]) get(key: K) -> V? {
-    let mut i = 0
-    while i < m.entries.len {
+    let mut i = m.entries.len - 1
+    while i >= 0 {
         if m.entries[i].key == key {
             return m.entries[i].val
         }
-        i += 1
+        i -= 1
     }
     return none
 }
 
 pub fn (m SimpleMap[K, V]) len() -> i32 {
-    return m.entries.len
+    let mut count = 0
+    let mut i = 0
+    while i < m.entries.len {
+        let mut seen = false
+        let mut j = 0
+        while j < i {
+            if m.entries[j].key == m.entries[i].key {
+                seen = true
+                break
+            }
+            j += 1
+        }
+        if !seen {
+            count += 1
+        }
+        i += 1
+    }
+    return count
 }

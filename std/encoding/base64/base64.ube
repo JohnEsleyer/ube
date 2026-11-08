@@ -1,0 +1,101 @@
+package base64
+
+// File: std/encoding/base64/base64.ube
+//
+// RFC 4648 Base64 encoding/decoding with '=' padding.
+
+pub fn encode(data: []u8) -> string {
+    let table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    let mut sb = StringBuilder.new(((data.len + 2) / 3) * 4)
+    let mut i = 0
+    while i < data.len {
+        let b0 = data[i] as i32
+        let b1 = if i + 1 < data.len { data[i + 1] as i32 } else { 0 }
+        let b2 = if i + 2 < data.len { data[i + 2] as i32 } else { 0 }
+
+        let n = (b0 << 16) | (b1 << 8) | b2
+        sb.append_char(table[(n >> 18) & 63] as i32)
+        sb.append_char(table[(n >> 12) & 63] as i32)
+
+        if i + 1 < data.len {
+            sb.append_char(table[(n >> 6) & 63] as i32)
+        } else {
+            sb.append_char(61)
+        }
+
+        if i + 2 < data.len {
+            sb.append_char(table[n & 63] as i32)
+        } else {
+            sb.append_char(61)
+        }
+        i += 3
+    }
+    return sb.to_string()
+}
+
+pub fn encode_string(s: string) -> string {
+    return encode(s.bytes())
+}
+
+fn b64_val(c: u8) -> i32 {
+    let v = c as i32
+    if v >= 65 && v <= 90 {
+        return v - 65
+    }
+    if v >= 97 && v <= 122 {
+        return v - 97 + 26
+    }
+    if v >= 48 && v <= 57 {
+        return v - 48 + 52
+    }
+    if v == 43 {
+        return 62
+    }
+    if v == 47 {
+        return 63
+    }
+    return -1
+}
+
+pub fn decode(s: string) -> []u8 ! string {
+    if s.len == 0 {
+        return []u8{}
+    }
+    if s.len % 4 != 0 {
+        return error("base64 input length must be a multiple of 4")
+    }
+
+    let mut out = []u8{}
+    let mut i = 0
+    while i < s.len {
+        let c0 = b64_val(s[i])
+        let c1 = b64_val(s[i + 1])
+        if c0 < 0 || c1 < 0 {
+            return error("invalid base64 character")
+        }
+
+        let pad2 = s[i + 2] == 61
+        let pad3 = s[i + 3] == 61
+        let c2 = if pad2 { 0 } else { b64_val(s[i + 2]) }
+        let c3 = if pad3 { 0 } else { b64_val(s[i + 3]) }
+        if (!pad2 && c2 < 0) || (!pad3 && c3 < 0) {
+            return error("invalid base64 character")
+        }
+
+        let n = (c0 << 18) | (c1 << 12) | (c2 << 6) | c3
+        out.push(((n >> 16) & 255) as u8)
+        if !pad2 {
+            out.push(((n >> 8) & 255) as u8)
+        }
+        if !pad3 {
+            out.push((n & 255) as u8)
+        }
+        i += 4
+    }
+    return out
+}
+
+pub fn decode_string(s: string) -> string ! string {
+    let bytes = decode(s)?
+    return string.from_bytes(bytes)?
+}
