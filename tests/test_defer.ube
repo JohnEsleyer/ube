@@ -1,0 +1,43 @@
+package main
+
+import "std/env"
+
+fn assert(cond: bool) {
+    if !cond {
+        env.exit(1)
+    }
+}
+
+struct Counter {
+    val: i32
+}
+
+fn (mut c Counter) add(v: i32) {
+    c.val += v
+}
+
+fn (mut c Counter) mul(v: i32) {
+    c.val *= v
+}
+
+fn test_defer_execution() {
+    let mut c = Counter{val: 0}
+    if true {
+        defer c.add(10)
+        assert(c.val == 0)
+    }
+    assert(c.val == 10)
+}
+
+fn test_multiple_defers() {
+    let mut c = Counter{val: 0}
+    if true {
+        defer c.mul(2)
+        defer c.add(5)
+        assert(c.val == 0)
+    }
+    // LIFO execution: c.add(5) runs first (c.val=5), then c.mul(2) runs (c.val=10)
+    assert(c.val == 10)
+}
+
+fn main() {}

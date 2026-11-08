@@ -1,0 +1,49 @@
+package main
+
+import "std/env"
+
+fn assert(cond: bool) {
+    if !cond {
+        env.exit(1)
+    }
+}
+
+fn test_array_indexing() {
+    let arr = [3]i32{10, 20, 30}
+    assert(arr[0] == 10)
+    assert(arr[1] == 20)
+    assert(arr[2] == 30)
+}
+
+fn test_slice_push_pop() {
+    let mut s = []i32{}
+    s.push(100)
+    s.push(200)
+    assert(s.len == 2)
+    assert(s[0] == 100)
+    assert(s[1] == 200)
+    
+    let p = s.pop()
+    if let val = p {
+        assert(val == 200)
+    } else {
+        assert(false)
+    }
+    assert(s.len == 1)
+}
+
+fn test_slice_resize() {
+    let mut s = []i32{}
+    s.resize(5)
+    assert(s.len == 5)
+    s[4] = 42
+    assert(s[4] == 42)
+}
+
+fn test_string_slice() {
+    let text = "WebAssembly"
+    let sub = text[3:11]
+    assert(sub.len == 8)
+}
+
+fn main() {}

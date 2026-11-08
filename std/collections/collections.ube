@@ -1,3 +1,4 @@
+
 package collections
 
 // File: std/collections/collections.ube
@@ -61,7 +62,7 @@ pub fn map_new[K, V]() -> SimpleMap[K, V] {
 pub fn (mut m SimpleMap[K, V]) put(key: K, val: V) {
     // Append-only storage keeps the move checker happy (the generic value can
     // only be consumed once). get() scans from the end so the last write wins.
-    m.entries.push(Pair[K, V]{ key: key, val: val })
+    m.entries.push(Pair[K, V]{ key: move key, val: move val })
 }
 
 pub fn (m SimpleMap[K, V]) get(key: K) -> V? {

@@ -806,11 +806,13 @@ func (ctx *fnContext) exprLeavesValue(expr Expr) bool {
 		return ctx.callReturnsValue(e)
 	case *IfExpr:
 		return e.Type == nil || e.Type.String() != "void"
+	case *ArenaExpr:
+		return e.Type == nil || e.Type.String() != "void"
 	case *TryExpr, *OrElseExpr, *ErrorExpr, *InterpolatedStringExpr,
 		*StructInitExpr, *SliceInitExpr, *ArrayInitExpr, *TupleExpr,
 		*BinaryExpr, *UnaryExpr, *MemberExpr, *IndexExpr, *SliceSubExpr,
 		*RangeExpr, *TraitCoerceExpr, *ArrayToSliceExpr, *PromoteExpr,
-		*MoveExpr, *ArenaExpr, *CastExpr:
+		*MoveExpr, *CastExpr:
 		return true
 	case *LiteralExpr:
 		return e.Type == nil || e.Type.String() != "void"

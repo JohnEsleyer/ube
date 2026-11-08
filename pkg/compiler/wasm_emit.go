@@ -2405,14 +2405,53 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		buf.WriteByte(0x21)
 		writeUleb128(buf, savedLocal)
 
-		if err := ctx.compileBlock(buf, e.Body); err != nil {
-			return err
+		ctx.pushDeferScope()
+		terminated := false
+		hasResult := e.Type != nil && e.Type.String() != "void" && len(e.Body.Stmts) > 0
+		var resLocal uint32
+		if hasResult {
+			resWasm := wasmTypeOrDefault(e.Type)
+			resLocal = ctx.allocLocal(resWasm)
 		}
+
+		for i, stmt := range e.Body.Stmts {
+			if hasResult && i == len(e.Body.Stmts)-1 {
+				es, ok := stmt.(*ExprStmt)
+				if !ok {
+					ctx.popDeferScope()
+					return fmt.Errorf("%s: arena expression's last statement must be an expression", stmt.Loc())
+				}
+				if err := ctx.compileExpr(buf, es.Expr); err != nil {
+					ctx.popDeferScope()
+					return err
+				}
+				buf.WriteByte(0x21)
+				writeUleb128(buf, resLocal)
+				break
+			}
+			if err := ctx.compileStmt(buf, stmt); err != nil {
+				ctx.popDeferScope()
+				return err
+			}
+			if stmtTerminated(stmt) {
+				terminated = true
+				break
+			}
+		}
+		if !terminated {
+			ctx.emitCurrentScopeDefers(buf)
+		}
+		ctx.popDeferScope()
 
 		buf.WriteByte(0x20)
 		writeUleb128(buf, savedLocal)
 		buf.WriteByte(0x24)
 		writeUleb128(buf, 0)
+
+		if hasResult {
+			buf.WriteByte(0x20)
+			writeUleb128(buf, resLocal)
+		}
 
 	case *TraitCoerceExpr:
 		fatLocal := ctx.allocLocal(valTypeI32)
@@ -3899,6 +3938,10 @@ func (ctx *fnContext) inferExprType(expr Expr) string {
 			return rt
 		}
 	case *IfExpr:
+		if e.Type != nil {
+			return e.Type.String()
+		}
+	case *ArenaExpr:
 		if e.Type != nil {
 			return e.Type.String()
 		}

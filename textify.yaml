@@ -75,7 +75,7 @@ dirs:
 
   # WebAssembly Isolated Sandbox & Reference Laboratory
   _wasm_sandbox:
-    enabled: false
+    enabled: true
     group: wasm_sandbox
     extensions:
       - ube

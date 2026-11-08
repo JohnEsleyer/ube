@@ -210,6 +210,11 @@ func (tc *Typechecker) pinLiteral(expr Expr, target UbeType) bool {
 			e.Type = target
 			return true
 		}
+	case *ArenaExpr:
+		if tc.pinBlockResult(e.Body, target) {
+			e.Type = target
+			return true
+		}
 	}
 	return false
 }

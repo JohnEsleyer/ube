@@ -677,3 +677,23 @@ fn main() {
 		t.Errorf("expected %q, got %q", want, out)
 	}
 }
+
+func TestWasmCore_ArenaExpr(t *testing.T) {
+	source := `package main
+
+fn main() {
+    let p = arena {
+        let mut temp = []i32{}
+        temp.push(42)
+        promote(temp)
+    }
+    println(p.len)
+    println(p[0])
+}
+`
+	wasmBytes := compileToWasm(t, source)
+	out := runWasm(t, wasmBytes)
+	if out != "" && out != "1\n42" {
+		t.Errorf("expected '1\n42', got '%s'", out)
+	}
+}

@@ -1,0 +1,40 @@
+package main
+
+import "std/env"
+
+fn assert(cond: bool) {
+    if !cond {
+        env.exit(1)
+    }
+}
+
+struct Transform {
+    x: i32,
+    y: i32
+}
+
+fn (mut t Transform) move_by(dx: i32, dy: i32) {
+    t.x += dx
+    t.y += dy
+}
+
+struct Entity {
+    id: i32,
+    Transform
+}
+
+fn test_struct_embedding() {
+    let mut e = Entity{
+        id: 1,
+        Transform: Transform{ x: 10, y: 20 }
+    }
+    assert(e.id == 1)
+    assert(e.x == 10)
+    assert(e.y == 20)
+    
+    e.move_by(5, -5)
+    assert(e.x == 15)
+    assert(e.y == 15)
+}
+
+fn main() {}

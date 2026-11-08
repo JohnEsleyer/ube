@@ -1,0 +1,66 @@
+package main
+
+import "std/env"
+
+fn assert(cond: bool) {
+    if !cond {
+        env.exit(1)
+    }
+}
+
+fn returns_ok() -> i32 ! string {
+    return 42
+}
+
+fn returns_err() -> i32 ! string {
+    return error("failed")
+}
+
+fn returns_some() -> i32? {
+    return 100
+}
+
+fn returns_none() -> i32? {
+    return none
+}
+
+fn test_result_ok() {
+    let r = returns_ok() or_else 0
+    assert(r == 42)
+}
+
+fn try_helper() -> i32 ! string {
+    let val = returns_ok()?
+    assert(val == 42)
+    return 0
+}
+
+fn test_result_try() {
+    let val = try_helper() or_else 0
+    assert(val == 0)
+}
+
+fn test_result_err() {
+    let r = returns_err() or_else 99
+    assert(r == 99)
+}
+
+fn test_optional_some() {
+    let opt = returns_some()
+    if let val = opt {
+        assert(val == 100)
+    } else {
+        assert(false)
+    }
+}
+
+fn test_optional_none() {
+    let opt = returns_none()
+    if let val = opt {
+        assert(false)
+    } else {
+        assert(true)
+    }
+}
+
+fn main() {}

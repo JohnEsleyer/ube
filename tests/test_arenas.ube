@@ -1,0 +1,34 @@
+package main
+
+import "std/env"
+
+fn assert(cond: bool) {
+    if !cond {
+        env.exit(1)
+    }
+}
+
+fn test_arena_bump() {
+    let mut persistent = []i32{}
+    arena {
+        let mut scratch = []i32{}
+        scratch.push(1)
+        scratch.push(2)
+        scratch.push(3)
+        persistent = promote(scratch)
+    }
+    assert(persistent.len == 3)
+    assert(persistent[2] == 3)
+}
+
+fn test_arena_expr() {
+    let p = arena {
+        let mut temp = []i32{}
+        temp.push(42)
+        promote(temp)
+    }
+    assert(p.len == 1)
+    assert(p[0] == 42)
+}
+
+fn main() {}

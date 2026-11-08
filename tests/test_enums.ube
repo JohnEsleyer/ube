@@ -1,0 +1,44 @@
+package main
+
+import "std/env"
+
+fn assert(cond: bool) {
+    if !cond {
+        env.exit(1)
+    }
+}
+
+enum Status {
+    Ok(i32),
+    Err(string),
+    Pending
+}
+
+fn test_enum_match_ok() {
+    let s = Status.Ok(200)
+    let mut matched = false
+    match s {
+        Ok(code) => {
+            assert(code == 200)
+            matched = true
+        },
+        Err(msg) => assert(false),
+        Pending => assert(false)
+    }
+    assert(matched)
+}
+
+fn test_enum_match_pending() {
+    let s = Status.Pending
+    let mut matched = false
+    match s {
+        Ok(code) => assert(false),
+        Err(msg) => assert(false),
+        Pending => {
+            matched = true
+        }
+    }
+    assert(matched)
+}
+
+fn main() {}
