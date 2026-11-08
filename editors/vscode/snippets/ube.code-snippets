@@ -70,6 +70,13 @@
     ],
     "description": "Promote allocation to parent region"
   },
+  "Move": {
+    "prefix": "move",
+    "body": [
+      "move ${1:value}"
+    ],
+    "description": "Explicitly transfer ownership of an affine value"
+  },
   "Spawn Task": {
     "prefix": "spawn",
     "body": [

@@ -69,6 +69,10 @@
     "keywords": {
       "patterns": [
         {
+          "name": "keyword.other.affine.move.ube storage.modifier.move.ube",
+          "match": "\\b(move)\\b"
+        },
+        {
           "name": "keyword.control.ube",
           "match": "\\b(package|pub|fn|let|mut|struct|enum|match|if|else|while|for|in|return|break|continue|arena|promote|spawn|select|defer|or_else|extern|import|trait|as)\\b"
         },

@@ -17,14 +17,15 @@ max_file_size: 512000
 
 # Group mode mappings
 groups:
-  cli: full
-  compiler: full
+  cli: signatures
+  compiler: signatures
   wasm_binary: signatures
   lsp: signatures
   formatter: signatures
   wasm_sandbox: full
-  tests: full
+  tests: signatures
   docs: full
+  editors: full
 
 dirs:
   # CLI Entrypoints & Commands
@@ -75,7 +76,7 @@ dirs:
 
   # WebAssembly Isolated Sandbox & Reference Laboratory
   _wasm_sandbox:
-    enabled: true
+    enabled: false
     group: wasm_sandbox
     extensions:
       - ube
@@ -103,4 +104,5 @@ dirs:
   
   # Editor
   editors:
-    enabled: false
+    enabled: true
+    group: editors

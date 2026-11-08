@@ -114,6 +114,43 @@
           "description": "Traces the communication between VS Code and the Ube language server."
         }
       }
+    },
+    "configurationDefaults": {
+      "[ube]": {
+        "editor.tokenColorCustomizations": {
+          "[Default Dark+]": {
+            "textMateRules": [
+              {
+                "scope": "keyword.other.affine.move.ube",
+                "settings": {
+                  "foreground": "#F59E0B",
+                  "fontStyle": "bold"
+                }
+              }
+            ]
+          },
+          "[Default Light+]": {
+            "textMateRules": [
+              {
+                "scope": "keyword.other.affine.move.ube",
+                "settings": {
+                  "foreground": "#B45309",
+                  "fontStyle": "bold"
+                }
+              }
+            ]
+          },
+          "textMateRules": [
+            {
+              "scope": "keyword.other.affine.move.ube",
+              "settings": {
+                "foreground": "#E5A00D",
+                "fontStyle": "bold"
+              }
+            }
+          ]
+        }
+      }
     }
   },
   "scripts": {
