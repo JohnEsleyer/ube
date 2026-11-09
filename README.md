@@ -25,7 +25,7 @@
 - [Installation & Toolchain](#installation--toolchain)
 - [Language Tour & Syntax Reference](#language-tour--syntax-reference)
   - [1. Variables, Mutability & Types](#1-variables-mutability--types)
-  - [2. Affine Move Semantics (Ownership)](#2-affine-move-semantics-ownership)
+  - [2. Ownership: move Semantics & view Parameters](#2-ownership-move-semantics--view-parameters)
   - [3. Functions, Receivers & Methods](#3-functions-receivers--methods)
   - [4. Anonymous Struct Embedding](#4-anonymous-struct-embedding)
   - [5. Tagged Enums & Pattern Matching](#5-tagged-enums--pattern-matching)
@@ -55,7 +55,7 @@ It borrows deliberately from three neighbours:
 
 - **The concurrency model and surface syntax of Go** — `let`, `mut`, `spawn`, `Chan[T]`, `select`, receiver methods.
 - **The memory determinism of C** — no garbage collector, no pauses, deterministic scope exit.
-- **The safety guarantees of Rust** — single ownership and use-after-move rejection, without lifetime annotations, borrow-checker diagnostics, or header/implementation splits.
+- **The safety guarantees of Rust** — single ownership, explicit `move` transfers, non-escaping read-only `view` loans, and use-after-move rejection, without lifetime annotations, borrow-checker diagnostics, or header/implementation splits.
 
 Every language construct lowers to WebAssembly instructions directly. There is no intermediate C generation step and no text `.wat` representation:
 
@@ -64,6 +64,7 @@ Every language construct lowers to WebAssembly instructions directly. There is n
 | Arithmetic & Bitwise | Direct Wasm numeric opcodes (`i32.add`, `i64.mul`, `f32.sub`, …) | ✅ |
 | Structured Control Flow | `block`, `loop`, `br`, `br_if`, `if/else` | ✅ |
 | Structs & Mut Receivers | Shadow stack & linear memory pointer offsets | ✅ |
+| Ownership & Views | Compile-time affine `move` tracking + non-escaping `view` parameters | ✅ |
 | Dynamic Slices (`[]T`) | Arena-backed fat pointer header `{ptr, len, cap}` | ✅ |
 | Regional Arenas (`arena`) | Global `__arena_pointer` recorded on entry, unwound on exit | ✅ |
 | Tagged Enums & Matching | Discriminant tag header + payload union + branch jump table | ✅ |
@@ -176,33 +177,95 @@ The literal `null` is forbidden — use `none` for optionals. The keyword `unsaf
 
 ---
 
-### 2. Affine Move Semantics (Ownership)
+### 2. Ownership: move Semantics & view Parameters
 
-Non-copy types (`string`, `[]T`, `Pool[T]`, and structs holding them) move ownership on assignment:
+Ube has two kinds of values:
+
+- **Copy types** — primitives, `bool`, and fixed arrays of copy types. Assignment duplicates them; `move` is not required.
+- **Affine types** — `string`, `[]T`, `StringBuilder`, `Pool[T]`, handles, and structs/enums containing affine fields. They have exactly one owner.
+
+Ownership moves explicitly with the `move` keyword:
 
 ```ube
 package main
 
 fn main() {
     let a = "Sweet Roots"
-    let b = move a    // Ownership of string is moved to 'b'
+    let b = move a    // Ownership of the string moves to 'b'
     // println(a)     // COMPILE ERROR: use of moved value 'a'
     println(b)        // OK
 
     let mut message = "hello"
     let old = move message // 'message' is moved
     message = "world"      // Reassignment reactivates 'message'
-    println(message)       // OK
+    println(old)           // hello
+    println(message)       // world
 }
 ```
 
+`move` is a keyword, not a function: write `move value`, never `move(value)`. It is required at every ownership boundary: assignment, struct/tuple/collection construction, channel sends, pool insertion, and calls to consuming parameters.
+
 The complete rule set:
 
-1. **Move on assignment** — assigning a non-copy variable transfers ownership with `move`.
+1. **Explicit moves** — assigning a non-copy variable transfers ownership with `move`.
 2. **Reactivation** — assigning a fresh value into a previously moved mutable variable makes it usable again.
-3. **Move on argument pass** — passing a non-copy variable to a function parameter that takes ownership consumes it with `move`. Parameters declared `mut` are loans.
-4. **Loop boundary invariant** — a variable declared outside a loop cannot be moved inside the loop body, preventing use-after-move on subsequent iterations.
-5. **No projection consumption** — accessing a sub-field or index (`p.name`, `s[0]`) does not consume the root aggregate.
+3. **Move on argument pass** — passing a non-copy variable to a function parameter that takes ownership consumes it with `move`.
+4. **Loans do not move** — `mut` parameters are temporary mutable loans, and `view` parameters are temporary read-only loans. The caller keeps ownership.
+5. **Loop boundary invariant** — a variable declared outside a loop cannot be moved inside the loop body, preventing use-after-move on subsequent iterations.
+6. **No projection consumption** — accessing a sub-field or index (`p.name`, `s[0]`) does not consume the root aggregate.
+
+#### Read-only `view` parameters
+
+A `view` parameter borrows an argument without consuming it or copying it. The caller keeps ownership and may use the value after the call:
+
+```ube
+package main
+
+fn count_items(view tokens: []string) -> i32 {
+    let mut total = 0
+    for token in tokens {
+        if token.len > 0 {
+            total += 1
+        }
+    }
+    return total
+}
+
+fn main() {
+    let words = []string{"sys", "wasm", "ube"}
+    println(count_items(words)) // 3
+    println(words.len)          // 3: caller still owns the slice
+    println(words[0])           // sys
+}
+```
+
+Views can be forwarded to other `view` parameters. They are **second-class**, so they cannot escape or become stored aliases. A view cannot be:
+
+- returned from the function,
+- stored in a struct, slice, array, tuple, channel, or pool,
+- moved, promoted, reassigned, or mutated through,
+- captured by `spawn`,
+- combined with `mut` (`mut view` is rejected),
+- used on struct fields or `let` bindings.
+
+```ube
+package main
+
+fn escape(view tokens: []string) -> []string {
+    return tokens               // ERROR: cannot return view parameter
+}
+
+fn store(view tokens: []string) {
+    let mut all = []string{}
+    all.push(tokens)            // ERROR: cannot push view parameter
+}
+
+fn forward(view items: []string) -> i32 {
+    return count_items(items)   // OK: nested view forwarding
+}
+```
+
+Use `view` for read-only inspection of large structs, slices, and strings. Use `mut` when the callee must change the caller's value in place. Use `move` only when the callee becomes the new owner.
 
 ---
 
@@ -221,12 +284,17 @@ fn add(a: i32, b: i32) -> i32 {
     return a + b
 }
 
-// Value receiver (read-only)
+// Value receiver (copies the struct)
 fn (r Rectangle) area() -> i32 {
     return r.width * r.height
 }
 
-// Mutable receiver (in-place modification)
+// View receiver (read-only loan, no copy)
+fn (view r Rectangle) perimeter() -> i32 {
+    return 2 * (r.width + r.height)
+}
+
+// Mutable receiver (temporary mutable loan)
 fn (mut r Rectangle) scale(factor: i32) {
     r.width *= factor
     r.height *= factor
@@ -234,12 +302,15 @@ fn (mut r Rectangle) scale(factor: i32) {
 
 fn main() {
     let mut rect = Rectangle{ width: 10, height: 5 }
-    println(rect.area()) // 50
+    println(rect.area())      // 50
+    println(rect.perimeter()) // 30
 
     rect.scale(2)
-    println(rect.area()) // 200
+    println(rect.area())      // 200
 }
 ```
+
+A value receiver copies the struct; `mut` and `view` receivers borrow it without copying. `mut` allows mutation, while `view` is read-only. Both loans leave the caller as owner.
 
 ---
 
@@ -404,7 +475,6 @@ fn sum_slice(vals: []i32) -> i32 {
 fn main() {
     let arr = [3]i32{10, 20, 30}
     println(sum_slice(arr)) // Coerces [3]i32 -> []i32: prints 60
-
     let mut s = []i32{}
     s.push(1)
     s.push(2)
@@ -696,31 +766,30 @@ fn main() {
 
 ## Working With LLMs
 
-Ube's compiler emits two things an LLM cannot infer from reading the code, and delegates everything else to [Textify](https://github.com/JohnEsleyer/textify).
+Ube's compiler includes two interfaces specifically useful when a model is navigating or fixing a codebase.
 
-### What Ube provides
+### Zero-body orientation: `ube sig`
 
-- **`ube sig`** — a zero-body symbol map: structs, enums, traits, receiver methods, externs. No function bodies, no comments, no constants. Typically a few hundred tokens for an entire project. This is the orientation step for a model that has never seen the codebase.
-- **`--ai` on `build` and `test`** — dense one-line-per-error diagnostics in the form:
+`ube sig` emits a symbol map of structs, enums, traits, receiver methods, and externs — no function bodies, comments, or constants. Typically a few hundred tokens for an entire project. This gives a model the project's shape before it reads implementation files.
 
-  ```
-  ERR|file.ube:LINE:COL|class|k=v|k=v
-  ```
+### Dense diagnostics: `--ai`
 
-  Example: `ERR|player.ube:45:12|type_mismatch|expected:i32|got:string`. Class and key-value fields are inferred from the compiler message; unrecognized messages fall back to `class=error`. Twenty to forty tokens replace a hundred-line trace dump.
+Both `ube build --ai` and `ube test --ai` emit one-line-per-error diagnostics in the form:
 
-### What Textify provides
+```
+ERR|file.ube:LINE:COL|class|k=v|k=v
+```
 
-Context extraction (`<trace>`, `<select>`, `<xref>`, `<feature-context>`), atomic multi-file patching with a two-pass VFS, clipboard I/O, and system prompts. These are language-agnostic text operations and belong in a separate tool.
+Example: `ERR|player.ube:45:12|type_mismatch|expected:i32|got:string`. Class and key-value fields are inferred from the compiler message; unrecognized messages fall back to `class=error`. Twenty to forty tokens replace a hundred-line trace dump.
 
-### The loop
+### Suggested loop
 
-1. **Orient.** Run `ube sig`. Paste the output into the model's first message.
-2. **Request.** Let the model ask for context. Run `textify load -ci -c` to read the model's `<request>` block from the clipboard and copy the extracted context back.
-3. **Patch.** Run `textify patch -ci` to apply the model's edits atomically. If any anchor fails, no file is modified.
-4. **Verify.** Run `ube build --ai` or `ube test --ai`. The dense diagnostic goes back to the model in about twenty tokens and names the offending variable and the compiler's hint.
+1. **Orient.** Run `ube sig` and provide the symbol map to the model as project context.
+2. **Provide context.** Include the relevant source files or excerpts for the task.
+3. **Edit.** Apply the model's changes using your normal review and editing workflow.
+4. **Verify.** Run `ube build --ai` or `ube test --ai`. The dense diagnostic names the offending variable and the compiler's hint.
 
-The dense format is the one interface Ube promises to keep stable. Treat it as such: if a diagnostic is unrecognized, it degrades to `class=error` with no fields, which is worse than the verbose form for a model but still better than a raw stack trace.
+The dense diagnostic format is the one interface Ube promises to keep stable. If a diagnostic is unrecognized, it degrades to `class=error` with no fields, which is worse than the verbose form for a model but still better than a raw stack trace.
 
 ---
 

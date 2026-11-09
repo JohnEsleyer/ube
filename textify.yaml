@@ -17,10 +17,10 @@ max_file_size: 512000
 
 # Group mode mappings
 groups:
-  cli: signatures
-  compiler: signatures
+  cli: full
+  compiler: full
   wasm_binary: signatures
-  lsp: signatures
+  lsp: full
   formatter: signatures
   wasm_sandbox: full
   tests: signatures
