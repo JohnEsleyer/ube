@@ -101,6 +101,11 @@ func classifyMessage(msg string) (class, fields string) {
 			return "immutable_reassign", "var:" + m[1]
 		}
 		return "immutable_reassign", ""
+	case strings.Contains(msg, "unscoped loop allocation") || strings.Contains(msg, "runaway bump") || strings.Contains(msg, "unscoped_loop_alloc"):
+		if m := reQuotedVar.FindStringSubmatch(msg); m != nil {
+			return "unscoped_loop_alloc", "var:" + m[1]
+		}
+		return "unscoped_loop_alloc", ""
 	case strings.Contains(msg, "arena"):
 		return "arena_escape", ""
 	case strings.Contains(msg, "not flat"):

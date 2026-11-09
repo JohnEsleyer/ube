@@ -76,12 +76,18 @@ func (p *Parser) parseStmt() Stmt {
 	case TokenIf:
 		return p.parseIfStmt()
 	case TokenWhile:
-		return p.parseWhileStmt()
+		return p.parseWhileStmt(false)
 	case TokenFor:
-		return p.parseForStmt()
+		return p.parseForStmt(false)
 	case TokenArena:
-		p.advance()
-		return &ArenaStmt{At: tok.Loc, Body: p.parseBlock()}
+		arenaTok := p.advance()
+		if p.check(TokenFor) {
+			return p.parseForStmt(true)
+		}
+		if p.check(TokenWhile) {
+			return p.parseWhileStmt(true)
+		}
+		return &ArenaStmt{At: arenaTok.Loc, Body: p.parseBlock()}
 	case TokenSpawn:
 		p.advance()
 		call := p.parseExpr()
@@ -243,7 +249,7 @@ func (p *Parser) parseIfStmt() Stmt {
 	return &IfStmt{At: loc, Cond: cond, Then: thenB, Else: elseB}
 }
 
-func (p *Parser) parseWhileStmt() Stmt {
+func (p *Parser) parseWhileStmt(isArena bool) Stmt {
 	loc := p.expect(TokenWhile, "Expected 'while'").Loc
 	if p.check(TokenLet) {
 		p.advance()
@@ -251,21 +257,21 @@ func (p *Parser) parseWhileStmt() Stmt {
 		p.expect(TokenAssign, "Expected '=' in while-let")
 		call := p.parseExpr()
 		body := p.parseBlock()
-		return &WhileLetStmt{At: loc, VarName: varName, Call: call, Body: body}
+		return &WhileLetStmt{At: loc, IsArena: isArena, VarName: varName, Call: call, Body: body}
 	}
 
 	cond := p.parseExpr()
 	body := p.parseBlock()
-	return &WhileStmt{At: loc, Cond: cond, Body: body}
+	return &WhileStmt{At: loc, IsArena: isArena, Cond: cond, Body: body}
 }
 
-func (p *Parser) parseForStmt() *ForStmt {
+func (p *Parser) parseForStmt(isArena bool) *ForStmt {
 	loc := p.expect(TokenFor, "Expected 'for'").Loc
 	itemName := p.expect(TokenIdent, "Expected loop variable name").Val
 	p.expect(TokenIn, "Expected 'in' in for loop")
 	iterExpr := p.parseExpr()
 	body := p.parseBlock()
-	return &ForStmt{At: loc, ItemName: itemName, Iter: iterExpr, Body: body}
+	return &ForStmt{At: loc, IsArena: isArena, ItemName: itemName, Iter: iterExpr, Body: body}
 }
 
 func (p *Parser) parseMatchStmt() *MatchStmt {

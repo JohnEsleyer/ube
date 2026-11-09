@@ -12,6 +12,17 @@ func TestClassifyTypeMismatch(t *testing.T) {
 	}
 }
 
+func TestClassifyUnscopedLoopAlloc(t *testing.T) {
+	msg := "unscoped loop allocation: runaway bump in loop for 'scratch'"
+	class, fields := classifyMessage(msg)
+	if class != "unscoped_loop_alloc" {
+		t.Fatalf("expected unscoped_loop_alloc, got %s", class)
+	}
+	if fields != "var:scratch" {
+		t.Fatalf("expected var:scratch, got %s", fields)
+	}
+}
+
 func TestClassifyViewDiagnostics(t *testing.T) {
 	class, fields := classifyMessage("cannot return view parameter 'tokens' (views cannot escape the call frame)")
 	if class != "escape_error" || fields != "view:tokens" {

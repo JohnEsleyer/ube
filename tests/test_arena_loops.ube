@@ -1,0 +1,87 @@
+package main
+
+import "std/env"
+
+fn assert(cond: bool) {
+    if !cond {
+        env.exit(1)
+    }
+}
+
+fn test_arena_for_range() {
+    let mut sum = 0
+    arena for i in 0..100 {
+        let s = f"num_{i}"
+        sum += s.len
+    }
+    assert(sum > 0)
+}
+
+fn test_arena_for_slice() {
+    let items = []string{"alpha", "beta", "gamma", "delta"}
+    let mut total_len = 0
+    arena for item in items {
+        let formatted = f"item: {item}!"
+        total_len += formatted.len
+    }
+    assert(total_len > 0)
+}
+
+fn test_arena_while() {
+    let mut counter = 0
+    let mut accumulated = 0
+    arena while counter < 50 {
+        let s = f"counter is {counter}"
+        accumulated += s.len
+        counter += 1
+    }
+    assert(counter == 50)
+    assert(accumulated > 0)
+}
+
+fn test_arena_for_break() {
+    let mut count = 0
+    arena for i in 0..20 {
+        if i > 15 {
+            break
+        }
+        let msg = f"val={i}"
+        count += msg.len
+    }
+    assert(count > 0)
+}
+
+fn test_arena_while_break_and_continue() {
+    let mut count = 0
+    let mut i = 0
+    arena while i < 20 {
+        i += 1
+        if i % 2 == 0 {
+            continue
+        }
+        if i > 15 {
+            break
+        }
+        let msg = f"val={i}"
+        count += msg.len
+    }
+    assert(count > 0)
+}
+
+fn test_auto_arena_zero_escape() {
+    let mut sum = 0
+    for i in 0..200 {
+        let s = f"auto_{i}"
+        sum += s.len
+    }
+    assert(sum > 0)
+}
+
+fn main() {
+    test_arena_for_range()
+    test_arena_for_slice()
+    test_arena_while()
+    test_arena_for_break()
+    test_arena_while_break_and_continue()
+    test_auto_arena_zero_escape()
+}

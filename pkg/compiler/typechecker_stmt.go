@@ -460,8 +460,17 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		if err := tc.assertCompat(PrimitiveType{Name: "bool"}, condT, s.At); err != nil {
 			return err
 		}
+		if !s.IsArena && tc.canAutoArenaLoop(s.Body, env.LoopDepth+1, env) {
+			s.IsArena = true
+		}
+		if s.IsArena && hasPromoteInBlock(s.Body) {
+			return fmt.Errorf("[%s] cannot use 'promote' inside an arena loop (loop iterations are reclaimed each iteration)", s.At)
+		}
 		loopEnv := childTypeEnvironment(env)
 		loopEnv.LoopDepth = env.LoopDepth + 1
+		if s.IsArena {
+			loopEnv.ScopeDepth = env.ScopeDepth + 1
+		}
 		return tc.checkBlock(s.Body, loopEnv)
 
 	case *WhileLetStmt:
@@ -484,8 +493,17 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			return fmt.Errorf("[%s] while-let requires an optional type or channel recv(), got '%s'", s.At, cType)
 		}
 		s.VarType = unwrappedType
+		if !s.IsArena && tc.canAutoArenaLoop(s.Body, env.LoopDepth+1, env) {
+			s.IsArena = true
+		}
+		if s.IsArena && hasPromoteInBlock(s.Body) {
+			return fmt.Errorf("[%s] cannot use 'promote' inside an arena loop (loop iterations are reclaimed each iteration)", s.At)
+		}
 		loopEnv := childTypeEnvironment(env)
 		loopEnv.LoopDepth = env.LoopDepth + 1
+		if s.IsArena {
+			loopEnv.ScopeDepth = env.ScopeDepth + 1
+		}
 		loopEnv.Vars[s.VarName] = VarInfo{Type: unwrappedType, IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Call, env), LoopDepth: loopEnv.LoopDepth}
 		return tc.checkBlock(s.Body, loopEnv)
 
@@ -533,8 +551,17 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		}
 		s.IterType = iterT
 		s.ItemType = elemT
+		if !s.IsArena && tc.canAutoArenaLoop(s.Body, env.LoopDepth+1, env) {
+			s.IsArena = true
+		}
+		if s.IsArena && hasPromoteInBlock(s.Body) {
+			return fmt.Errorf("[%s] cannot use 'promote' inside an arena loop (loop iterations are reclaimed each iteration)", s.At)
+		}
 		loopEnv := childTypeEnvironment(env)
 		loopEnv.LoopDepth = env.LoopDepth + 1
+		if s.IsArena {
+			loopEnv.ScopeDepth = env.ScopeDepth + 1
+		}
 		isItemView := false
 		if iterRoot := assignmentRoot(s.Iter); iterRoot != "" {
 			if vi, found := env.LookupVar(iterRoot); found && vi.IsView && (!tc.isCopyType(elemT) || tc.hasLifetime(elemT)) {
@@ -684,4 +711,301 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		return err
 	}
 	return nil
+}
+
+func hasPromoteInExpr(e Expr) bool {
+	if e == nil {
+		return false
+	}
+	switch ex := e.(type) {
+	case *PromoteExpr:
+		return true
+	case *BinaryExpr:
+		return hasPromoteInExpr(ex.Left) || hasPromoteInExpr(ex.Right)
+	case *UnaryExpr:
+		return hasPromoteInExpr(ex.Operand)
+	case *CallExpr:
+		for _, a := range ex.Args {
+			if hasPromoteInExpr(a) {
+				return true
+			}
+		}
+	case *MemberExpr:
+		return hasPromoteInExpr(ex.Target)
+	case *IndexExpr:
+		return hasPromoteInExpr(ex.Target) || hasPromoteInExpr(ex.Index)
+	case *SliceSubExpr:
+		return hasPromoteInExpr(ex.Target) || hasPromoteInExpr(ex.Start) || hasPromoteInExpr(ex.End)
+	case *StructInitExpr:
+		for _, f := range ex.Fields {
+			if hasPromoteInExpr(f.Val) {
+				return true
+			}
+		}
+	case *TupleExpr:
+		for _, el := range ex.Elems {
+			if hasPromoteInExpr(el) {
+				return true
+			}
+		}
+	case *ArrayInitExpr:
+		for _, el := range ex.Elements {
+			if hasPromoteInExpr(el) {
+				return true
+			}
+		}
+	case *SliceInitExpr:
+		for _, el := range ex.Elements {
+			if hasPromoteInExpr(el) {
+				return true
+			}
+		}
+	case *TryExpr:
+		return hasPromoteInExpr(ex.Operand)
+	case *OrElseExpr:
+		return hasPromoteInExpr(ex.Primary) || hasPromoteInExpr(ex.Fallback)
+	case *IfExpr:
+		return hasPromoteInBlock(ex.Then) || hasPromoteInBlock(ex.Else)
+	}
+	return false
+}
+
+func hasPromoteInBlock(b *BlockStmt) bool {
+	if b == nil {
+		return false
+	}
+	for _, stmt := range b.Stmts {
+		switch s := stmt.(type) {
+		case *BlockStmt:
+			if hasPromoteInBlock(s) {
+				return true
+			}
+		case *LetStmt:
+			if hasPromoteInExpr(s.Value) {
+				return true
+			}
+		case *AssignStmt:
+			if hasPromoteInExpr(s.RHS) {
+				return true
+			}
+		case *ReturnStmt:
+			if hasPromoteInExpr(s.Value) {
+				return true
+			}
+		case *ExprStmt:
+			if hasPromoteInExpr(s.Expr) {
+				return true
+			}
+		case *IfStmt:
+			if hasPromoteInExpr(s.Cond) || hasPromoteInBlock(s.Then) {
+				return true
+			}
+			if s.Else != nil {
+				if blk, ok := s.Else.(*BlockStmt); ok && hasPromoteInBlock(blk) {
+					return true
+				}
+			}
+		case *IfLetStmt:
+			if hasPromoteInExpr(s.Expr) || hasPromoteInBlock(s.Then) {
+				return true
+			}
+			if s.Else != nil {
+				if blk, ok := s.Else.(*BlockStmt); ok && hasPromoteInBlock(blk) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func exprHasTier2Alloc(expr Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.(type) {
+	case *InterpolatedStringExpr, *SliceInitExpr, *SliceSubExpr:
+		return true
+	case *BinaryExpr:
+		if e.Op == "+" && ((e.Type != nil && e.Type.String() == "string") || (e.OperandType != nil && e.OperandType.String() == "string")) {
+			return true
+		}
+		return exprHasTier2Alloc(e.Left) || exprHasTier2Alloc(e.Right)
+	case *UnaryExpr:
+		return exprHasTier2Alloc(e.Operand)
+	case *CallExpr:
+		if id, ok := e.Callee.(*IdentExpr); ok {
+			if id.Name == "int_to_str" || id.Name == "float_to_str" || id.Name == "f64_to_str" || id.Name == "f32_to_str" {
+				return true
+			}
+		}
+		if mem, ok := e.Callee.(*MemberExpr); ok {
+			if mem.Member == "to_string" || mem.Member == "read_to_string" {
+				return true
+			}
+		}
+		for _, arg := range e.Args {
+			if exprHasTier2Alloc(arg) {
+				return true
+			}
+		}
+	case *MemberExpr:
+		return exprHasTier2Alloc(e.Target)
+	case *IndexExpr:
+		return exprHasTier2Alloc(e.Target) || exprHasTier2Alloc(e.Index)
+	case *StructInitExpr:
+		for _, f := range e.Fields {
+			if exprHasTier2Alloc(f.Val) {
+				return true
+			}
+		}
+	case *TupleExpr:
+		for _, el := range e.Elems {
+			if exprHasTier2Alloc(el) {
+				return true
+			}
+		}
+	case *ArrayInitExpr:
+		for _, el := range e.Elements {
+			if exprHasTier2Alloc(el) {
+				return true
+			}
+		}
+	case *TryExpr:
+		return exprHasTier2Alloc(e.Operand)
+	case *OrElseExpr:
+		return exprHasTier2Alloc(e.Primary) || exprHasTier2Alloc(e.Fallback)
+	}
+	return false
+}
+
+func stmtHasTier2Alloc(stmt Stmt) bool {
+	if stmt == nil {
+		return false
+	}
+	switch s := stmt.(type) {
+	case *BlockStmt:
+		for _, st := range s.Stmts {
+			if stmtHasTier2Alloc(st) {
+				return true
+			}
+		}
+	case *LetStmt:
+		return exprHasTier2Alloc(s.Value)
+	case *AssignStmt:
+		return exprHasTier2Alloc(s.RHS)
+	case *ExprStmt:
+		return exprHasTier2Alloc(s.Expr)
+	case *IfStmt:
+		return exprHasTier2Alloc(s.Cond) || stmtHasTier2Alloc(s.Then) || stmtHasTier2Alloc(s.Else)
+	case *IfLetStmt:
+		return exprHasTier2Alloc(s.Expr) || stmtHasTier2Alloc(s.Then) || stmtHasTier2Alloc(s.Else)
+	case *WhileStmt:
+		return exprHasTier2Alloc(s.Cond) || stmtHasTier2Alloc(s.Body)
+	case *WhileLetStmt:
+		return exprHasTier2Alloc(s.Call) || stmtHasTier2Alloc(s.Body)
+	case *ForStmt:
+		return exprHasTier2Alloc(s.Iter) || stmtHasTier2Alloc(s.Body)
+	case *MatchStmt:
+		for _, arm := range s.Arms {
+			if stmtHasTier2Alloc(arm.Body) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (tc *Typechecker) canAutoArenaLoop(body *BlockStmt, loopDepth int, env *TypeEnvironment) bool {
+	if body == nil || len(body.Stmts) == 0 {
+		return false
+	}
+	if !stmtHasTier2Alloc(body) {
+		return false
+	}
+	if tc.loopBodyEscapes(body, loopDepth, env) {
+		return false
+	}
+	return true
+}
+
+func (tc *Typechecker) loopBodyEscapes(body *BlockStmt, loopDepth int, env *TypeEnvironment) bool {
+	if body == nil {
+		return false
+	}
+	for _, stmt := range body.Stmts {
+		switch s := stmt.(type) {
+		case *BlockStmt:
+			if tc.loopBodyEscapes(s, loopDepth, env) {
+				return true
+			}
+		case *AssignStmt:
+			root := assignmentRoot(s.LHS)
+			if root != "" {
+				if vi, found := env.LookupVar(root); found {
+					if vi.LoopDepth < loopDepth {
+						return true
+					}
+				}
+			}
+		case *ExprStmt:
+			if call, ok := s.Expr.(*CallExpr); ok {
+				if mem, isMem := call.Callee.(*MemberExpr); isMem {
+					root := assignmentRoot(mem.Target)
+					if root != "" {
+						if vi, found := env.LookupVar(root); found && vi.LoopDepth < loopDepth {
+							return true
+						}
+					}
+				}
+				for _, arg := range call.Args {
+					root := assignmentRoot(arg)
+					if root != "" {
+						if vi, found := env.LookupVar(root); found && vi.LoopDepth < loopDepth {
+							return true
+						}
+					}
+				}
+			}
+		case *ReturnStmt:
+			if s.Value != nil {
+				return true
+			}
+		case *SpawnStmt:
+			return true
+		case *ArenaStmt:
+			return true
+		case *IfStmt:
+			if s.Then != nil && tc.loopBodyEscapes(s.Then, loopDepth, env) {
+				return true
+			}
+			if s.Else != nil {
+				if blk, ok := s.Else.(*BlockStmt); ok && tc.loopBodyEscapes(blk, loopDepth, env) {
+					return true
+				}
+			}
+		case *IfLetStmt:
+			if s.Then != nil && tc.loopBodyEscapes(s.Then, loopDepth, env) {
+				return true
+			}
+			if s.Else != nil {
+				if blk, ok := s.Else.(*BlockStmt); ok && tc.loopBodyEscapes(blk, loopDepth, env) {
+					return true
+				}
+			}
+		case *ForStmt:
+			if tc.loopBodyEscapes(s.Body, loopDepth, env) {
+				return true
+			}
+		case *WhileStmt:
+			if tc.loopBodyEscapes(s.Body, loopDepth, env) {
+				return true
+			}
+		case *WhileLetStmt:
+			if tc.loopBodyEscapes(s.Body, loopDepth, env) {
+				return true
+			}
+		}
+	}
+	return false
 }

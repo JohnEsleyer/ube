@@ -569,6 +569,56 @@ fn main() {}
 	}
 }
 
+func TestParser_ArenaLoops(t *testing.T) {
+	src := `package main
+fn main() {
+    arena for i in 0..10 {
+        let s = f"test_{i}"
+    }
+    arena while false {
+        let s = f"noop"
+    }
+}
+`
+	tokens, err := compiler.NewLexer("test.ube", src).Tokenize()
+	if err != nil {
+		t.Fatalf("lexer failed: %v", err)
+	}
+	prog, err := compiler.NewParser(tokens).ParseProgram()
+	if err != nil {
+		t.Fatalf("parser failed: %v", err)
+	}
+	tc := compiler.NewTypechecker()
+	if err := tc.Check(prog); err != nil {
+		t.Fatalf("typechecker failed: %v", err)
+	}
+}
+
+func TestTypechecker_ArenaLoopRejectsPromote(t *testing.T) {
+	src := `package main
+fn main() {
+    let mut persistent = []string{}
+    arena for i in 0..10 {
+        let s = f"item_{i}"
+        persistent.push(promote(s))
+    }
+}
+`
+	tokens, err := compiler.NewLexer("test.ube", src).Tokenize()
+	if err != nil {
+		t.Fatalf("lexer failed: %v", err)
+	}
+	prog, err := compiler.NewParser(tokens).ParseProgram()
+	if err != nil {
+		t.Fatalf("parser failed: %v", err)
+	}
+	tc := compiler.NewTypechecker()
+	err = tc.Check(prog)
+	if err == nil {
+		t.Fatalf("expected promote inside arena loop to be rejected")
+	}
+}
+
 func TestParser_ViewMutMutuallyExclusive(t *testing.T) {
 	source := `
 package main

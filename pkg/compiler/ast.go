@@ -248,9 +248,10 @@ func (s *IfLetStmt) Loc() SourceLocation { return s.At }
 func (s *IfLetStmt) stmtNode()           {}
 
 type WhileStmt struct {
-	At   SourceLocation
-	Cond Expr
-	Body *BlockStmt
+	At      SourceLocation
+	IsArena bool
+	Cond    Expr
+	Body    *BlockStmt
 }
 
 func (s *WhileStmt) Loc() SourceLocation { return s.At }
@@ -258,6 +259,7 @@ func (s *WhileStmt) stmtNode()           {}
 
 type WhileLetStmt struct {
 	At      SourceLocation
+	IsArena bool
 	VarName string
 	VarType UbeType // Populated by typechecker
 	Call    Expr
@@ -269,6 +271,7 @@ func (s *WhileLetStmt) stmtNode()           {}
 
 type ForStmt struct {
 	At               SourceLocation
+	IsArena          bool
 	ItemName         string
 	ItemType         UbeType // Populated by typechecker
 	Iter             Expr
