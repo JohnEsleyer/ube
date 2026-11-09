@@ -343,7 +343,7 @@ func (t *escapeTracker) exprEscapes(expr Expr) bool {
 	}
 	switch e := expr.(type) {
 	case *CallExpr:
-		if m, ok := e.Callee.(*MemberExpr); ok && m.Member == "push" && len(e.Args) == 1 {
+		if m, ok := e.Callee.(*MemberExpr); ok && (m.Member == "push" || m.Member == "send") && len(e.Args) == 1 {
 			if !t.isAliasExpr(m.Target) && t.isAliasExpr(e.Args[0]) {
 				return true
 			}
@@ -429,7 +429,7 @@ func (t *escapeTracker) exprLocalEscapes(expr Expr) bool {
 	}
 	switch e := expr.(type) {
 	case *CallExpr:
-		if m, ok := e.Callee.(*MemberExpr); ok && m.Member == "push" && len(e.Args) == 1 {
+		if m, ok := e.Callee.(*MemberExpr); ok && (m.Member == "push" || m.Member == "send") && len(e.Args) == 1 {
 			if !t.isAliasExpr(m.Target) && t.isAliasExpr(e.Args[0]) {
 				return true
 			}

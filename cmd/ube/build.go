@@ -3,11 +3,29 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/JohnEsleyer/ube/pkg/compiler"
 )
+
+var buildOptLevel string
+
+func optimizeWasmFile(wasmPath, optLevel string) (bool, error) {
+	if optLevel == "" {
+		return false, nil
+	}
+	wasmOpt, err := exec.LookPath("wasm-opt")
+	if err != nil {
+		return false, nil
+	}
+	cmd := exec.Command(wasmOpt, optLevel, wasmPath, "-o", wasmPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return false, fmt.Errorf("wasm-opt %s failed: %w\n%s", optLevel, err, string(out))
+	}
+	return true, nil
+}
 
 func build(args []string) error {
 	file, output, ai, err := parseBuildArgs(args)
@@ -47,10 +65,24 @@ func build(args []string) error {
 		return fmt.Errorf("failed to write output file %s: %w", output, writeErr)
 	}
 
+	optApplied := false
+	if buildOptLevel != "" {
+		applied, optErr := optimizeWasmFile(output, buildOptLevel)
+		if optErr != nil {
+			stopAnim()
+			return optErr
+		}
+		optApplied = applied
+	}
+
 	elapsed := time.Since(start).Round(time.Millisecond)
 	stopAnim()
 
-	fmt.Printf("%s %s %s\n", paint("◆", colorPurpleBold), paint("Compiled", colorPurple), paint(fmt.Sprintf("%s -> %s (%s)", fileName, output, elapsed), colorDim))
+	optTag := ""
+	if optApplied {
+		optTag = fmt.Sprintf(" [%s]", buildOptLevel)
+	}
+	fmt.Printf("%s %s %s\n", paint("◆", colorPurpleBold), paint("Compiled", colorPurple), paint(fmt.Sprintf("%s -> %s%s (%s)", fileName, output, optTag, elapsed), colorDim))
 	return nil
 }
 
@@ -70,10 +102,18 @@ func parseBuildArgs(args []string) (file, output string, ai bool, err error) {
 			// Default target, accepted as valid flag
 		case args[i] == "--ai":
 			ai = true
+		case args[i] == "--release":
+			buildOptLevel = "-O3"
+		case args[i] == "-O" || args[i] == "-O0" || args[i] == "-O1" || args[i] == "-O2" || args[i] == "-O3" || args[i] == "-Os" || args[i] == "-Oz":
+			if args[i] == "-O" {
+				buildOptLevel = "-O3"
+			} else {
+				buildOptLevel = args[i]
+			}
 		case args[i] == "--html":
 			return "", "", false, fmt.Errorf("building for --html requires Emscripten (emcc), which is no longer part of the default Ube toolchain. Please use `emcc` directly with the generated .wasm file, or see the documentation for browser integration options")
 		case strings.HasPrefix(args[i], "-"):
-			return "", "", false, fmt.Errorf("unknown or unsupported build option %s", args[i])
+			return "", "", false, fmt.Errorf("unknown or unsupported build option %s (use --release or -O[0-3|s|z] for optimization)", args[i])
 		default:
 			if targetSet {
 				return "", "", false, fmt.Errorf("build accepts one package directory or source file")

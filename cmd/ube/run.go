@@ -17,12 +17,21 @@ func run(args []string) error {
 	memTrace := false
 	ai := false
 
+	runOptLevel := ""
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--mem-trace" || arg == "-mem-trace" {
 			memTrace = true
 		} else if arg == "--ai" {
 			ai = true
+		} else if arg == "--release" {
+			runOptLevel = "-O3"
+		} else if arg == "-O" || arg == "-O0" || arg == "-O1" || arg == "-O2" || arg == "-O3" || arg == "-Os" || arg == "-Oz" {
+			if arg == "-O" {
+				runOptLevel = "-O3"
+			} else {
+				runOptLevel = arg
+			}
 		} else if target == "." && !strings.HasPrefix(arg, "-") {
 			target = arg
 		} else {
@@ -65,6 +74,10 @@ func run(args []string) error {
 	if writeErr := os.WriteFile(wasmPath, wasmBytes, 0755); writeErr != nil {
 		stopAnim()
 		return fmt.Errorf("failed to write wasm module to temp file: %w", writeErr)
+	}
+
+	if runOptLevel != "" {
+		_, _ = optimizeWasmFile(wasmPath, runOptLevel)
 	}
 
 	elapsed := time.Since(start).Round(time.Millisecond)

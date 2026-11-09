@@ -25,6 +25,9 @@ type ModuleLoader struct {
 	allDecls      []Decl
 	entryDir      string
 	moduleAliases map[string]string
+	moduleRoot    string
+	moduleName    string
+	moduleReqs    map[string]string
 
 	// FileReadOverlay, when set, is consulted before the filesystem. The LSP
 	// uses it to feed unsaved buffer contents across open tabs so that
@@ -49,12 +52,61 @@ func NewModuleLoader() *ModuleLoader {
 	}
 }
 
+func parseUbeMod(content string) (string, map[string]string) {
+	name := ""
+	reqs := make(map[string]string)
+	inRequire := false
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "module ") {
+			name = strings.TrimSpace(strings.TrimPrefix(trimmed, "module "))
+			continue
+		}
+		if trimmed == "require (" {
+			inRequire = true
+			continue
+		}
+		if inRequire {
+			if trimmed == ")" {
+				inRequire = false
+				continue
+			}
+			parts := strings.Fields(trimmed)
+			if len(parts) >= 2 {
+				reqs[parts[0]] = parts[1]
+			}
+		}
+	}
+	return name, reqs
+}
+
 func (m *ModuleLoader) reset(entryDir string) {
 	m.visitingDirs = map[string]bool{}
 	m.dirPackages = map[string]string{}
 	m.allDecls = nil
 	m.entryDir = entryDir
 	m.moduleAliases = map[string]string{}
+	m.moduleRoot = ""
+	m.moduleName = ""
+	m.moduleReqs = make(map[string]string)
+
+	curr := entryDir
+	for {
+		modFile := filepath.Join(curr, "ube.mod")
+		if data, err := m.readFile(modFile); err == nil {
+			m.moduleRoot = curr
+			m.moduleName, m.moduleReqs = parseUbeMod(string(data))
+			break
+		}
+		parent := filepath.Dir(curr)
+		if parent == curr || parent == "" {
+			break
+		}
+		curr = parent
+	}
 }
 
 // Load builds a program from a package directory, or from the directory that
@@ -340,6 +392,22 @@ func (m *ModuleLoader) resolveAndLoadImport(imp *ImportDecl, fromDir string) (st
 	}
 
 	targetDir := imp.Path
+
+	// Module-root and vendoring resolution:
+	if m.moduleName != "" && m.moduleRoot != "" {
+		if imp.Path == m.moduleName {
+			targetDir = m.moduleRoot
+		} else if strings.HasPrefix(imp.Path, m.moduleName+"/") {
+			rel := strings.TrimPrefix(imp.Path, m.moduleName+"/")
+			targetDir = filepath.Join(m.moduleRoot, filepath.FromSlash(rel))
+		} else {
+			vendorCandidate := filepath.Join(m.moduleRoot, "vendor", filepath.FromSlash(imp.Path))
+			if info, err := os.Stat(vendorCandidate); err == nil && info.IsDir() {
+				targetDir = vendorCandidate
+			}
+		}
+	}
+
 	if !filepath.IsAbs(targetDir) {
 		targetDir = filepath.Join(fromDir, targetDir)
 	}

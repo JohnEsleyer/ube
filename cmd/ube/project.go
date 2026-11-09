@@ -25,6 +25,10 @@ func newProject(args []string) error {
 	if err := os.WriteFile(filepath.Join(name, ".gitignore"), []byte("/main\n*.wasm\n"), 0644); err != nil {
 		return err
 	}
+	modSource := fmt.Sprintf("module %s\n\nrequire (\n)\n", name)
+	if err := os.WriteFile(filepath.Join(name, "ube.mod"), []byte(modSource), 0644); err != nil {
+		return err
+	}
 	fmt.Printf("✓ Created %s\n  cd %s && ube run .\n", name, name)
 	return nil
 }
@@ -40,10 +44,17 @@ func initProject() error {
 	if _, err := os.Stat(".gitignore"); os.IsNotExist(err) {
 		_ = os.WriteFile(".gitignore", []byte("/main\n*.wasm\n"), 0644)
 	}
+	if _, err := os.Stat("ube.mod"); os.IsNotExist(err) {
+		dirName := filepath.Base(filepath.Clean("."))
+		if dirName == "." || dirName == "/" || dirName == "" {
+			dirName = "main"
+		}
+		_ = os.WriteFile("ube.mod", []byte(fmt.Sprintf("module %s\n\nrequire (\n)\n", dirName)), 0644)
+	}
 	fmt.Printf("✓ Initialized project in current directory\n  ube run .\n")
 	return nil
 }
 
 func help() {
-	fmt.Printf("🍠 Ube %s — The sweet, grounded language for games, apps, and backends.\n\nUsage: ube <command> [options]\n       ube [dir|file.ube]\n\nCommands:\n  new <name>                 Create a starter project\n  check [dir|file]           Check syntax, types, and affine ownership\n  build [dir|file] [-o app]  Build a Wasm module (.wasm)\n  run [dir|file] [args...]   Compile to Wasm and run it\n  test [dir|file|./...]      Discover and run package tests\n  fmt [dir|file]             Format Ube source files (--check or -w)\n  doc [file.ube] [sym]       Extract declarations and signatures\n  flow <file.ube>            Visual execution call-tree from main()\n  sig [dir]                  Extracts project symbol signatures (zero body)\n\n  For LLM context extraction and atomic patching, use Textify:\n    https://github.com/JohnEsleyer/textify\n\n  lsp                       Start the language server\n  version                   Show the version\n  help                      Show this help\n\nBuild options:\n  -o <path>                 Set output path (.wasm by default)\n  --wasm                    Build portable WebAssembly/WASI output (default)\n", version)
+	fmt.Printf("🍠 Ube %s — The sweet, grounded language for games, apps, and backends.\n\nUsage: ube <command> [options]\n       ube [dir|file.ube]\n\nCommands:\n  new <name>                 Create a starter project\n  check [dir|file]           Check syntax, types, and affine ownership\n  build [dir|file] [-o app]  Build a Wasm module (.wasm)\n  run [dir|file] [args...]   Compile to Wasm and run it\n  test [dir|file|./...]      Discover and run package tests\n  fmt [dir|file]             Format Ube source files (--check or -w)\n  doc [file.ube] [sym]       Extract declarations and signatures\n  flow <file.ube>            Visual execution call-tree from main()\n  sig [dir]                  Extracts project symbol signatures (zero body)\n\n  For LLM context extraction and atomic patching, use Textify:\n    https://github.com/JohnEsleyer/textify\n\n  lsp                       Start the language server\n  version                   Show the version\n  help                      Show this help\n\nBuild options:\n  -o <path>                 Set output path (.wasm by default)\n  --wasm                    Build portable WebAssembly/WASI output (default)\n  --release, -O[0-3|s|z]    Optimize output using wasm-opt (if installed)\n", version)
 }

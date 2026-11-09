@@ -682,7 +682,7 @@ func (e *wasmEmitter) compileFunction(fn *FnDecl) ([]byte, error) {
 		writeUleb128(&codeBuf, 1)
 		codeBuf.WriteByte(lt)
 	}
-	codeBuf.Write(bodyBuf.Bytes())
+	codeBuf.Write(peepholeOptimizeWasm(bodyBuf.Bytes()))
 
 	var fullBuf bytes.Buffer
 	writeUleb128(&fullBuf, uint32(codeBuf.Len()))

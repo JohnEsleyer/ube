@@ -34,6 +34,121 @@ func groupLocalsRLE(locals []wasm.ValType) []rleLocalGroup {
 	return groups
 }
 
+func optimizeIR(body []IRInstruction) []IRInstruction {
+	if len(body) == 0 {
+		return body
+	}
+	out := make([]IRInstruction, 0, len(body))
+	n := len(body)
+	i := 0
+	for i < n {
+		ins := body[i]
+
+		// OpSetLocal X followed immediately by OpGetLocal X -> OpTeeLocal X
+		if ins.Op == OpSetLocal && i+1 < n && body[i+1].Op == OpGetLocal && body[i+1].LocalIdx == ins.LocalIdx {
+			out = append(out, IRInstruction{Op: OpTeeLocal, LocalIdx: ins.LocalIdx})
+			i += 2
+			continue
+		}
+
+		// i32.const 0 + i32.add -> no-op (identity)
+		if ins.Op == OpConstI32 && ins.ImmI32 == 0 && i+1 < n && body[i+1].Op == OpAdd && body[i+1].Type == wasm.ValI32 {
+			i += 2
+			continue
+		}
+
+		// i32.const 1 + i32.mul -> no-op (identity)
+		if ins.Op == OpConstI32 && ins.ImmI32 == 1 && i+1 < n && body[i+1].Op == OpMul && body[i+1].Type == wasm.ValI32 {
+			i += 2
+			continue
+		}
+
+		// i64.const 0 + i64.add -> no-op (identity)
+		if ins.Op == OpConstI64 && ins.ImmI64 == 0 && i+1 < n && body[i+1].Op == OpAdd && body[i+1].Type == wasm.ValI64 {
+			i += 2
+			continue
+		}
+
+		// const followed by drop -> dead-code elimination
+		if (ins.Op == OpConstI32 || ins.Op == OpConstI64 || ins.Op == OpConstF32 || ins.Op == OpConstF64) && i+1 < n && body[i+1].Op == OpDrop {
+			i += 2
+			continue
+		}
+
+		out = append(out, ins)
+		i++
+	}
+	return out
+}
+
+func readUleb128Bytes(data []byte) (uint32, int) {
+	var result uint32
+	var shift uint
+	for i, b := range data {
+		result |= uint32(b&0x7f) << shift
+		if b&0x80 == 0 {
+			return result, i + 1
+		}
+		shift += 7
+		if shift >= 35 {
+			return 0, 0
+		}
+	}
+	return 0, 0
+}
+
+// peepholeOptimizeWasm applies byte-level peephole rewrites to already-emitted
+// WebAssembly instruction bytes. This is a second-pass complement to optimizeIR;
+// it catches patterns that survive IR lowering (e.g. from wasm_emit.go paths that
+// do not go through EmitFunctionBody).
+func peepholeOptimizeWasm(code []byte) []byte {
+	if len(code) == 0 {
+		return code
+	}
+	out := make([]byte, 0, len(code))
+	n := len(code)
+	i := 0
+	for i < n {
+		// local.set X (0x21 <uleb>) followed by local.get X (0x20 <uleb>) -> local.tee X (0x22 <uleb>)
+		if code[i] == 0x21 && i+1 < n {
+			setIdxStart := i + 1
+			setIdx, setLen := readUleb128Bytes(code[setIdxStart:])
+			if setLen > 0 {
+				afterSet := setIdxStart + setLen
+				if afterSet < n && code[afterSet] == 0x20 {
+					getIdxStart := afterSet + 1
+					getIdx, getLen := readUleb128Bytes(code[getIdxStart:])
+					if getLen > 0 && setIdx == getIdx {
+						out = append(out, 0x22)
+						out = append(out, code[setIdxStart:setIdxStart+setLen]...)
+						i = getIdxStart + getLen
+						continue
+					}
+				}
+			}
+		}
+
+		// i32.const 0 (0x41 0x00) + i32.add (0x6a) -> elide both
+		if i+2 < n && code[i] == 0x41 && code[i+1] == 0x00 && code[i+2] == 0x6a {
+			i += 3
+			continue
+		}
+
+		// i32.const 1 (0x41 0x01) + i32.mul (0x6c) -> elide both
+		if i+2 < n && code[i] == 0x41 && code[i+1] == 0x01 && code[i+2] == 0x6c {
+			i += 3
+			continue
+		}
+
+		// i32.const 0 (0x41 0x00) + i32.sub (0x6b) -> elide both (0 - x is not identity; skip this)
+		// NOTE: 0 - x ≠ identity; we intentionally do NOT elide this case.
+
+		out = append(out, code[i])
+		i++
+	}
+	return out
+}
+
 // EmitFunctionBody emits binary WebAssembly for an IRFunction.
 func EmitFunctionBody(fn *IRFunction) []byte {
 	var codeBuf bytes.Buffer
@@ -46,8 +161,9 @@ func EmitFunctionBody(fn *IRFunction) []byte {
 		codeBuf.WriteByte(byte(l.Type))
 	}
 
-	// 2. Linear instruction output
-	for _, ins := range fn.Body {
+	// 2. IR-level peephole optimization, then linear instruction emission
+	optimizedBody := optimizeIR(fn.Body)
+	for _, ins := range optimizedBody {
 		emitIRInstruction(&codeBuf, ins)
 	}
 
