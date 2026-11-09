@@ -62,7 +62,10 @@ Every language construct lowers to WebAssembly instructions directly. There is n
 | Language Feature | Native WebAssembly Implementation | Status |
 | :--- | :--- | :---: |
 | Arithmetic & Bitwise | Direct Wasm numeric opcodes (`i32.add`, `i64.mul`, `f32.sub`, …) | ✅ |
+| Precision IEEE-754 Floats | Scientific/decimal formatting, `NaN`, `+Inf`, `-Inf`, `-0.0` sign-bit handling | ✅ |
 | Structured Control Flow | `block`, `loop`, `br`, `br_if`, `if/else` | ✅ |
+| Modular Wasm IR Pipeline | Linear intermediate representation + virtual scratch local allocator (`LocalPool`) | ✅ |
+| Single-Threaded Concurrency | WASI cooperative microtasks, lock-free ring buffers (`Chan[T]`, `select`) | ✅ |
 | Structs & Mut Receivers | Shadow stack & linear memory pointer offsets | ✅ |
 | Ownership & Views | Compile-time affine `move` tracking + non-escaping `view` parameters | ✅ |
 | Dynamic Slices (`[]T`) | Arena-backed fat pointer header `{ptr, len, cap}` | ✅ |
@@ -752,7 +755,8 @@ fn main() {
 | :--- | :--- | :--- |
 | `ube build` | `ube build` / `ube build -o app.wasm` | Compiles the current package (or a directory/file target) into a standalone WebAssembly module. Directory targets default to `<dirname>.wasm`; file targets default to `<stem>.wasm`. |
 | `ube run` | `ube run` / `ube run path/to/pkg` | Compiles and executes a `package main` via the embedded Wasmtime runtime. Bare `ube <dir>` is shorthand for `ube run <dir>`. |
-| `ube check` | `ube check` / `ube check path/to/pkg` | Static audit of syntax, types, affine moves, package imports, and arena invariants. Defaults to the current directory. |
+| `ube check` | `ube check` / `ube check path/to/pkg` | Static audit of syntax, types, affine moves, package imports, and arena invariants (features resilient parser recovery). Defaults to the current directory. |
+| `ube check --ai` | `ube check --ai path/to/pkg` | Static audit with resilient recovery, outputting dense diagnostics across all errors. |
 | `ube test` | `ube test` / `ube test ./...` | Runs `test_*` functions per package directory, including all `_test.ube` files in that package. `./...` walks nested packages. |
 | `ube fmt` | `ube fmt -w .` | Canonical formatter with automatic struct field columnar alignment. |
 | `ube doc` | `ube doc main.ube [sym]` | Prints signatures, fields, and method documentation. |
@@ -774,20 +778,20 @@ Ube's compiler includes two interfaces specifically useful when a model is navig
 
 ### Dense diagnostics: `--ai`
 
-Both `ube build --ai` and `ube test --ai` emit one-line-per-error diagnostics in the form:
+`ube check --ai`, `ube build --ai`, and `ube test --ai` emit one-line-per-error diagnostics in the form:
 
 ```
 ERR|file.ube:LINE:COL|class|k=v|k=v
 ```
 
-Example: `ERR|player.ube:45:12|type_mismatch|expected:i32|got:string`. Class and key-value fields are inferred from the compiler message; unrecognized messages fall back to `class=error`. Twenty to forty tokens replace a hundred-line trace dump.
+Example: `ERR|player.ube:45:12|type_mismatch|expected:i32|got:string`. Thanks to statement-level and block-level parser recovery, multiple syntax and type errors are reported concurrently without terminating on the first failure. Class and key-value fields are inferred from the compiler message; unrecognized messages fall back to `class=error`. Twenty to forty tokens replace a hundred-line trace dump.
 
 ### Suggested loop
 
 1. **Orient.** Run `ube sig` and provide the symbol map to the model as project context.
 2. **Provide context.** Include the relevant source files or excerpts for the task.
 3. **Edit.** Apply the model's changes using your normal review and editing workflow.
-4. **Verify.** Run `ube build --ai` or `ube test --ai`. The dense diagnostic names the offending variable and the compiler's hint.
+4. **Verify.** Run `ube check --ai`, `ube build --ai`, or `ube test --ai`. The dense diagnostic names the offending variable and the compiler's hint.
 
 The dense diagnostic format is the one interface Ube promises to keep stable. If a diagnostic is unrecognized, it degrades to `class=error` with no fields, which is worse than the verbose form for a model but still better than a raw stack trace.
 
