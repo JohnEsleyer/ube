@@ -1,0 +1,76 @@
+// File: tests/test_v15_features.ube
+package main
+
+import "std/env"
+
+fn assert(cond: bool) {
+    if !cond {
+        env.exit(1)
+    }
+}
+
+struct Point2D {
+    x: i32,
+    y: i32
+}
+
+fn get_tuple_coords() -> (i32, i32) {
+    return (100, 250)
+}
+
+fn get_struct_point() -> Point2D {
+    return Point2D{ x: 30, y: 70 }
+}
+
+fn test_float_string_interpolation() {
+    let f1: f32 = 3.75
+    let s1 = f"{f1}"
+    assert(s1 == "3.75")
+
+    let f2: f64 = 100.0
+    let s2 = f"{f2}"
+    assert(s2 == "100.0")
+
+    let neg: f32 = -0.5
+    let s3 = f"{neg}"
+    assert(s3 == "-0.5")
+}
+
+fn test_tuple_destructuring() {
+    let (a, b) = (10, 20)
+    assert(a == 10)
+    assert(b == 20)
+
+    let (x, y) = get_tuple_coords()
+    assert(x == 100)
+    assert(y == 250)
+}
+
+fn test_struct_destructuring() {
+    let pt = Point2D{ x: 42, y: 99 }
+    let (px, py) = move pt
+    assert(px == 42)
+    assert(py == 99)
+
+    let (sx, sy) = get_struct_point()
+    assert(sx == 30)
+    assert(sy == 70)
+}
+
+fn test_constant_folding() {
+    let folded_arithmetic = 10 + 20 * 2
+    assert(folded_arithmetic == 50)
+
+    let folded_str = "Ube" + " Lang"
+    assert(folded_str == "Ube Lang")
+
+    let folded_bool = true && !false
+    assert(folded_bool)
+}
+
+fn main() {
+    test_float_string_interpolation()
+    test_tuple_destructuring()
+    test_struct_destructuring()
+    test_constant_folding()
+}

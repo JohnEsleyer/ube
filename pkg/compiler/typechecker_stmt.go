@@ -79,15 +79,38 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		s.ValueType = valT
 
 		if len(s.Names) > 0 {
-			tupleT, ok := tc.resolveType(valT).(TupleType)
-			if !ok {
-				return fmt.Errorf("[%s] destructuring requires a tuple value, got '%s'", s.At, valT)
+			resolvedValT := tc.resolveType(valT)
+			var elemTypes []UbeType
+			if tupleT, ok := resolvedValT.(TupleType); ok {
+				elemTypes = tupleT.Elems
+			} else if customT, ok := resolvedValT.(CustomType); ok {
+				if fields, ok := tc.Global.Structs[customT.Name]; ok {
+					for _, f := range fields {
+						elemTypes = append(elemTypes, f.Type)
+					}
+				} else {
+					return fmt.Errorf("[%s] destructuring requires a tuple or struct, got '%s'", s.At, valT)
+				}
+			} else {
+				return fmt.Errorf("[%s] destructuring requires a tuple or struct value, got '%s'", s.At, valT)
 			}
-			if len(tupleT.Elems) != len(s.Names) {
-				return fmt.Errorf("[%s] destructuring expects %d values, got %d", s.At, len(tupleT.Elems), len(s.Names))
+
+			if len(elemTypes) != len(s.Names) {
+				return fmt.Errorf("[%s] destructuring expects %d values, got %d", s.At, len(elemTypes), len(s.Names))
 			}
 			if s.Type != nil {
-				return fmt.Errorf("[%s] destructured variables cannot have a type annotation", s.At)
+				if tupAnnot, ok := tc.resolveType(s.Type).(TupleType); ok {
+					if len(tupAnnot.Elems) != len(s.Names) {
+						return fmt.Errorf("[%s] destructuring type annotation expects %d types, got %d", s.At, len(s.Names), len(tupAnnot.Elems))
+					}
+					for i, expectedT := range tupAnnot.Elems {
+						if err := tc.assertCompat(expectedT, elemTypes[i], s.At); err != nil {
+							return fmt.Errorf("[%s] destructuring type mismatch at element %d: %w", s.At, i, err)
+						}
+					}
+				} else {
+					return fmt.Errorf("[%s] destructuring type annotation must be a tuple type", s.At)
+				}
 			}
 			if _, isMove := s.Value.(*MoveExpr); !isMove {
 				root := variableRoot(s.Value)
@@ -104,7 +127,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 				if _, exists := env.Vars[name]; exists {
 					return fmt.Errorf("[%s] variable '%s' already declared in this scope", s.At, name)
 				}
-				elemT := tupleT.Elems[i].WithRegion(env.ScopeDepth)
+				elemT := elemTypes[i].WithRegion(env.ScopeDepth)
 				if tc.hasLifetime(elemT) && tc.exprDepth(s.Value, env) > env.ScopeDepth {
 					return fmt.Errorf("[%s] Safety Error: value rooted at scope depth %d cannot escape into '%s' at depth %d", s.At, tc.exprDepth(s.Value, env), name, env.ScopeDepth)
 				}

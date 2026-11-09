@@ -215,6 +215,25 @@ func (ctx *fnContext) compileSpecialCall(buf *bytes.Buffer, e *CallExpr) (bool, 
 			emitCallIdx(buf, ctx.emitter.fnIndices["__i32_to_str"])
 		}
 		return true, nil
+	case "float_to_str", "f64_to_str":
+		if len(e.Args) != 1 {
+			return true, nil
+		}
+		if err := ctx.compileExpr(buf, e.Args[0]); err != nil {
+			return true, err
+		}
+		emitCallIdx(buf, ctx.emitter.fnIndices["__f64_to_str"])
+		return true, nil
+	case "f32_to_str":
+		if len(e.Args) != 1 {
+			return true, nil
+		}
+		if err := ctx.compileExpr(buf, e.Args[0]); err != nil {
+			return true, err
+		}
+		buf.WriteByte(0xbb) // f64.promote_f32
+		emitCallIdx(buf, ctx.emitter.fnIndices["__f64_to_str"])
+		return true, nil
 	}
 	return false, nil
 }
@@ -703,11 +722,10 @@ func (ctx *fnContext) compileStringPart(buf *bytes.Buffer, part Expr) error {
 		emitI32Const(buf, int32(ctx.emitter.falseHeader))
 		buf.WriteByte(0x0b)
 	case "f32":
-		buf.WriteByte(0xa8) // i32.trunc_f32_s
-		emitCallIdx(buf, ctx.emitter.fnIndices["__i32_to_str"])
+		buf.WriteByte(0xbb) // f64.promote_f32
+		emitCallIdx(buf, ctx.emitter.fnIndices["__f64_to_str"])
 	case "f64":
-		buf.WriteByte(0xaa) // i32.trunc_f64_s
-		emitCallIdx(buf, ctx.emitter.fnIndices["__i32_to_str"])
+		emitCallIdx(buf, ctx.emitter.fnIndices["__f64_to_str"])
 	case "i64", "u64":
 		emitCallIdx(buf, ctx.emitter.fnIndices["__i64_to_str"])
 	default:

@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -228,6 +229,7 @@ func (m *Monomorphizer) Process(prog *Program) error {
 			if expr == nil {
 				return nil
 			}
+			expr = foldConstants(expr)
 			switch e := expr.(type) {
 			case *MoveExpr:
 				return scanExpr(e.Value)
@@ -846,4 +848,93 @@ func typeBaseName(t UbeType) string {
 	default:
 		return t.String()
 	}
+}
+
+// foldConstants performs compile-time constant folding on binary and unary expressions.
+func foldConstants(expr Expr) Expr {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.(type) {
+	case *UnaryExpr:
+		e.Operand = foldConstants(e.Operand)
+		if lit, ok := e.Operand.(*LiteralExpr); ok {
+			switch e.Op {
+			case "!":
+				if lit.Val == "true" {
+					return &LiteralExpr{At: e.At, Val: "false", Type: PrimitiveType{Name: "bool"}}
+				} else if lit.Val == "false" {
+					return &LiteralExpr{At: e.At, Val: "true", Type: PrimitiveType{Name: "bool"}}
+				}
+			case "-":
+				if _, ok := lit.Type.(UntypedIntType); ok {
+					if v, err := strconv.ParseInt(lit.Val, 0, 64); err == nil {
+						return &LiteralExpr{At: e.At, Val: strconv.FormatInt(-v, 10), Type: lit.Type}
+					}
+				}
+			}
+		}
+	case *BinaryExpr:
+		e.Left = foldConstants(e.Left)
+		e.Right = foldConstants(e.Right)
+		lLit, lOk := e.Left.(*LiteralExpr)
+		rLit, rOk := e.Right.(*LiteralExpr)
+		if lOk && rOk {
+			if e.Op == "&&" || e.Op == "||" {
+				if (lLit.Val == "true" || lLit.Val == "false") && (rLit.Val == "true" || rLit.Val == "false") {
+					lb := lLit.Val == "true"
+					rb := rLit.Val == "true"
+					res := false
+					if e.Op == "&&" {
+						res = lb && rb
+					} else {
+						res = lb || rb
+					}
+					valStr := "false"
+					if res {
+						valStr = "true"
+					}
+					return &LiteralExpr{At: e.At, Val: valStr, Type: PrimitiveType{Name: "bool"}}
+				}
+			}
+			if e.Op == "+" {
+				if _, ok1 := lLit.Type.(StringType); ok1 {
+					if _, ok2 := rLit.Type.(StringType); ok2 {
+						return &LiteralExpr{At: e.At, Val: lLit.Val + rLit.Val, Type: StringType{}}
+					}
+				}
+			}
+			_, lIsInt := lLit.Type.(UntypedIntType)
+			_, rIsInt := rLit.Type.(UntypedIntType)
+			if lIsInt && rIsInt {
+				lv, lErr := strconv.ParseInt(lLit.Val, 0, 64)
+				rv, rErr := strconv.ParseInt(rLit.Val, 0, 64)
+				if lErr == nil && rErr == nil {
+					switch e.Op {
+					case "+":
+						return &LiteralExpr{At: e.At, Val: strconv.FormatInt(lv+rv, 10), Type: lLit.Type}
+					case "-":
+						return &LiteralExpr{At: e.At, Val: strconv.FormatInt(lv-rv, 10), Type: lLit.Type}
+					case "*":
+						return &LiteralExpr{At: e.At, Val: strconv.FormatInt(lv*rv, 10), Type: lLit.Type}
+					case "/":
+						if rv != 0 {
+							return &LiteralExpr{At: e.At, Val: strconv.FormatInt(lv/rv, 10), Type: lLit.Type}
+						}
+					case "%":
+						if rv != 0 {
+							return &LiteralExpr{At: e.At, Val: strconv.FormatInt(lv%rv, 10), Type: lLit.Type}
+						}
+					case "&":
+						return &LiteralExpr{At: e.At, Val: strconv.FormatInt(lv&rv, 10), Type: lLit.Type}
+					case "|":
+						return &LiteralExpr{At: e.At, Val: strconv.FormatInt(lv|rv, 10), Type: lLit.Type}
+					case "^":
+						return &LiteralExpr{At: e.At, Val: strconv.FormatInt(lv^rv, 10), Type: lLit.Type}
+					}
+				}
+			}
+		}
+	}
+	return expr
 }

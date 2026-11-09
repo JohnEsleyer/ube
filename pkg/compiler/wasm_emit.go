@@ -82,6 +82,7 @@ type wasmEmitter struct {
 	fdWriteIdx    uint32
 	clockTimeIdx  uint32
 	structs       map[string]structMeta
+	structFields  map[string][]FieldDecl
 	enums         map[string][]VariantDecl
 	traits        map[string]*TraitDecl
 	typeIDs       map[string]int32
@@ -98,6 +99,7 @@ func newWasmEmitter() *wasmEmitter {
 		fnReturns:     make(map[string]UbeType),
 		wasiImports:   make(map[string]uint32),
 		structs:       make(map[string]structMeta),
+		structFields:  make(map[string][]FieldDecl),
 		enums:         make(map[string][]VariantDecl),
 		traits:        make(map[string]*TraitDecl),
 		typeIDs:       make(map[string]int32),
@@ -243,6 +245,7 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 				fieldOffsets: make(map[string]int),
 				fieldTypes:   make(map[string]UbeType),
 			}
+			e.structFields[d.Name] = d.Fields
 			e.typeIDs[d.Name] = currentTypeID
 			currentTypeID++
 			structDecls[d.Name] = d
@@ -431,7 +434,13 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 	int64ToStrIdx := intToStrIdx + 1
 	e.fnIndices["__i64_to_str"] = int64ToStrIdx
 
-	startIdx := int64ToStrIdx + 1
+	f64ToStrIdx := int64ToStrIdx + 1
+	e.fnIndices["__f64_to_str"] = f64ToStrIdx
+
+	printF64Idx := f64ToStrIdx + 1
+	e.fnIndices["__print_f64"] = printF64Idx
+
+	startIdx := printF64Idx + 1
 	e.fnIndices["_start"] = startIdx
 
 	// Register types for defined functions
@@ -459,6 +468,8 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{valTypeI32}))   // __str_eq
 	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32}, []byte{valTypeI32}))               // __i32_to_str
 	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI64}, []byte{valTypeI32}))               // __i64_to_str
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeF64}, []byte{valTypeI32}))               // __f64_to_str
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeF64, valTypeI32}, []byte{}))             // __print_f64
 	e.funcs = append(e.funcs, e.registerType([]byte{}, []byte{}))                                   // _start
 
 	// Compile user function bodies
@@ -479,6 +490,8 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 	e.codeBodies = append(e.codeBodies, e.buildStrEqFunc())
 	e.codeBodies = append(e.codeBodies, e.buildIntToStrFunc())
 	e.codeBodies = append(e.codeBodies, e.buildInt64ToStrFunc())
+	e.codeBodies = append(e.codeBodies, e.buildF64ToStrFunc())
+	e.codeBodies = append(e.codeBodies, e.buildPrintF64Func())
 	e.codeBodies = append(e.codeBodies, e.buildStartFunc(e.fnIndices["main"]))
 
 	return e.assembleBinary()
@@ -701,6 +714,69 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 	case *BlockStmt:
 		return ctx.compileBlock(buf, s)
 	case *LetStmt:
+		if len(s.Names) > 0 {
+			tupLocal := ctx.allocLocal(valTypeI32)
+			if err := ctx.compileExpr(buf, s.Value); err != nil {
+				return err
+			}
+			buf.WriteByte(0x21)
+			writeUleb128(buf, tupLocal)
+
+			var elemTypes []UbeType
+			var elemOffsets []int
+			if tt, ok := s.ValueType.(TupleType); ok {
+				offset := 0
+				for _, el := range tt.Elems {
+					elemTypes = append(elemTypes, el)
+					sz := 4
+					if el != nil {
+						if el.ByteSize() > 4 {
+							sz = el.ByteSize()
+							offset = alignUpInt(offset, el.Align())
+						}
+					}
+					elemOffsets = append(elemOffsets, offset)
+					offset += sz
+				}
+			} else if ct, ok := s.ValueType.(CustomType); ok {
+				if meta, ok := ctx.emitter.structs[ct.Name]; ok {
+					fields := ctx.emitter.structFields[ct.Name]
+					for _, f := range fields {
+						elemTypes = append(elemTypes, f.Type)
+						elemOffsets = append(elemOffsets, meta.fieldOffsets[f.Name])
+					}
+				}
+			}
+
+			for i, name := range s.Names {
+				var elemT UbeType
+				offset := i * 4
+				if i < len(elemTypes) {
+					elemT = elemTypes[i]
+				}
+				if i < len(elemOffsets) {
+					offset = elemOffsets[i]
+				}
+				wasmLocalType := wasmTypeOrDefault(elemT)
+				loadOp, _, align := fieldLoadStoreInfo(elemT)
+
+				varLocal := ctx.allocLocal(wasmLocalType)
+				ctx.locals[name] = varLocal
+				if elemT != nil {
+					ctx.localTypes[name] = elemT
+				}
+
+				buf.WriteByte(0x20) // local.get tupLocal
+				writeUleb128(buf, tupLocal)
+				buf.WriteByte(loadOp)
+				writeUleb128(buf, align)
+				writeUleb128(buf, uint32(offset))
+				buf.WriteByte(0x21) // local.set varLocal
+				writeUleb128(buf, varLocal)
+			}
+			return nil
+		}
+
 		var t UbeType
 		if s.Type != nil {
 			t = s.Type
@@ -2380,17 +2456,51 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		writeUleb128(buf, structBase)
 
 	case *TupleExpr:
+		offset := 0
+		type tupFieldInfo struct {
+			t       UbeType
+			offset  int
+			storeOp byte
+			align   uint32
+		}
+		var infos []tupFieldInfo
+		for i, el := range e.Elems {
+			var t UbeType
+			if i < len(e.Types) {
+				t = e.Types[i]
+			} else {
+				if inferred := ctx.inferExprType(el); inferred != "" {
+					t = typeFromString(inferred)
+				}
+			}
+			sz := 4
+			al := uint32(2)
+			storeOp := byte(0x36)
+			if t != nil {
+				_, storeOp, al = fieldLoadStoreInfo(t)
+				if t.ByteSize() > 4 {
+					sz = t.ByteSize()
+					offset = alignUpInt(offset, t.Align())
+				}
+			}
+			infos = append(infos, tupFieldInfo{t: t, offset: offset, storeOp: storeOp, align: al})
+			offset += sz
+		}
+		totalSize := alignUpInt(offset, 4)
+		if totalSize < 4 {
+			totalSize = 4
+		}
 		tupBase := ctx.allocLocal(valTypeI32)
-		ctx.emitAlloc(buf, int32(len(e.Elems)*4), tupBase)
+		ctx.emitAlloc(buf, int32(totalSize), tupBase)
 		for i, el := range e.Elems {
 			buf.WriteByte(0x20)
 			writeUleb128(buf, tupBase)
 			if err := ctx.compileExpr(buf, el); err != nil {
 				return err
 			}
-			buf.WriteByte(0x36)
-			writeUleb128(buf, 2)
-			writeUleb128(buf, uint32(i*4))
+			buf.WriteByte(infos[i].storeOp)
+			writeUleb128(buf, infos[i].align)
+			writeUleb128(buf, uint32(infos[i].offset))
 		}
 		buf.WriteByte(0x20)
 		writeUleb128(buf, tupBase)
@@ -3663,20 +3773,19 @@ func (ctx *fnContext) compilePrint(buf *bytes.Buffer, args []Expr, newline bool)
 			if err := ctx.compileExpr(buf, arg); err != nil {
 				return err
 			}
-			buf.WriteByte(0xa8) // i32.trunc_f32_s
+			buf.WriteByte(0xbb) // f64.promote_f32
 			buf.WriteByte(0x41)
 			writeSleb128(buf, currentNL)
 			buf.WriteByte(0x10)
-			writeUleb128(buf, ctx.emitter.fnIndices["__print_i32"])
+			writeUleb128(buf, ctx.emitter.fnIndices["__print_f64"])
 		} else if argT == "f64" {
 			if err := ctx.compileExpr(buf, arg); err != nil {
 				return err
 			}
-			buf.WriteByte(0xaa) // i32.trunc_f64_s
 			buf.WriteByte(0x41)
 			writeSleb128(buf, currentNL)
 			buf.WriteByte(0x10)
-			writeUleb128(buf, ctx.emitter.fnIndices["__print_i32"])
+			writeUleb128(buf, ctx.emitter.fnIndices["__print_f64"])
 		} else {
 			if err := ctx.compileExpr(buf, arg); err != nil {
 				return err
@@ -4296,6 +4405,366 @@ func (e *wasmEmitter) buildPrintInt64Func() []byte {
 	writeUleb128(&full, 1)
 	full.WriteByte(valTypeI32)
 	full.Write(body.Bytes())
+
+	var res bytes.Buffer
+	writeUleb128(&res, uint32(full.Len()))
+	res.Write(full.Bytes())
+	return res.Bytes()
+}
+
+// buildPrintF64Func prints an f64 followed by an optional newline.
+func (e *wasmEmitter) buildPrintF64Func() []byte {
+	var body bytes.Buffer
+
+	emitLocalGet(&body, 0)
+	emitCallIdx(&body, e.fnIndices["__f64_to_str"])
+	emitLocalSet(&body, 2)
+
+	emitLocalGet(&body, 2)
+	emitI32Load(&body, 0, 2)
+	emitLocalGet(&body, 2)
+	emitI32Load(&body, 4, 2)
+	emitLocalGet(&body, 1)
+	emitCallIdx(&body, e.fnIndices["__print_str"])
+
+	body.WriteByte(0x0b)
+
+	var full bytes.Buffer
+	writeUleb128(&full, 1)
+	writeUleb128(&full, 1)
+	full.WriteByte(valTypeI32)
+	full.Write(body.Bytes())
+
+	var res bytes.Buffer
+	writeUleb128(&res, uint32(full.Len()))
+	res.Write(full.Bytes())
+	return res.Bytes()
+}
+
+// buildF64ToStrFunc converts an f64 into an arena-allocated string header {ptr, len}.
+func (e *wasmEmitter) buildF64ToStrFunc() []byte {
+	var body bytes.Buffer
+
+	// 1. base = align8(global0)
+	body.WriteByte(0x23) // global.get 0
+	writeUleb128(&body, 0)
+	emitI32Const(&body, 7)
+	body.WriteByte(0x6a) // i32.add
+	emitI32Const(&body, -8)
+	body.WriteByte(0x71)   // i32.and
+	emitLocalSet(&body, 1) // local 1: base
+
+	// 2. global0 = base + 64
+	emitLocalGet(&body, 1)
+	emitI32Const(&body, 64)
+	body.WriteByte(0x6a)
+	body.WriteByte(0x24) // global.set 0
+	writeUleb128(&body, 0)
+
+	// 3. pos = base + 8 (string bytes start at base+8; header is at base+0..7)
+	emitLocalGet(&body, 1)
+	emitI32Const(&body, 8)
+	body.WriteByte(0x6a)
+	emitLocalSet(&body, 2) // local 2: pos
+
+	// 4. Check NaN: val != val
+	emitLocalGet(&body, 0)
+	emitLocalGet(&body, 0)
+	body.WriteByte(0x62) // f64.ne
+	body.WriteByte(0x04) // if
+	body.WriteByte(valTypeVoid)
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 'N')
+	body.WriteByte(0x3a)
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 0)
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 'a')
+	body.WriteByte(0x3a)
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 1)
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 'N')
+	body.WriteByte(0x3a)
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 2)
+	emitLocalGet(&body, 1)
+	emitLocalGet(&body, 2)
+	emitI32Store(&body, 0, 2)
+	emitLocalGet(&body, 1)
+	emitI32Const(&body, 3)
+	emitI32Store(&body, 4, 2)
+	emitLocalGet(&body, 1)
+	body.WriteByte(0x0f) // return
+	body.WriteByte(0x0b) // end if
+
+	// 5. Sign: if val < 0.0
+	emitLocalGet(&body, 0)
+	body.WriteByte(0x44) // f64.const 0.0
+	var zeroF64 [8]byte
+	body.Write(zeroF64[:])
+	body.WriteByte(0x63) // f64.lt
+	body.WriteByte(0x04) // if
+	body.WriteByte(valTypeVoid)
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, '-')
+	body.WriteByte(0x3a)
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 0)
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 1)
+	body.WriteByte(0x6a)
+	emitLocalSet(&body, 2)
+	emitLocalGet(&body, 0)
+	body.WriteByte(0x9a) // f64.neg
+	emitLocalSet(&body, 0)
+	body.WriteByte(0x0b) // end if
+
+	// 6. int_part = i64.trunc_f64_s(val)
+	emitLocalGet(&body, 0)
+	body.WriteByte(0xb0)   // i64.trunc_f64_s
+	emitLocalSet(&body, 6) // local 6: int_part
+
+	// 7. Write integer digits
+	emitLocalGet(&body, 6)
+	body.WriteByte(0x50) // i64.eqz
+	body.WriteByte(0x04) // if
+	body.WriteByte(valTypeVoid)
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, '0')
+	body.WriteByte(0x3a)
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 0)
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 1)
+	body.WriteByte(0x6a)
+	emitLocalSet(&body, 2)
+	body.WriteByte(0x05) // else
+
+	// Count digits: t_temp = int_part; digits_count = 0;
+	emitLocalGet(&body, 6)
+	emitLocalSet(&body, 7) // local 7: t_temp
+	emitI32Const(&body, 0)
+	emitLocalSet(&body, 3) // local 3: digits_count
+
+	body.WriteByte(0x03) // loop count_digits
+	body.WriteByte(valTypeVoid)
+	emitLocalGet(&body, 3)
+	emitI32Const(&body, 1)
+	body.WriteByte(0x6a)
+	emitLocalSet(&body, 3)
+	emitLocalGet(&body, 7)
+	body.WriteByte(0x42)
+	writeSleb128_64(&body, 10)
+	body.WriteByte(0x80) // i64.div_u
+	body.WriteByte(0x22) // local.tee 7
+	writeUleb128(&body, 7)
+	body.WriteByte(0x50) // i64.eqz
+	emitI32Eqz(&body)
+	body.WriteByte(0x0d) // br_if 0
+	writeUleb128(&body, 0)
+	body.WriteByte(0x0b) // end loop
+
+	// p_temp = pos + digits_count - 1
+	emitLocalGet(&body, 2)
+	emitLocalGet(&body, 3)
+	body.WriteByte(0x6a)
+	emitI32Const(&body, 1)
+	body.WriteByte(0x6b)
+	emitLocalSet(&body, 5) // local 5: p_temp
+
+	emitLocalGet(&body, 6)
+	emitLocalSet(&body, 7) // t_temp = int_part
+
+	body.WriteByte(0x03) // loop write_digits
+	body.WriteByte(valTypeVoid)
+	emitLocalGet(&body, 5)
+	emitLocalGet(&body, 7)
+	body.WriteByte(0x42)
+	writeSleb128_64(&body, 10)
+	body.WriteByte(0x82) // i64.rem_u
+	body.WriteByte(0xa7) // i32.wrap_i64
+	emitI32Const(&body, '0')
+	body.WriteByte(0x6a)
+	body.WriteByte(0x3a) // i32.store8
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 0)
+	emitLocalGet(&body, 5)
+	emitI32Const(&body, 1)
+	body.WriteByte(0x6b)
+	emitLocalSet(&body, 5)
+	emitLocalGet(&body, 7)
+	body.WriteByte(0x42)
+	writeSleb128_64(&body, 10)
+	body.WriteByte(0x80) // i64.div_u
+	body.WriteByte(0x22) // local.tee 7
+	writeUleb128(&body, 7)
+	body.WriteByte(0x50) // i64.eqz
+	emitI32Eqz(&body)
+	body.WriteByte(0x0d) // br_if 0
+	writeUleb128(&body, 0)
+	body.WriteByte(0x0b) // end loop
+
+	emitLocalGet(&body, 2)
+	emitLocalGet(&body, 3)
+	body.WriteByte(0x6a)
+	emitLocalSet(&body, 2)
+	body.WriteByte(0x0b) // end else
+
+	// 8. Write decimal point '.'
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, '.')
+	body.WriteByte(0x3a)
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 0)
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 1)
+	body.WriteByte(0x6a)
+	emitLocalSet(&body, 2)
+
+	// 9. frac_start = pos
+	emitLocalGet(&body, 2)
+	emitLocalSet(&body, 4) // local 4: frac_start
+
+	// 10. frac = val - f64.convert_i64_s(int_part)
+	emitLocalGet(&body, 0)
+	emitLocalGet(&body, 6)
+	body.WriteByte(0xb9)   // f64.convert_i64_s
+	body.WriteByte(0xa1)   // f64.sub
+	emitLocalSet(&body, 8) // local 8: frac
+
+	emitLocalGet(&body, 8)
+	body.WriteByte(0x44)
+	body.Write(zeroF64[:])
+	body.WriteByte(0x63) // f64.lt
+	body.WriteByte(0x04)
+	body.WriteByte(valTypeVoid)
+	body.WriteByte(0x44)
+	body.Write(zeroF64[:])
+	emitLocalSet(&body, 8)
+	body.WriteByte(0x0b)
+
+	// 11. Write 6 fractional digits
+	emitI32Const(&body, 0)
+	emitLocalSet(&body, 3) // counter = 0
+
+	body.WriteByte(0x02) // block exit
+	body.WriteByte(valTypeVoid)
+	body.WriteByte(0x03) // loop frac_digits
+	body.WriteByte(valTypeVoid)
+
+	emitLocalGet(&body, 3)
+	emitI32Const(&body, 6)
+	body.WriteByte(0x4a) // i32.ge_s
+	body.WriteByte(0x0d) // br_if 1
+	writeUleb128(&body, 1)
+
+	emitLocalGet(&body, 8)
+	body.WriteByte(0x44) // f64.const 10.0
+	var tenF64 [8]byte
+	binary.LittleEndian.PutUint64(tenF64[:], math.Float64bits(10.0))
+	body.Write(tenF64[:])
+	body.WriteByte(0xa2) // f64.mul
+	emitLocalSet(&body, 8)
+
+	emitLocalGet(&body, 8)
+	body.WriteByte(0xaa)   // i32.trunc_f64_s
+	emitLocalSet(&body, 5) // digit in p_temp
+
+	emitLocalGet(&body, 2)
+	emitLocalGet(&body, 5)
+	emitI32Const(&body, '0')
+	body.WriteByte(0x6a)
+	body.WriteByte(0x3a)
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 0)
+
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 1)
+	body.WriteByte(0x6a)
+	emitLocalSet(&body, 2)
+
+	emitLocalGet(&body, 8)
+	emitLocalGet(&body, 5)
+	body.WriteByte(0xb7) // f64.convert_i32_s
+	body.WriteByte(0xa1) // f64.sub
+	emitLocalSet(&body, 8)
+
+	emitLocalGet(&body, 3)
+	emitI32Const(&body, 1)
+	body.WriteByte(0x6a)
+	emitLocalSet(&body, 3)
+
+	body.WriteByte(0x0c) // br 0
+	writeUleb128(&body, 0)
+	body.WriteByte(0x0b) // end loop
+	body.WriteByte(0x0b) // end block
+
+	// 12. Strip trailing zeros, keeping at least 1 digit after '.'
+	body.WriteByte(0x02) // block
+	body.WriteByte(valTypeVoid)
+	body.WriteByte(0x03) // loop
+	body.WriteByte(valTypeVoid)
+
+	emitLocalGet(&body, 2)
+	emitLocalGet(&body, 4) // frac_start
+	emitI32Const(&body, 1)
+	body.WriteByte(0x6a)
+	body.WriteByte(0x4c) // i32.le_s
+	body.WriteByte(0x0d) // br_if 1
+	writeUleb128(&body, 1)
+
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 1)
+	body.WriteByte(0x6b)
+	body.WriteByte(0x2d) // i32.load8_u
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 0)
+	emitI32Const(&body, '0')
+	body.WriteByte(0x47) // i32.ne
+	body.WriteByte(0x0d) // br_if 1
+	writeUleb128(&body, 1)
+
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 1)
+	body.WriteByte(0x6b)
+	emitLocalSet(&body, 2) // pos--
+
+	body.WriteByte(0x0c) // br 0
+	writeUleb128(&body, 0)
+	body.WriteByte(0x0b) // end loop
+	body.WriteByte(0x0b) // end block
+
+	// 13. Write string header at base
+	emitLocalGet(&body, 1)
+	emitLocalGet(&body, 1)
+	emitI32Const(&body, 8)
+	body.WriteByte(0x6a)
+	emitI32Store(&body, 0, 2) // header.ptr = base + 8
+
+	emitLocalGet(&body, 1)
+	emitLocalGet(&body, 2)
+	emitLocalGet(&body, 1)
+	emitI32Const(&body, 8)
+	body.WriteByte(0x6a)
+	body.WriteByte(0x6b) // header.len = pos - (base + 8)
+	emitI32Store(&body, 4, 2)
+
+	emitLocalGet(&body, 1) // return base
+
+	var full bytes.Buffer
+	// Locals: 5 i32 (1:base, 2:pos, 3:count, 4:frac_start, 5:p_temp)
+	//         2 i64 (6:int_part, 7:t_temp)
+	//         1 f64 (8:frac)
+	writeUleb128(&full, 3)
+	writeUleb128(&full, 5)
+	full.WriteByte(valTypeI32)
+	writeUleb128(&full, 2)
+	full.WriteByte(valTypeI64)
+	writeUleb128(&full, 1)
+	full.WriteByte(valTypeF64)
+	full.Write(body.Bytes())
+	full.WriteByte(0x0b)
 
 	var res bytes.Buffer
 	writeUleb128(&res, uint32(full.Len()))
