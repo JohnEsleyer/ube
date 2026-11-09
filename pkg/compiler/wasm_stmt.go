@@ -16,8 +16,8 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			if err := ctx.compileExpr(buf, s.Value); err != nil {
 				return err
 			}
-			buf.WriteByte(0x21)
-			writeUleb128(buf, tupLocal)
+			ctx.ir.SetLocal(tupLocal)
+			ctx.ir.FlushToBuffer(buf)
 
 			var elemTypes []UbeType
 			var elemOffsets []int
@@ -63,13 +63,13 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 					ctx.localTypes[name] = elemT
 				}
 
-				buf.WriteByte(0x20) // local.get tupLocal
-				writeUleb128(buf, tupLocal)
+				ctx.ir.GetLocal(tupLocal)
+				ctx.ir.FlushToBuffer(buf)
 				buf.WriteByte(loadOp)
 				writeUleb128(buf, align)
 				writeUleb128(buf, uint32(offset))
-				buf.WriteByte(0x21) // local.set varLocal
-				writeUleb128(buf, varLocal)
+				ctx.ir.SetLocal(varLocal)
+				ctx.ir.FlushToBuffer(buf)
 			}
 			return nil
 		}
@@ -98,8 +98,8 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			if err := ctx.compileExpr(buf, s.Value); err != nil {
 				return err
 			}
-			buf.WriteByte(0x21)
-			writeUleb128(buf, valIdx)
+			ctx.ir.SetLocal(valIdx)
+			ctx.ir.FlushToBuffer(buf)
 		}
 
 	case *AssignStmt:
@@ -109,8 +109,8 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				return fmt.Errorf("unknown variable %s in assignment", ident.Name)
 			}
 			if s.Op != "=" {
-				buf.WriteByte(0x20)
-				writeUleb128(buf, localIdx)
+				ctx.ir.GetLocal(localIdx)
+				ctx.ir.FlushToBuffer(buf)
 				if err := ctx.compileExpr(buf, s.RHS); err != nil {
 					return err
 				}
@@ -126,8 +126,8 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 					return err
 				}
 			}
-			buf.WriteByte(0x21)
-			writeUleb128(buf, localIdx)
+			ctx.ir.SetLocal(localIdx)
+			ctx.ir.FlushToBuffer(buf)
 		} else if mem, ok := s.LHS.(*MemberExpr); ok {
 			structName := mem.TargetType.String()
 			meta, ok := ctx.emitter.structs[structName]
@@ -147,10 +147,10 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			}
 			if s.Op != "=" {
 				targetLocal := ctx.allocLocal(valTypeI32)
-				buf.WriteByte(0x22)
-				writeUleb128(buf, targetLocal)
-				buf.WriteByte(0x20)
-				writeUleb128(buf, targetLocal)
+				ctx.ir.TeeLocal(targetLocal)
+				ctx.ir.FlushToBuffer(buf)
+				ctx.ir.GetLocal(targetLocal)
+				ctx.ir.FlushToBuffer(buf)
 				buf.WriteByte(loadOp)
 				writeUleb128(buf, align)
 				writeUleb128(buf, uint32(offset))
@@ -170,10 +170,10 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				// base was already pushed by the outer compileExpr(mem.Target);
 				// move it into a local so offset can be added before RHS runs.
 				baseLocal := ctx.allocLocal(valTypeI32)
-				buf.WriteByte(0x21)
-				writeUleb128(buf, baseLocal)
-				buf.WriteByte(0x20)
-				writeUleb128(buf, baseLocal)
+				ctx.ir.SetLocal(baseLocal)
+				ctx.ir.FlushToBuffer(buf)
+				ctx.ir.GetLocal(baseLocal)
+				ctx.ir.FlushToBuffer(buf)
 				if offset != 0 {
 					buf.WriteByte(0x41)
 					writeSleb128(buf, int32(offset))
@@ -219,11 +219,11 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				buf.WriteByte(0x6c)
 			}
 			buf.WriteByte(0x6a)
-			buf.WriteByte(0x21)
-			writeUleb128(buf, addrLocal)
+			ctx.ir.SetLocal(addrLocal)
+			ctx.ir.FlushToBuffer(buf)
 
-			buf.WriteByte(0x20)
-			writeUleb128(buf, addrLocal)
+			ctx.ir.GetLocal(addrLocal)
+			ctx.ir.FlushToBuffer(buf)
 			if err := ctx.compileExpr(buf, s.RHS); err != nil {
 				return err
 			}
@@ -237,7 +237,8 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			return err
 		}
 		if ctx.exprLeavesValue(s.Expr) {
-			buf.WriteByte(0x1a)
+			ctx.emitDrop()
+			ctx.ir.FlushToBuffer(buf)
 		}
 
 	case *ReturnStmt:
@@ -277,17 +278,18 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			} else if err := ctx.compileExpr(buf, s.Value); err != nil {
 				return err
 			}
-			buf.WriteByte(0x21)
-			writeUleb128(buf, retLocal)
+			ctx.emitSetLocal(retLocal)
+			ctx.ir.FlushToBuffer(buf)
 
 			ctx.emitAllDefers(buf)
 
-			buf.WriteByte(0x20)
-			writeUleb128(buf, retLocal)
+			ctx.emitGetLocal(retLocal)
+			ctx.ir.FlushToBuffer(buf)
 		} else {
 			ctx.emitAllDefers(buf)
 		}
-		buf.WriteByte(0x0f)
+		ctx.emitReturn()
+		ctx.ir.FlushToBuffer(buf)
 
 	case *DeferStmt:
 		ctx.addDefer(s.Call)
@@ -296,13 +298,13 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		if err := ctx.compileExpr(buf, s.Cond); err != nil {
 			return err
 		}
-		ctx.openLabel(buf, 0x04)
-		buf.WriteByte(valTypeVoid)
+		ctx.openIRLabel(buf, 0x04)
 		if err := ctx.compileBlock(buf, s.Then); err != nil {
 			return err
 		}
 		if s.Else != nil {
-			buf.WriteByte(0x05)
+			ctx.ir.Else()
+			ctx.ir.FlushToBuffer(buf)
 			if elseBlock, ok := s.Else.(*BlockStmt); ok {
 				if err := ctx.compileBlock(buf, elseBlock); err != nil {
 					return err
@@ -313,7 +315,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				}
 			}
 		}
-		ctx.closeLabel(buf)
+		ctx.closeIRLabel(buf)
 
 	case *WhileStmt:
 		var loopID int32
@@ -324,19 +326,17 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			emitCallIdx(buf, ctx.emitter.traceImports["loop_enter"])
 		}
 
-		ctx.openLabel(buf, 0x02)
-		buf.WriteByte(valTypeVoid)
-		ctx.openLabel(buf, 0x03)
-		buf.WriteByte(valTypeVoid)
+		ctx.openIRLabel(buf, 0x02)
+		ctx.openIRLabel(buf, 0x03)
 		ctx.loopBodyDepths = append(ctx.loopBodyDepths, ctx.labelDepth)
 		ctx.loopDeferDepths = append(ctx.loopDeferDepths, len(ctx.deferScopes))
 
 		if err := ctx.compileExpr(buf, s.Cond); err != nil {
 			return err
 		}
-		buf.WriteByte(0x45)
-		buf.WriteByte(0x0d)
-		writeUleb128(buf, 1)
+		ctx.emitI32Eqz()
+		ctx.emitBrIf(1)
+		ctx.ir.FlushToBuffer(buf)
 
 		if ctx.emitter.memTrace {
 			emitI32Const(buf, loopID)
@@ -355,11 +355,11 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		ctx.loopBodyDepths = ctx.loopBodyDepths[:len(ctx.loopBodyDepths)-1]
 		ctx.loopDeferDepths = ctx.loopDeferDepths[:len(ctx.loopDeferDepths)-1]
 
-		buf.WriteByte(0x0c)
-		writeUleb128(buf, 0)
+		ctx.emitBr(0)
+		ctx.ir.FlushToBuffer(buf)
 
-		ctx.closeLabel(buf)
-		ctx.closeLabel(buf)
+		ctx.closeIRLabel(buf)
+		ctx.closeIRLabel(buf)
 
 		if ctx.emitter.memTrace {
 			emitI32Const(buf, loopID)
@@ -368,10 +368,10 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 
 	case *ArenaStmt:
 		savedLocal := ctx.allocLocal(valTypeI32)
-		buf.WriteByte(0x23)
-		writeUleb128(buf, 0)
-		buf.WriteByte(0x21)
-		writeUleb128(buf, savedLocal)
+		ctx.emitGetGlobal(0)
+		ctx.ir.FlushToBuffer(buf)
+		ctx.emitSetLocal(savedLocal)
+		ctx.ir.FlushToBuffer(buf)
 
 		var scopeID int32
 		prevScope := ctx.currentScopeID
@@ -393,10 +393,10 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			ctx.currentScopeID = prevScope
 		}
 
-		buf.WriteByte(0x20)
-		writeUleb128(buf, savedLocal)
-		buf.WriteByte(0x24)
-		writeUleb128(buf, 0)
+		ctx.emitGetLocal(savedLocal)
+		ctx.ir.FlushToBuffer(buf)
+		ctx.emitSetGlobal(0)
+		ctx.ir.FlushToBuffer(buf)
 
 	case *ForStmt:
 		if rng, ok := s.Iter.(*RangeExpr); ok {
@@ -408,29 +408,27 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			if err := ctx.compileExpr(buf, rng.Start); err != nil {
 				return err
 			}
-			buf.WriteByte(0x21)
-			writeUleb128(buf, itemLocal)
+			ctx.emitSetLocal(itemLocal)
+			ctx.ir.FlushToBuffer(buf)
 
 			if err := ctx.compileExpr(buf, rng.End); err != nil {
 				return err
 			}
-			buf.WriteByte(0x21)
-			writeUleb128(buf, endLocal)
+			ctx.emitSetLocal(endLocal)
+			ctx.ir.FlushToBuffer(buf)
 
-			ctx.openLabel(buf, 0x02)
-			buf.WriteByte(valTypeVoid)
-			ctx.openLabel(buf, 0x03)
-			buf.WriteByte(valTypeVoid)
+			ctx.openIRLabel(buf, 0x02)
+			ctx.openIRLabel(buf, 0x03)
 			ctx.loopBodyDepths = append(ctx.loopBodyDepths, ctx.labelDepth)
 			ctx.loopDeferDepths = append(ctx.loopDeferDepths, len(ctx.deferScopes))
 
-			buf.WriteByte(0x20)
-			writeUleb128(buf, itemLocal)
-			buf.WriteByte(0x20)
-			writeUleb128(buf, endLocal)
-			buf.WriteByte(0x4e)
-			buf.WriteByte(0x0d)
-			writeUleb128(buf, 1)
+			ctx.emitGetLocal(itemLocal)
+			ctx.ir.FlushToBuffer(buf)
+			ctx.emitGetLocal(endLocal)
+			ctx.ir.FlushToBuffer(buf)
+			buf.WriteByte(0x4e) // i32.ge_s: item >= end → exit loop
+			ctx.emitBrIf(1)
+			ctx.ir.FlushToBuffer(buf)
 
 			if err := ctx.compileBlock(buf, s.Body); err != nil {
 				return err
@@ -439,26 +437,26 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			ctx.loopBodyDepths = ctx.loopBodyDepths[:len(ctx.loopBodyDepths)-1]
 			ctx.loopDeferDepths = ctx.loopDeferDepths[:len(ctx.loopDeferDepths)-1]
 
-			buf.WriteByte(0x20)
-			writeUleb128(buf, itemLocal)
+			ctx.emitGetLocal(itemLocal)
+			ctx.ir.FlushToBuffer(buf)
 			buf.WriteByte(0x41)
 			writeSleb128(buf, 1)
 			buf.WriteByte(0x6a)
-			buf.WriteByte(0x21)
-			writeUleb128(buf, itemLocal)
+			ctx.emitSetLocal(itemLocal)
+			ctx.ir.FlushToBuffer(buf)
 
-			buf.WriteByte(0x0c)
-			writeUleb128(buf, 0)
+			ctx.emitBr(0)
+			ctx.ir.FlushToBuffer(buf)
 
-			ctx.closeLabel(buf)
-			ctx.closeLabel(buf)
+			ctx.closeIRLabel(buf)
+			ctx.closeIRLabel(buf)
 		} else {
 			targetLocal := ctx.allocLocal(valTypeI32)
 			if err := ctx.compileExpr(buf, s.Iter); err != nil {
 				return err
 			}
-			buf.WriteByte(0x21)
-			writeUleb128(buf, targetLocal)
+			ctx.emitSetLocal(targetLocal)
+			ctx.ir.FlushToBuffer(buf)
 
 			lenLocal := ctx.allocLocal(valTypeI32)
 			dataLocal := ctx.allocLocal(valTypeI32)
@@ -466,36 +464,36 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			if arr, ok := s.IterType.(ArrayType); ok {
 				buf.WriteByte(0x41)
 				writeSleb128(buf, int32(arr.Size))
-				buf.WriteByte(0x21)
-				writeUleb128(buf, lenLocal)
+				ctx.emitSetLocal(lenLocal)
+				ctx.ir.FlushToBuffer(buf)
 
-				buf.WriteByte(0x20)
-				writeUleb128(buf, targetLocal)
-				buf.WriteByte(0x21)
-				writeUleb128(buf, dataLocal)
+				ctx.emitGetLocal(targetLocal)
+				ctx.ir.FlushToBuffer(buf)
+				ctx.emitSetLocal(dataLocal)
+				ctx.ir.FlushToBuffer(buf)
 			} else {
-				buf.WriteByte(0x20)
-				writeUleb128(buf, targetLocal)
+				ctx.emitGetLocal(targetLocal)
+				ctx.ir.FlushToBuffer(buf)
 				buf.WriteByte(0x28)
 				writeUleb128(buf, 2)
 				writeUleb128(buf, 4)
-				buf.WriteByte(0x21)
-				writeUleb128(buf, lenLocal)
+				ctx.emitSetLocal(lenLocal)
+				ctx.ir.FlushToBuffer(buf)
 
-				buf.WriteByte(0x20)
-				writeUleb128(buf, targetLocal)
+				ctx.emitGetLocal(targetLocal)
+				ctx.ir.FlushToBuffer(buf)
 				buf.WriteByte(0x28)
 				writeUleb128(buf, 2)
 				writeUleb128(buf, 0)
-				buf.WriteByte(0x21)
-				writeUleb128(buf, dataLocal)
+				ctx.emitSetLocal(dataLocal)
+				ctx.ir.FlushToBuffer(buf)
 			}
 
 			idxLocal := ctx.allocLocal(valTypeI32)
 			buf.WriteByte(0x41)
 			writeSleb128(buf, 0)
-			buf.WriteByte(0x21)
-			writeUleb128(buf, idxLocal)
+			ctx.emitSetLocal(idxLocal)
+			ctx.ir.FlushToBuffer(buf)
 
 			// Element width and load opcode depend on the slice/array
 			// element type. []u8 (and string) iterate byte-wise, while
@@ -537,21 +535,19 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				emitCallIdx(buf, ctx.emitter.traceImports["loop_enter"])
 			}
 
-			ctx.openLabel(buf, 0x02)
-			buf.WriteByte(valTypeVoid)
-			ctx.openLabel(buf, 0x03)
-			buf.WriteByte(valTypeVoid)
+			ctx.openIRLabel(buf, 0x02)
+			ctx.openIRLabel(buf, 0x03)
 			ctx.loopBodyDepths = append(ctx.loopBodyDepths, ctx.labelDepth)
 			ctx.loopDeferDepths = append(ctx.loopDeferDepths, len(ctx.deferScopes))
 
-			buf.WriteByte(0x20)
-			writeUleb128(buf, idxLocal)
-			buf.WriteByte(0x20)
-			writeUleb128(buf, lenLocal)
+			ctx.emitGetLocal(idxLocal)
+			ctx.ir.FlushToBuffer(buf)
+			ctx.emitGetLocal(lenLocal)
+			ctx.ir.FlushToBuffer(buf)
 			buf.WriteByte(0x49)
-			buf.WriteByte(0x45)
-			buf.WriteByte(0x0d)
-			writeUleb128(buf, 1)
+			ctx.emitI32Eqz()
+			ctx.emitBrIf(1)
+			ctx.ir.FlushToBuffer(buf)
 
 			if ctx.emitter.memTrace {
 				emitI32Const(buf, loopID)
@@ -559,10 +555,10 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				ctx.currentScopeID = loopID
 			}
 
-			buf.WriteByte(0x20)
-			writeUleb128(buf, dataLocal)
-			buf.WriteByte(0x20)
-			writeUleb128(buf, idxLocal)
+			ctx.emitGetLocal(dataLocal)
+			ctx.ir.FlushToBuffer(buf)
+			ctx.emitGetLocal(idxLocal)
+			ctx.ir.FlushToBuffer(buf)
 			buf.WriteByte(0x41)
 			writeSleb128(buf, elemWidth)
 			buf.WriteByte(0x6c)
@@ -570,8 +566,8 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			buf.WriteByte(loadOp)
 			writeUleb128(buf, loadAlign)
 			writeUleb128(buf, 0)
-			buf.WriteByte(0x21)
-			writeUleb128(buf, itemLocal)
+			ctx.emitSetLocal(itemLocal)
+			ctx.ir.FlushToBuffer(buf)
 
 			if err := ctx.compileBlock(buf, s.Body); err != nil {
 				return err
@@ -580,23 +576,23 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			ctx.loopBodyDepths = ctx.loopBodyDepths[:len(ctx.loopBodyDepths)-1]
 			ctx.loopDeferDepths = ctx.loopDeferDepths[:len(ctx.loopDeferDepths)-1]
 
-			buf.WriteByte(0x20)
-			writeUleb128(buf, idxLocal)
+			ctx.emitGetLocal(idxLocal)
+			ctx.ir.FlushToBuffer(buf)
 			buf.WriteByte(0x41)
 			writeSleb128(buf, 1)
 			buf.WriteByte(0x6a)
-			buf.WriteByte(0x21)
-			writeUleb128(buf, idxLocal)
+			ctx.emitSetLocal(idxLocal)
+			ctx.ir.FlushToBuffer(buf)
 
-			buf.WriteByte(0x0c)
-			writeUleb128(buf, 0)
+			ctx.emitBr(0)
+			ctx.ir.FlushToBuffer(buf)
 
 			if ctx.emitter.memTrace {
 				ctx.currentScopeID = prevScope
 			}
 
-			ctx.closeLabel(buf)
-			ctx.closeLabel(buf)
+			ctx.closeIRLabel(buf)
+			ctx.closeIRLabel(buf)
 
 			if ctx.emitter.memTrace {
 				emitI32Const(buf, loopID)
@@ -609,17 +605,16 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		if err := ctx.compileExpr(buf, s.Expr); err != nil {
 			return err
 		}
-		buf.WriteByte(0x21)
-		writeUleb128(buf, optLocal)
+		ctx.emitSetLocal(optLocal)
+		ctx.ir.FlushToBuffer(buf)
 
-		buf.WriteByte(0x20)
-		writeUleb128(buf, optLocal)
+		ctx.emitGetLocal(optLocal)
+		ctx.ir.FlushToBuffer(buf)
 		buf.WriteByte(0x28)
 		writeUleb128(buf, 2)
 		writeUleb128(buf, 0)
 
-		ctx.openLabel(buf, 0x04)
-		buf.WriteByte(valTypeVoid)
+		ctx.openIRLabel(buf, 0x04)
 
 		bindingType := s.VarType
 		if bindingType == nil {
@@ -639,8 +634,8 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		varLocal := ctx.allocLocal(varLocalWasm)
 		ctx.locals[s.VarName] = varLocal
 		ctx.localTypes[s.VarName] = bindingType
-		buf.WriteByte(0x20)
-		writeUleb128(buf, optLocal)
+		ctx.emitGetLocal(optLocal)
+		ctx.ir.FlushToBuffer(buf)
 		buf.WriteByte(0x28)
 		writeUleb128(buf, 2)
 		writeUleb128(buf, 4)
@@ -653,15 +648,16 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		case valTypeI64:
 			buf.WriteByte(0xad) // i64.extend_i32_u
 		}
-		buf.WriteByte(0x21)
-		writeUleb128(buf, varLocal)
+		ctx.emitSetLocal(varLocal)
+		ctx.ir.FlushToBuffer(buf)
 
 		if err := ctx.compileBlock(buf, s.Then); err != nil {
 			return err
 		}
 
 		if s.Else != nil {
-			buf.WriteByte(0x05)
+			ctx.ir.Else()
+			ctx.ir.FlushToBuffer(buf)
 			if elseBlock, ok := s.Else.(*BlockStmt); ok {
 				if err := ctx.compileBlock(buf, elseBlock); err != nil {
 					return err
@@ -672,13 +668,11 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				}
 			}
 		}
-		ctx.closeLabel(buf)
+		ctx.closeIRLabel(buf)
 
 	case *WhileLetStmt:
-		ctx.openLabel(buf, 0x02)
-		buf.WriteByte(valTypeVoid)
-		ctx.openLabel(buf, 0x03)
-		buf.WriteByte(valTypeVoid)
+		ctx.openIRLabel(buf, 0x02)
+		ctx.openIRLabel(buf, 0x03)
 		ctx.loopBodyDepths = append(ctx.loopBodyDepths, ctx.labelDepth)
 		ctx.loopDeferDepths = append(ctx.loopDeferDepths, len(ctx.deferScopes))
 
@@ -686,17 +680,17 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		if err := ctx.compileExpr(buf, s.Call); err != nil {
 			return err
 		}
-		buf.WriteByte(0x21)
-		writeUleb128(buf, optLocal)
+		ctx.emitSetLocal(optLocal)
+		ctx.ir.FlushToBuffer(buf)
 
-		buf.WriteByte(0x20)
-		writeUleb128(buf, optLocal)
+		ctx.emitGetLocal(optLocal)
+		ctx.ir.FlushToBuffer(buf)
 		buf.WriteByte(0x28)
 		writeUleb128(buf, 2)
 		writeUleb128(buf, 0)
-		buf.WriteByte(0x45)
-		buf.WriteByte(0x0d)
-		writeUleb128(buf, 1)
+		ctx.emitI32Eqz()
+		ctx.emitBrIf(1)
+		ctx.ir.FlushToBuffer(buf)
 
 		bindingType := s.VarType
 		if bindingType == nil {
@@ -716,8 +710,8 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		varLocal := ctx.allocLocal(varLocalWasm)
 		ctx.locals[s.VarName] = varLocal
 		ctx.localTypes[s.VarName] = bindingType
-		buf.WriteByte(0x20)
-		writeUleb128(buf, optLocal)
+		ctx.emitGetLocal(optLocal)
+		ctx.ir.FlushToBuffer(buf)
 		buf.WriteByte(0x28)
 		writeUleb128(buf, 2)
 		writeUleb128(buf, 4)
@@ -730,8 +724,8 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		case valTypeI64:
 			buf.WriteByte(0xad) // i64.extend_i32_u
 		}
-		buf.WriteByte(0x21)
-		writeUleb128(buf, varLocal)
+		ctx.emitSetLocal(varLocal)
+		ctx.ir.FlushToBuffer(buf)
 
 		if err := ctx.compileBlock(buf, s.Body); err != nil {
 			return err
@@ -740,36 +734,34 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		ctx.loopBodyDepths = ctx.loopBodyDepths[:len(ctx.loopBodyDepths)-1]
 		ctx.loopDeferDepths = ctx.loopDeferDepths[:len(ctx.loopDeferDepths)-1]
 
-		buf.WriteByte(0x0c)
-		writeUleb128(buf, 0)
+		ctx.emitBr(0)
+		ctx.ir.FlushToBuffer(buf)
 
-		ctx.closeLabel(buf)
-		ctx.closeLabel(buf)
+		ctx.closeIRLabel(buf)
+		ctx.closeIRLabel(buf)
 
 	case *MatchStmt:
 		targetLocal := ctx.allocLocal(valTypeI32)
 		if err := ctx.compileExpr(buf, s.Expr); err != nil {
 			return err
 		}
-		buf.WriteByte(0x21)
-		writeUleb128(buf, targetLocal)
+		ctx.emitSetLocal(targetLocal)
+		ctx.ir.FlushToBuffer(buf)
 
 		tagLocal := ctx.allocLocal(valTypeI32)
-		buf.WriteByte(0x20)
-		writeUleb128(buf, targetLocal)
+		ctx.emitGetLocal(targetLocal)
+		ctx.ir.FlushToBuffer(buf)
 		buf.WriteByte(0x28)
 		writeUleb128(buf, 2)
 		writeUleb128(buf, 0)
-		buf.WriteByte(0x21)
-		writeUleb128(buf, tagLocal)
+		ctx.emitSetLocal(tagLocal)
+		ctx.ir.FlushToBuffer(buf)
 
-		ctx.openLabel(buf, 0x02)
-		buf.WriteByte(valTypeVoid)
+		ctx.openIRLabel(buf, 0x02)
 
 		enumVariants := ctx.emitter.enums[s.EnumName]
 		for _, arm := range s.Arms {
-			ctx.openLabel(buf, 0x02)
-			buf.WriteByte(valTypeVoid)
+			ctx.openIRLabel(buf, 0x02)
 
 			if arm.Variant != "_" {
 				tagVal := -1
@@ -779,13 +771,13 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 						break
 					}
 				}
-				buf.WriteByte(0x20)
-				writeUleb128(buf, tagLocal)
+				ctx.emitGetLocal(tagLocal)
+				ctx.ir.FlushToBuffer(buf)
 				buf.WriteByte(0x41)
 				writeSleb128(buf, int32(tagVal))
-				buf.WriteByte(0x47)
-				buf.WriteByte(0x0d)
-				writeUleb128(buf, 0)
+				buf.WriteByte(0x47) // i32.ne
+				ctx.emitBrIf(0)
+				ctx.ir.FlushToBuffer(buf)
 			}
 
 			for bIdx, bName := range arm.Bindings {
@@ -819,13 +811,13 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				bLocal := ctx.allocLocal(bindingWasm)
 				ctx.locals[bName] = bLocal
 				ctx.localTypes[bName] = bindingType
-				buf.WriteByte(0x20)
-				writeUleb128(buf, targetLocal)
+				ctx.emitGetLocal(targetLocal)
+				ctx.ir.FlushToBuffer(buf)
 				buf.WriteByte(loadOp)
 				writeUleb128(buf, loadAlign)
 				writeUleb128(buf, uint32(4+bIdx*4))
-				buf.WriteByte(0x21)
-				writeUleb128(buf, bLocal)
+				ctx.emitSetLocal(bLocal)
+				ctx.ir.FlushToBuffer(buf)
 			}
 
 			if blk, ok := arm.Body.(*BlockStmt); ok {
@@ -838,58 +830,57 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				}
 			}
 
-			buf.WriteByte(0x0c)
-			writeUleb128(buf, 1)
+			ctx.emitBr(1)
+			ctx.ir.FlushToBuffer(buf)
 
-			ctx.closeLabel(buf)
+			ctx.closeIRLabel(buf)
 		}
 
-		ctx.closeLabel(buf)
+		ctx.closeIRLabel(buf)
 
 	case *SpawnStmt:
 		if err := ctx.compileExpr(buf, s.Call); err != nil {
 			return err
 		}
 		if ctx.exprLeavesValue(s.Call) {
-			buf.WriteByte(0x1a)
+			ctx.emitDrop()
+			ctx.ir.FlushToBuffer(buf)
 		}
 
 	case *SelectStmt:
-		buf.WriteByte(0x02)
-		buf.WriteByte(valTypeVoid)
+		ctx.openIRLabel(buf, 0x02) // outer block
 
 		for _, sc := range s.Cases {
-			buf.WriteByte(0x02)
-			buf.WriteByte(valTypeVoid)
+			ctx.openIRLabel(buf, 0x02) // per-case block
 
 			chanLocal := ctx.allocLocal(valTypeI32)
 			if err := ctx.compileExpr(buf, sc.Chan); err != nil {
 				return err
 			}
-			buf.WriteByte(0x21)
-			writeUleb128(buf, chanLocal)
+			ctx.emitSetLocal(chanLocal)
+			ctx.ir.FlushToBuffer(buf)
 
-			buf.WriteByte(0x20)
-			writeUleb128(buf, chanLocal)
+			ctx.emitGetLocal(chanLocal)
+			ctx.ir.FlushToBuffer(buf)
 			buf.WriteByte(0x28)
 			writeUleb128(buf, 2)
 			writeUleb128(buf, 12)
-			buf.WriteByte(0x45)
-			buf.WriteByte(0x0d)
-			writeUleb128(buf, 0)
+			ctx.emitI32Eqz()
+			ctx.emitBrIf(0)
+			ctx.ir.FlushToBuffer(buf)
 
 			varLocal := ctx.allocLocal(valTypeI32)
 			ctx.locals[sc.VarName] = varLocal
 			ctx.localTypes[sc.VarName] = sc.ChanElem
 
-			buf.WriteByte(0x20)
-			writeUleb128(buf, chanLocal)
+			ctx.emitGetLocal(chanLocal)
+			ctx.ir.FlushToBuffer(buf)
 			buf.WriteByte(0x28)
 			writeUleb128(buf, 2)
 			writeUleb128(buf, 4)
 
-			buf.WriteByte(0x20)
-			writeUleb128(buf, chanLocal)
+			ctx.emitGetLocal(chanLocal)
+			ctx.ir.FlushToBuffer(buf)
 			buf.WriteByte(0x28)
 			writeUleb128(buf, 2)
 			writeUleb128(buf, 20)
@@ -898,13 +889,13 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			buf.WriteByte(0x28)
 			writeUleb128(buf, 2)
 			writeUleb128(buf, 0)
-			buf.WriteByte(0x21)
-			writeUleb128(buf, varLocal)
+			ctx.emitSetLocal(varLocal)
+			ctx.ir.FlushToBuffer(buf)
 
-			buf.WriteByte(0x20)
-			writeUleb128(buf, chanLocal)
-			buf.WriteByte(0x20)
-			writeUleb128(buf, chanLocal)
+			ctx.emitGetLocal(chanLocal)
+			ctx.ir.FlushToBuffer(buf)
+			ctx.emitGetLocal(chanLocal)
+			ctx.ir.FlushToBuffer(buf)
 			buf.WriteByte(0x28)
 			writeUleb128(buf, 2)
 			writeUleb128(buf, 12)
@@ -919,10 +910,10 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				return err
 			}
 
-			buf.WriteByte(0x0c)
-			writeUleb128(buf, 1)
+			ctx.emitBr(1)
+			ctx.ir.FlushToBuffer(buf)
 
-			buf.WriteByte(0x0b)
+			ctx.closeIRLabel(buf) // end per-case block
 		}
 
 		if s.Default != nil {
@@ -931,7 +922,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			}
 		}
 
-		buf.WriteByte(0x0b)
+		ctx.closeIRLabel(buf) // end outer block
 
 	case *LoopControlStmt:
 		if len(ctx.loopBodyDepths) == 0 {
@@ -941,12 +932,12 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			ctx.emitLoopDefers(buf, ctx.loopDeferDepths[len(ctx.loopDeferDepths)-1])
 		}
 		depth := ctx.labelDepth - ctx.loopBodyDepths[len(ctx.loopBodyDepths)-1]
-		buf.WriteByte(0x0c)
 		if s.Continue {
-			writeUleb128(buf, uint32(depth))
+			ctx.emitBr(uint32(depth))
 		} else {
-			writeUleb128(buf, uint32(depth+1))
+			ctx.emitBr(uint32(depth + 1))
 		}
+		ctx.ir.FlushToBuffer(buf)
 	}
 	return nil
 }
