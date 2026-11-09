@@ -147,6 +147,8 @@ func check(args []string) error {
 			formatJSON = true
 		case "--strict":
 			strict = true
+		case "--ai":
+			// AI-friendly diagnostic output flag
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return fmt.Errorf("unknown check option %s", arg)

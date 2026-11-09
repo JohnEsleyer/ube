@@ -7,11 +7,57 @@ import ()
 func (p *Parser) parseBlock() *BlockStmt {
 	loc := p.expect(TokenLBrace, "Expected '{' to begin block").Loc
 	var stmts []Stmt
+
 	for !p.check(TokenRBrace) && !p.check(TokenEOF) {
-		stmts = append(stmts, p.parseStmt())
+		stmt, err := p.parseStmtWithRecovery()
+		if err != nil {
+			p.errors = append(p.errors, *err)
+			p.synchronizeStmt()
+			continue
+		}
+		if stmt != nil {
+			stmts = append(stmts, stmt)
+		}
 	}
+
 	p.expect(TokenRBrace, "Expected '}' to close block")
 	return &BlockStmt{At: loc, Stmts: stmts}
+}
+
+func (p *Parser) parseStmtWithRecovery() (s Stmt, perr *parseError) {
+	defer func() {
+		if r := recover(); r != nil {
+			if pe, ok := r.(parseError); ok {
+				perr = &pe
+				s = nil
+			} else {
+				panic(r)
+			}
+		}
+	}()
+	return p.parseStmt(), nil
+}
+
+func (p *Parser) synchronizeStmt() {
+	if !p.check(TokenEOF) {
+		p.advance()
+	}
+
+	for !p.check(TokenEOF) {
+		if p.check(TokenSemicolon) {
+			p.advance()
+			return
+		}
+
+		switch p.peek(0).Type {
+		case TokenLet, TokenReturn, TokenIf, TokenWhile, TokenFor,
+			TokenArena, TokenSpawn, TokenBreak, TokenContinue,
+			TokenMatch, TokenSelect, TokenDefer, TokenRBrace:
+			return
+		}
+
+		p.advance()
+	}
 }
 
 func (p *Parser) parseStmt() Stmt {

@@ -24,6 +24,19 @@ func (tc *Typechecker) isCopyType(t UbeType) bool {
 	return t.IsCopy()
 }
 
+func (tc *Typechecker) isSendableAcrossVines(t UbeType) bool {
+	if t == nil {
+		return true
+	}
+	if t.IsFlat(tc.Global) {
+		return true
+	}
+	if ch, ok := t.(ChanType); ok {
+		return ch.Elem.IsFlat(tc.Global)
+	}
+	return false
+}
+
 func movedValueError(loc SourceLocation, name string) error {
 	return fmt.Errorf("[%s] use of moved value '%s' (use of moved variable '%s')", loc, name, name)
 }
@@ -563,7 +576,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		if err != nil {
 			return err
 		}
-		if s.Call.ReceiverType != nil && !s.Call.ReceiverType.IsFlat(tc.Global) {
+		if s.Call.ReceiverType != nil && !tc.isSendableAcrossVines(s.Call.ReceiverType) {
 			return fmt.Errorf("[%s] cannot pass non-flat receiver type '%s' across spawned Vines", s.At, s.Call.ReceiverType)
 		}
 		s.Call.ArgTypes = nil
@@ -572,7 +585,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 			if err != nil {
 				return err
 			}
-			if !argT.IsFlat(tc.Global) {
+			if !tc.isSendableAcrossVines(argT) {
 				return fmt.Errorf("[%s] cannot pass non-flat type '%s' across spawned Vines", s.At, argT)
 			}
 			s.Call.ArgTypes = append(s.Call.ArgTypes, argT)

@@ -972,7 +972,7 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 						return nil, fmt.Errorf("[%s] Chan.recv expects no arguments", e.At)
 					}
 					e.PoolElem = ch.Elem
-					return ch.Elem, nil
+					return OptionalType{Inner: ch.Elem}, nil
 				}
 				if mem.Member == "close" {
 					if len(e.Args) != 0 {

@@ -6,7 +6,20 @@ import (
 	"strconv"
 )
 
+func (p *Parser) skipToMatchingDelimiter(open, close TokenType) {
+	depth := 1
+	for !p.check(TokenEOF) && depth > 0 {
+		tok := p.advance()
+		if tok.Type == open {
+			depth++
+		} else if tok.Type == close {
+			depth--
+		}
+	}
+}
+
 func (p *Parser) parseExpr() Expr {
+
 	return p.parseRange()
 }
 

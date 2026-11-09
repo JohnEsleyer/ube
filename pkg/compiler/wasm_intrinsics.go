@@ -792,7 +792,7 @@ func (ctx *fnContext) callReturnsValue(call *CallExpr) bool {
 	}
 	if mem, ok := call.Callee.(*MemberExpr); ok {
 		switch mem.Member {
-		case "push", "clear", "resize", "append", "append_str", "append_int", "append_char":
+		case "push", "clear", "resize", "append", "append_str", "append_int", "append_char", "send", "close":
 			return false
 		}
 		if call.ReceiverType != nil {

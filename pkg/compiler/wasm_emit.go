@@ -1491,7 +1491,9 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		if err := ctx.compileExpr(buf, s.Call); err != nil {
 			return err
 		}
-		buf.WriteByte(0x1a)
+		if ctx.exprLeavesValue(s.Call) {
+			buf.WriteByte(0x1a)
+		}
 
 	case *SelectStmt:
 		buf.WriteByte(0x02)
@@ -3383,29 +3385,51 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 					buf.WriteByte(0x21)
 					writeUleb128(buf, chanLocal)
 
+					// head = chan.head
+					// cap = chan.capacity
+					// write_idx = (chan.head + chan.count) % chan.capacity
+					// slot_offset = chan.buffer_ptr + write_idx * 4
 					buf.WriteByte(0x20)
 					writeUleb128(buf, chanLocal)
 					buf.WriteByte(0x28)
 					writeUleb128(buf, 2)
-					writeUleb128(buf, 20)
+					writeUleb128(buf, 20) // chan.buffer_ptr
 
 					buf.WriteByte(0x20)
 					writeUleb128(buf, chanLocal)
 					buf.WriteByte(0x28)
 					writeUleb128(buf, 2)
-					writeUleb128(buf, 8)
-					buf.WriteByte(0x41)
+					writeUleb128(buf, 8) // chan.head
+
+					buf.WriteByte(0x20)
+					writeUleb128(buf, chanLocal)
+					buf.WriteByte(0x28)
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 12) // chan.count
+
+					buf.WriteByte(0x6a) // head + count
+
+					buf.WriteByte(0x20)
+					writeUleb128(buf, chanLocal)
+					buf.WriteByte(0x28)
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 0) // chan.capacity
+
+					buf.WriteByte(0x70) // i32.rem_u => write_idx
+
+					buf.WriteByte(0x41) // 4
 					writeSleb128(buf, 4)
-					buf.WriteByte(0x6c)
-					buf.WriteByte(0x6a)
+					buf.WriteByte(0x6c) // write_idx * 4
+					buf.WriteByte(0x6a) // buffer_ptr + offset
 
 					if err := ctx.compileExpr(buf, e.Args[0]); err != nil {
 						return err
 					}
 					buf.WriteByte(0x36)
 					writeUleb128(buf, 2)
-					writeUleb128(buf, 0)
+					writeUleb128(buf, 0) // store val in slot
 
+					// chan.count++
 					buf.WriteByte(0x20)
 					writeUleb128(buf, chanLocal)
 					buf.WriteByte(0x20)
@@ -3422,9 +3446,29 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 					return nil
 
 				case "recv":
+					chanLocal := ctx.allocLocal(valTypeI32)
+					if err := ctx.compileExpr(buf, mem.Target); err != nil {
+						return err
+					}
+					buf.WriteByte(0x21)
+					writeUleb128(buf, chanLocal)
+
 					optHdr := ctx.allocLocal(valTypeI32)
 					ctx.emitAlloc(buf, 8, optHdr)
 
+					// Check count > 0
+					buf.WriteByte(0x20)
+					writeUleb128(buf, chanLocal)
+					buf.WriteByte(0x28)
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 12) // count
+					buf.WriteByte(0x41)
+					writeSleb128(buf, 0)
+					buf.WriteByte(0x4a) // i32.gt_s
+					buf.WriteByte(0x04) // if
+					buf.WriteByte(valTypeVoid)
+
+					// optHdr.has_value = 1
 					buf.WriteByte(0x20)
 					writeUleb128(buf, optHdr)
 					buf.WriteByte(0x41)
@@ -3433,19 +3477,107 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 					writeUleb128(buf, 2)
 					writeUleb128(buf, 0)
 
+					// read_ptr = chan.buffer_ptr + chan.head * 4
+					buf.WriteByte(0x20)
+					writeUleb128(buf, optHdr)
+
+					buf.WriteByte(0x20)
+					writeUleb128(buf, chanLocal)
+					buf.WriteByte(0x28)
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 20) // buffer_ptr
+
+					buf.WriteByte(0x20)
+					writeUleb128(buf, chanLocal)
+					buf.WriteByte(0x28)
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 8) // head
+
+					buf.WriteByte(0x41)
+					writeSleb128(buf, 4)
+					buf.WriteByte(0x6c) // head * 4
+					buf.WriteByte(0x6a) // buffer_ptr + head*4
+
+					buf.WriteByte(0x28) // load val
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 0)
+
+					buf.WriteByte(0x36) // store into optHdr.value
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 4)
+
+					// chan.head = (chan.head + 1) % chan.capacity
+					buf.WriteByte(0x20)
+					writeUleb128(buf, chanLocal)
+
+					buf.WriteByte(0x20)
+					writeUleb128(buf, chanLocal)
+					buf.WriteByte(0x28)
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 8) // head
+					buf.WriteByte(0x41)
+					writeSleb128(buf, 1)
+					buf.WriteByte(0x6a) // head + 1
+
+					buf.WriteByte(0x20)
+					writeUleb128(buf, chanLocal)
+					buf.WriteByte(0x28)
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 0) // capacity
+					buf.WriteByte(0x70) // rem_u
+
+					buf.WriteByte(0x36) // store chan.head
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 8)
+
+					// chan.count--
+					buf.WriteByte(0x20)
+					writeUleb128(buf, chanLocal)
+					buf.WriteByte(0x20)
+					writeUleb128(buf, chanLocal)
+					buf.WriteByte(0x28)
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 12)
+					buf.WriteByte(0x41)
+					writeSleb128(buf, 1)
+					buf.WriteByte(0x6b)
+					buf.WriteByte(0x36)
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 12)
+
+					buf.WriteByte(0x05) // else (empty channel)
+
+					// optHdr.has_value = 0
 					buf.WriteByte(0x20)
 					writeUleb128(buf, optHdr)
 					buf.WriteByte(0x41)
-					writeSleb128(buf, 100)
+					writeSleb128(buf, 0)
 					buf.WriteByte(0x36)
 					writeUleb128(buf, 2)
-					writeUleb128(buf, 4)
+					writeUleb128(buf, 0)
+
+					buf.WriteByte(0x0b) // end if
 
 					buf.WriteByte(0x20)
 					writeUleb128(buf, optHdr)
 					return nil
 
 				case "close":
+					chanLocal := ctx.allocLocal(valTypeI32)
+					if err := ctx.compileExpr(buf, mem.Target); err != nil {
+						return err
+					}
+					buf.WriteByte(0x21)
+					writeUleb128(buf, chanLocal)
+
+					// chan.is_closed = 1 (at offset 16)
+					buf.WriteByte(0x20)
+					writeUleb128(buf, chanLocal)
+					buf.WriteByte(0x41)
+					writeSleb128(buf, 1)
+					buf.WriteByte(0x36)
+					writeUleb128(buf, 2)
+					writeUleb128(buf, 16)
 					return nil
 				}
 			}
@@ -4444,6 +4576,7 @@ func (e *wasmEmitter) buildPrintF64Func() []byte {
 // buildF64ToStrFunc converts an f64 into an arena-allocated string header {ptr, len}.
 func (e *wasmEmitter) buildF64ToStrFunc() []byte {
 	var body bytes.Buffer
+	var zeroF64 [8]byte
 
 	// 1. base = align8(global0)
 	body.WriteByte(0x23) // global.get 0
@@ -4498,13 +4631,86 @@ func (e *wasmEmitter) buildF64ToStrFunc() []byte {
 	body.WriteByte(0x0f) // return
 	body.WriteByte(0x0b) // end if
 
-	// 5. Sign: if val < 0.0
+	// 4b. Check +Inf: reinterpret_f64 == 0x7FF0000000000000
 	emitLocalGet(&body, 0)
-	body.WriteByte(0x44) // f64.const 0.0
-	var zeroF64 [8]byte
-	body.Write(zeroF64[:])
-	body.WriteByte(0x63) // f64.lt
+	body.WriteByte(0xbd) // i64.reinterpret_f64
+	body.WriteByte(0x42) // i64.const
+	writeSleb128_64(&body, 0x7FF0000000000000)
+	body.WriteByte(0x51) // i64.eq
 	body.WriteByte(0x04) // if
+	body.WriteByte(valTypeVoid)
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 'I')
+	body.WriteByte(0x3a)
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 0)
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 'n')
+	body.WriteByte(0x3a)
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 1)
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 'f')
+	body.WriteByte(0x3a)
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 2)
+	emitLocalGet(&body, 1)
+	emitLocalGet(&body, 2)
+	emitI32Store(&body, 0, 2)
+	emitLocalGet(&body, 1)
+	emitI32Const(&body, 3)
+	emitI32Store(&body, 4, 2)
+	emitLocalGet(&body, 1)
+	body.WriteByte(0x0f) // return
+	body.WriteByte(0x0b) // end if
+
+	// 4c. Check -Inf: reinterpret_f64 == 0xFFF0000000000000
+	emitLocalGet(&body, 0)
+	body.WriteByte(0xbd) // i64.reinterpret_f64
+	body.WriteByte(0x42) // i64.const
+	writeSleb128_64(&body, -0x0010000000000000)
+	body.WriteByte(0x51) // i64.eq
+	body.WriteByte(0x04) // if
+	body.WriteByte(valTypeVoid)
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, '-')
+	body.WriteByte(0x3a)
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 0)
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 'I')
+	body.WriteByte(0x3a)
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 1)
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 'n')
+	body.WriteByte(0x3a)
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 2)
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 'f')
+	body.WriteByte(0x3a)
+	writeUleb128(&body, 0)
+	writeUleb128(&body, 3)
+	emitLocalGet(&body, 1)
+	emitLocalGet(&body, 2)
+	emitI32Store(&body, 0, 2)
+	emitLocalGet(&body, 1)
+	emitI32Const(&body, 4)
+	emitI32Store(&body, 4, 2)
+	emitLocalGet(&body, 1)
+	body.WriteByte(0x0f) // return
+	body.WriteByte(0x0b) // end if
+
+	// 5. Sign bit: (reinterpret_f64(val) >> 63) & 1
+	// Handles both negative numbers and negative zero (-0.0)
+	emitLocalGet(&body, 0)
+	body.WriteByte(0xbd) // i64.reinterpret_f64
+	body.WriteByte(0x42) // i64.const 63
+	writeSleb128_64(&body, 63)
+	body.WriteByte(0x88) // i64.shr_u
+	body.WriteByte(0xa7) // i32.wrap_i64
+	body.WriteByte(0x04) // if is_neg
 	body.WriteByte(valTypeVoid)
 	emitLocalGet(&body, 2)
 	emitI32Const(&body, '-')
@@ -4515,10 +4721,12 @@ func (e *wasmEmitter) buildF64ToStrFunc() []byte {
 	emitI32Const(&body, 1)
 	body.WriteByte(0x6a)
 	emitLocalSet(&body, 2)
-	emitLocalGet(&body, 0)
-	body.WriteByte(0x9a) // f64.neg
-	emitLocalSet(&body, 0)
 	body.WriteByte(0x0b) // end if
+
+	// Absolute value: val = f64.abs(val)
+	emitLocalGet(&body, 0)
+	body.WriteByte(0x99) // f64.abs
+	emitLocalSet(&body, 0)
 
 	// 6. int_part = i64.trunc_f64_s(val)
 	emitLocalGet(&body, 0)
