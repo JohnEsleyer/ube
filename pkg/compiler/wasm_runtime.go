@@ -1478,3 +1478,134 @@ func wrapStartWithLocals(body bytes.Buffer, nLocals uint32) []byte {
 	fullBuf.Write(codeBuf.Bytes())
 	return fullBuf.Bytes()
 }
+
+// buildCabiReallocFunc implements the WebAssembly Canonical ABI cabi_realloc function:
+// (func (export "cabi_realloc") (param $orig_ptr i32) (param $orig_size i32) (param $align i32) (param $new_size i32) (result i32))
+// Backed directly by Ube's regional bump allocator (Global 0).
+func (e *wasmEmitter) buildCabiReallocFunc() []byte {
+	var body bytes.Buffer
+
+	// if new_size == 0 { return orig_ptr }
+	emitLocalGet(&body, 3)
+	emitI32Eqz(&body)
+	body.WriteByte(0x04)
+	body.WriteByte(valTypeVoid)
+	emitLocalGet(&body, 0)
+	body.WriteByte(0x0f)
+	body.WriteByte(0x0b)
+
+	// if align < 1 { align = 1 }
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 1)
+	body.WriteByte(0x48)
+	body.WriteByte(0x04)
+	body.WriteByte(valTypeVoid)
+	emitI32Const(&body, 1)
+	emitLocalSet(&body, 2)
+	body.WriteByte(0x0b)
+
+	// align_mask = align - 1 (local 5)
+	emitLocalGet(&body, 2)
+	emitI32Const(&body, 1)
+	body.WriteByte(0x6b)
+	emitLocalSet(&body, 5)
+
+	// Check if orig_ptr == 0 (fresh allocation)
+	emitLocalGet(&body, 0)
+	emitI32Eqz(&body)
+	body.WriteByte(0x04)
+	body.WriteByte(valTypeI32)
+
+	// aligned_ptr = (global0 + align_mask) & ~align_mask (local 4)
+	body.WriteByte(0x23)
+	writeUleb128(&body, 0)
+	emitLocalGet(&body, 5)
+	body.WriteByte(0x6a)
+	emitLocalGet(&body, 5)
+	emitI32Const(&body, -1)
+	body.WriteByte(0x73)
+	body.WriteByte(0x71)
+	emitLocalSet(&body, 4)
+
+	// global0 = aligned_ptr + new_size
+	emitLocalGet(&body, 4)
+	emitLocalGet(&body, 3)
+	body.WriteByte(0x6a)
+	body.WriteByte(0x24)
+	writeUleb128(&body, 0)
+
+	emitLocalGet(&body, 4)
+
+	body.WriteByte(0x05) // else (reallocation)
+
+	// if new_size <= orig_size { return orig_ptr }
+	emitLocalGet(&body, 3)
+	emitLocalGet(&body, 1)
+	body.WriteByte(0x4d)
+	body.WriteByte(0x04)
+	body.WriteByte(valTypeVoid)
+	emitLocalGet(&body, 0)
+	body.WriteByte(0x0f)
+	body.WriteByte(0x0b)
+
+	// if orig_ptr + orig_size == global0 { global0 = orig_ptr + new_size; return orig_ptr }
+	emitLocalGet(&body, 0)
+	emitLocalGet(&body, 1)
+	body.WriteByte(0x6a)
+	body.WriteByte(0x23)
+	writeUleb128(&body, 0)
+	body.WriteByte(0x46)
+	body.WriteByte(0x04)
+	body.WriteByte(valTypeVoid)
+	emitLocalGet(&body, 0)
+	emitLocalGet(&body, 3)
+	body.WriteByte(0x6a)
+	body.WriteByte(0x24)
+	writeUleb128(&body, 0)
+	emitLocalGet(&body, 0)
+	body.WriteByte(0x0f)
+	body.WriteByte(0x0b)
+
+	// Otherwise allocate new buffer and copy
+	body.WriteByte(0x23)
+	writeUleb128(&body, 0)
+	emitLocalGet(&body, 5)
+	body.WriteByte(0x6a)
+	emitLocalGet(&body, 5)
+	emitI32Const(&body, -1)
+	body.WriteByte(0x73)
+	body.WriteByte(0x71)
+	emitLocalSet(&body, 4)
+
+	emitLocalGet(&body, 4)
+	emitLocalGet(&body, 3)
+	body.WriteByte(0x6a)
+	body.WriteByte(0x24)
+	writeUleb128(&body, 0)
+
+	// memory.copy: dest, src, len
+	emitLocalGet(&body, 4)
+	emitLocalGet(&body, 0)
+	emitLocalGet(&body, 1)
+	body.WriteByte(0xfc)
+	body.WriteByte(0x0a)
+	body.WriteByte(0x00)
+	body.WriteByte(0x00)
+
+	emitLocalGet(&body, 4)
+
+	body.WriteByte(0x0b) // end if/else
+
+	body.WriteByte(0x0b) // end function
+
+	var full bytes.Buffer
+	writeUleb128(&full, 1) // 1 local group
+	writeUleb128(&full, 2) // 2 locals (local 4, local 5)
+	full.WriteByte(valTypeI32)
+	full.Write(body.Bytes())
+
+	var res bytes.Buffer
+	writeUleb128(&res, uint32(full.Len()))
+	res.Write(full.Bytes())
+	return res.Bytes()
+}

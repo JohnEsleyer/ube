@@ -11,6 +11,7 @@ import (
 )
 
 var buildOptLevel string
+var buildTarget string = "wasi1"
 
 func optimizeWasmFile(wasmPath, optLevel string) (bool, error) {
 	if optLevel == "" {
@@ -54,7 +55,10 @@ func build(args []string) error {
 		return err
 	}
 
-	wasmBytes, err := compiler.EmitWasm(ast)
+	cfg := compiler.EmitWasmConfig{
+		Target: buildTarget,
+	}
+	wasmBytes, err := compiler.EmitWasmWithConfig(ast, cfg)
 	if err != nil {
 		stopAnim()
 		return fmt.Errorf("failed to compile to WebAssembly: %w", err)
@@ -82,7 +86,11 @@ func build(args []string) error {
 	if optApplied {
 		optTag = fmt.Sprintf(" [%s]", buildOptLevel)
 	}
-	fmt.Printf("%s %s %s\n", paint("◆", colorPurpleBold), paint("Compiled", colorPurple), paint(fmt.Sprintf("%s -> %s%s (%s)", fileName, output, optTag, elapsed), colorDim))
+	targetTag := ""
+	if buildTarget == "wasi2" {
+		targetTag = " [wasi 0.2 component]"
+	}
+	fmt.Printf("%s %s %s\n", paint("◆", colorPurpleBold), paint("Compiled", colorPurple), paint(fmt.Sprintf("%s -> %s%s%s (%s)", fileName, output, targetTag, optTag, elapsed), colorDim))
 	return nil
 }
 
@@ -90,6 +98,7 @@ func parseBuildArgs(args []string) (file, output string, ai bool, err error) {
 	file = "."
 	targetSet := false
 	output = ""
+	buildTarget = "wasi1"
 	for i := 0; i < len(args); i++ {
 		switch {
 		case args[i] == "-o":
@@ -98,8 +107,23 @@ func parseBuildArgs(args []string) (file, output string, ai bool, err error) {
 			}
 			output = args[i+1]
 			i++
-		case args[i] == "--wasm":
-			// Default target, accepted as valid flag
+		case args[i] == "--wasm" || args[i] == "--wasi1" || args[i] == "--target=wasi1" || args[i] == "--target=wasi":
+			buildTarget = "wasi1"
+		case args[i] == "--wasi2" || args[i] == "--target=wasi2" || args[i] == "--target=wasi0.2" || args[i] == "--target=component":
+			buildTarget = "wasi2"
+		case args[i] == "--target" || args[i] == "-t":
+			if i+1 >= len(args) {
+				return "", "", false, fmt.Errorf("%s requires a target (wasi1 or wasi2)", args[i])
+			}
+			t := args[i+1]
+			if t == "wasi2" || t == "wasi0.2" || t == "component" {
+				buildTarget = "wasi2"
+			} else if t == "wasi1" || t == "wasi" {
+				buildTarget = "wasi1"
+			} else {
+				return "", "", false, fmt.Errorf("unsupported target %q (valid targets: wasi1, wasi2)", t)
+			}
+			i++
 		case args[i] == "--ai":
 			ai = true
 		case args[i] == "--release":

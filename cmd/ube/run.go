@@ -16,12 +16,27 @@ func run(args []string) error {
 	var programArgs []string
 	memTrace := false
 	ai := false
+	runTarget := "wasi1"
 
 	runOptLevel := ""
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--mem-trace" || arg == "-mem-trace" {
 			memTrace = true
+		} else if arg == "--wasi2" || arg == "--target=wasi2" || arg == "--target=wasi0.2" || arg == "--target=component" {
+			runTarget = "wasi2"
+		} else if arg == "--wasi1" || arg == "--target=wasi1" || arg == "--target=wasi" {
+			runTarget = "wasi1"
+		} else if arg == "--target" || arg == "-t" {
+			if i+1 < len(args) {
+				t := args[i+1]
+				if t == "wasi2" || t == "wasi0.2" || t == "component" {
+					runTarget = "wasi2"
+				} else {
+					runTarget = "wasi1"
+				}
+				i++
+			}
 		} else if arg == "--ai" {
 			ai = true
 		} else if arg == "--release" {
@@ -64,6 +79,7 @@ func run(args []string) error {
 
 	cfg := compiler.EmitWasmConfig{
 		MemTrace: memTrace,
+		Target:   runTarget,
 	}
 	wasmBytes, err := compiler.EmitWasmWithConfig(ast, cfg)
 	if err != nil {
@@ -85,10 +101,15 @@ func run(args []string) error {
 
 	fmt.Printf("%s %s %s\n", paint("◆", colorPurpleBold), paint("Compiled", colorPurple), paint(fmt.Sprintf("%s (%s)", fileName, elapsed), colorDim))
 
-	// Run in-process via embedded Wasmtime (Cranelift JIT).
-	runErr := runWasmtimeInProcessWithTracker(wasmPath, programArgs, tracker)
-	if tracker != nil {
-		tracker.PrintReport(ai)
+	// Run in-process via embedded Wasmtime (Cranelift JIT) for core modules, or fallback to runtime CLI for components.
+	var runErr error
+	if runTarget == "wasi2" {
+		runErr = fmt.Errorf("wasi2 component target requires external wasmtime runtime")
+	} else {
+		runErr = runWasmtimeInProcessWithTracker(wasmPath, programArgs, tracker)
+		if tracker != nil {
+			tracker.PrintReport(ai)
+		}
 	}
 	if runErr != nil {
 		// In-process execution failed; fall back to an external runtime or native binary.

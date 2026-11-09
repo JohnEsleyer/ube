@@ -18,6 +18,10 @@ pub fn wasi_stdout() -> i32 { return 1 }
 pub fn wasi_stderr() -> i32 { return 2 }
 pub fn wasi_esuccess() -> i32 { return 0 }
 
+// WASI 0.2 Component Model stream status codes
+pub fn WASI_02_STREAM_SUCCESS() -> i32 { return 0 }
+pub fn WASI_02_STREAM_CLOSED() -> i32  { return 1 }
+
 // Preopened working directory file descriptor in WASI runtimes.
 pub fn WASI_AT_FDCWD() -> i32 { return 3 }
 

@@ -14,6 +14,7 @@ import (
 
 type EmitWasmConfig struct {
 	MemTrace bool
+	Target   string // "wasi1" (default) or "wasi2"
 }
 
 type TraceScopeInfo struct {
@@ -40,6 +41,9 @@ func EmitWasmWithConfig(prog *Program, cfg EmitWasmConfig) (wasmBytes []byte, er
 	}()
 	emitter := newWasmEmitter()
 	emitter.memTrace = cfg.MemTrace
+	if cfg.Target != "" {
+		emitter.target = cfg.Target
+	}
 	return emitter.compile(prog)
 }
 
@@ -85,31 +89,33 @@ type importMeta struct {
 }
 
 type wasmEmitter struct {
-	types         [][]byte
-	typeMap       map[string]uint32
-	imports       []importMeta
-	funcs         []uint32
-	codeBodies    [][]byte
-	data          []byte
-	dataOffset    uint32
-	fnIndices     map[string]uint32
-	methodIndices map[string]uint32
-	fnReturns     map[string]UbeType
-	wasiImports   map[string]uint32
-	fdWriteIdx    uint32
-	clockTimeIdx  uint32
-	structs       map[string]structMeta
-	structFields  map[string][]FieldDecl
-	enums         map[string][]VariantDecl
-	traits        map[string]*TraitDecl
-	typeIDs       map[string]int32
-	moduleAliases map[string]string
-	trueHeader    uint32
-	falseHeader   uint32
-	memTrace      bool
-	traceImports  map[string]uint32
-	nextScopeID   int32
-	TraceScopes   []TraceScopeInfo
+	types          [][]byte
+	typeMap        map[string]uint32
+	imports        []importMeta
+	funcs          []uint32
+	codeBodies     [][]byte
+	data           []byte
+	dataOffset     uint32
+	fnIndices      map[string]uint32
+	methodIndices  map[string]uint32
+	fnReturns      map[string]UbeType
+	wasiImports    map[string]uint32
+	fdWriteIdx     uint32
+	clockTimeIdx   uint32
+	structs        map[string]structMeta
+	structFields   map[string][]FieldDecl
+	enums          map[string][]VariantDecl
+	traits         map[string]*TraitDecl
+	typeIDs        map[string]int32
+	moduleAliases  map[string]string
+	trueHeader     uint32
+	falseHeader    uint32
+	memTrace       bool
+	traceImports   map[string]uint32
+	nextScopeID    int32
+	TraceScopes    []TraceScopeInfo
+	target         string
+	cabiReallocIdx uint32
 }
 
 func newWasmEmitter() *wasmEmitter {
@@ -128,6 +134,7 @@ func newWasmEmitter() *wasmEmitter {
 		traceImports:  make(map[string]uint32),
 		dataOffset:    staticDataOff,
 		nextScopeID:   1,
+		target:        "wasi1",
 	}
 }
 
@@ -437,6 +444,10 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 	startIdx := printF64Idx + 1
 	e.fnIndices["_start"] = startIdx
 
+	cabiReallocIdx := startIdx + 1
+	e.cabiReallocIdx = cabiReallocIdx
+	e.fnIndices["cabi_realloc"] = cabiReallocIdx
+
 	// Register types for defined functions
 	for _, fn := range fnDecls {
 		var params []byte
@@ -454,17 +465,18 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 	}
 
 	// Helper types:
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{}))             // __print_i32
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI64, valTypeI32}, []byte{}))             // __print_i64
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32, valTypeI32}, []byte{})) // __print_str
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{}))             // __print_bool
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{valTypeI32}))   // __str_concat
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{valTypeI32}))   // __str_eq
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32}, []byte{valTypeI32}))               // __i32_to_str
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI64}, []byte{valTypeI32}))               // __i64_to_str
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeF64}, []byte{valTypeI32}))               // __f64_to_str
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeF64, valTypeI32}, []byte{}))             // __print_f64
-	e.funcs = append(e.funcs, e.registerType([]byte{}, []byte{}))                                   // _start
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{}))                                   // __print_i32
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI64, valTypeI32}, []byte{}))                                   // __print_i64
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32, valTypeI32}, []byte{}))                       // __print_str
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{}))                                   // __print_bool
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{valTypeI32}))                         // __str_concat
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{valTypeI32}))                         // __str_eq
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32}, []byte{valTypeI32}))                                     // __i32_to_str
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI64}, []byte{valTypeI32}))                                     // __i64_to_str
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeF64}, []byte{valTypeI32}))                                     // __f64_to_str
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeF64, valTypeI32}, []byte{}))                                   // __print_f64
+	e.funcs = append(e.funcs, e.registerType([]byte{}, []byte{}))                                                         // _start
+	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})) // cabi_realloc
 
 	// Compile user function bodies
 	for _, fn := range fnDecls {
@@ -487,8 +499,16 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 	e.codeBodies = append(e.codeBodies, e.buildF64ToStrFunc())
 	e.codeBodies = append(e.codeBodies, e.buildPrintF64Func())
 	e.codeBodies = append(e.codeBodies, e.buildStartFunc(e.fnIndices["main"]))
+	e.codeBodies = append(e.codeBodies, e.buildCabiReallocFunc())
 
-	return e.assembleBinary()
+	coreBytes, err := e.assembleBinary()
+	if err != nil {
+		return nil, err
+	}
+	if e.target == "wasi2" {
+		return wrapCoreModuleIntoComponent(coreBytes)
+	}
+	return coreBytes, nil
 }
 
 type fnContext struct {
@@ -795,7 +815,7 @@ func (e *wasmEmitter) assembleBinary() ([]byte, error) {
 	writeSection(&out, secGlobal, globSec.Bytes())
 
 	var expSec bytes.Buffer
-	writeUleb128(&expSec, 2)
+	writeUleb128(&expSec, 3)
 
 	writeString(&expSec, "memory")
 	expSec.WriteByte(0x02)
@@ -804,6 +824,10 @@ func (e *wasmEmitter) assembleBinary() ([]byte, error) {
 	writeString(&expSec, "_start")
 	expSec.WriteByte(0x00)
 	writeUleb128(&expSec, e.fnIndices["_start"])
+
+	writeString(&expSec, "cabi_realloc")
+	expSec.WriteByte(0x00)
+	writeUleb128(&expSec, e.cabiReallocIdx)
 	writeSection(&out, secExport, expSec.Bytes())
 
 	var codeSec bytes.Buffer

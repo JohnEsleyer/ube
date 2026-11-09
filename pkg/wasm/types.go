@@ -2,8 +2,10 @@ package wasm
 
 // Binary format constants.
 var (
-	Magic   = [4]byte{0x00, 0x61, 0x73, 0x6D} // \0asm
-	Version = [4]byte{0x01, 0x00, 0x00, 0x00} // 1
+	Magic            = [4]byte{0x00, 0x61, 0x73, 0x6D} // \0asm
+	Version          = [4]byte{0x01, 0x00, 0x00, 0x00} // 1
+	ComponentMagic   = [4]byte{0x00, 0x61, 0x73, 0x6D} // \0asm
+	ComponentVersion = [4]byte{0x0D, 0x00, 0x01, 0x00} // WASI 0.2 Component Model
 )
 
 // SectionID represents standard Wasm binary section identifiers.
@@ -23,6 +25,20 @@ const (
 	SectionCode      SectionID = 10
 	SectionData      SectionID = 11
 	SectionDataCount SectionID = 12
+
+	// WASI 0.2 Component Model Section IDs
+	ComponentSectionCustom       SectionID = 0
+	ComponentSectionCoreModule   SectionID = 1
+	ComponentSectionCoreInstance SectionID = 2
+	ComponentSectionCoreType     SectionID = 3
+	ComponentSectionComponent    SectionID = 4
+	ComponentSectionInstance     SectionID = 5
+	ComponentSectionAlias        SectionID = 6
+	ComponentSectionType         SectionID = 7
+	ComponentSectionCanon        SectionID = 8
+	ComponentSectionStart        SectionID = 9
+	ComponentSectionImport       SectionID = 10
+	ComponentSectionExport       SectionID = 11
 )
 
 // ValType represents a WebAssembly primitive value type.

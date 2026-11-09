@@ -9,6 +9,11 @@ import (
 	"github.com/JohnEsleyer/ube/pkg/compiler"
 )
 
+const (
+	TargetWasiPreview1 = "wasi1"
+	TargetWasi02       = "wasi2"
+)
+
 // targetLabel returns a short, human-readable name for a build/check target.
 func targetLabel(target string) string {
 	abs, err := filepath.Abs(target)
