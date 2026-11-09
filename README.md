@@ -517,6 +517,103 @@ fn main() {
 
 Assigning `scratch` directly to `persistent` without `promote` is a compile error — that is the upward reference invariant from the memory model above. `promote` performs a deep copy into the parent arena.
 
+#### Loop Arenas & Per-Iteration Arena Unwinding
+
+Tier-2 allocations (dynamic strings, interpolated strings, slice headers, and slice buffers) are allocated in bump arenas. When Tier-2 allocations occur inside loops without an arena scope, memory continuously grows until the enclosing function finishes.
+
+To solve this, Ube implements:
+1. **Explicit Arena Loops (`arena for`, `arena while`, `arena while let`)**: Programmers can annotate loops whose iteration scratch memory should be reclaimed at the end of each iteration.
+2. **The Zero-Escape Auto-Arena (Compiler Automation)**: The typechecker analyzes loop bodies. If a loop performs Tier-2 allocations but none of the allocated data escapes into an outer scope (e.g., pure scratch computations, formatted string parsing, logging), the compiler automatically promotes the loop to an arena loop (`IsArena = true`).
+3. **Loop Arena Safety & Static Promotion Rejection**: Because each iteration reclaims its scratch arena, values cannot be safely preserved using `promote(...)` across iterations without parent re-allocation. The typechecker statically rejects `promote(...)` calls inside arena loops.
+4. **Wasm Codegen & Per-Iteration Unwinding**: WebAssembly codegen saves the arena pointer (`global 0`) at the start of each iteration and restores it at iteration completion, as well as on early exits via `break` or `continue`.
+5. **Static & Runtime Diagnostic Classifier**: Added the diagnostic classification for `unscoped_loop_alloc` in `cmd/ube/diagnostic.go`.
+
+##### Grammar and AST Changes
+
+- **AST (`pkg/compiler/ast.go`)**: Added `IsArena bool` to loop statements (`WhileStmt.IsArena`, `WhileLetStmt.IsArena`, `ForStmt.IsArena`).
+- **Parser (`pkg/compiler/parser_stmt.go`)**: Extended `parseStmt` to look ahead when encountering `TokenArena`:
+```go
+case TokenArena:
+    arenaTok := p.advance()
+    if p.check(TokenFor) {
+        return p.parseForStmt(true)
+    }
+    if p.check(TokenWhile) {
+        return p.parseWhileStmt(true)
+    }
+    return &ArenaStmt{At: arenaTok.Loc, Body: p.parseBlock()}
+```
+Supports:
+- `arena for item in collection { ... }`
+- `arena for i in start..end { ... }`
+- `arena while condition { ... }`
+- `arena while let item = opt { ... }`
+
+##### Typechecker & Safety (`pkg/compiler/typechecker_stmt.go`)
+
+- **Auto-Arena Escape Analysis**: When checking `*WhileStmt`, `*WhileLetStmt`, or `*ForStmt`, if the loop is not already explicitly marked `IsArena`, the typechecker runs `canAutoArenaLoop`:
+  - `stmtHasTier2Alloc(body)`: Detects if any statements or sub-expressions allocate Tier-2 data (interpolated strings, slice initializations, string conversions, slice appends).
+  - `loopBodyEscapes(body, loopDepth, env)`: Analyzes whether allocated data escapes to an outer scope: outer variable assignments (`s.LHS` rooted outside the loop), non-view external function call escapes / mutations, returns from inside the loop, and spawns / nested uncontained arenas.
+  If Tier-2 allocations exist and no escapes occur, `s.IsArena` is automatically set to `true`.
+- **Prohibiting `promote(...)`**: Iterating an arena loop resets the arena pointer per-iteration. Thus, standard `promote(val)` cannot promote into an enclosing frame without cross-arena copies. The typechecker checks:
+```go
+if s.IsArena && hasPromoteInBlock(s.Body) {
+    return fmt.Errorf("[%s] cannot use 'promote' inside an arena loop (loop iterations are reclaimed each iteration)", s.At)
+}
+```
+- **Scope Depth Tracking**: For arena loops, the body's environment increments `ScopeDepth` (`loopEnv.ScopeDepth = env.ScopeDepth + 1`), enforcing that inner allocations cannot escape into outer variables unless permitted by the type system.
+
+##### WebAssembly Code Generation (`pkg/compiler/wasm_stmt.go`)
+
+Each loop maintains a local to preserve the initial arena watermark per iteration:
+1. **Entry**:
+   ```wasm
+   ;; At the start of the iteration
+   global.get 0
+   local.set $saved_arena
+   ```
+2. **Normal Iteration End**:
+   ```wasm
+   ;; At the end of the iteration body
+   local.get $saved_arena
+   global.set 0
+   ```
+3. **Loop Control Statements (`break` and `continue`)**:
+   `ctx.loopArenaLocals` tracks active loop arena locals. When compiling `*LoopControlStmt`, if `len(ctx.loopArenaLocals) > 0`, it emits:
+   ```wasm
+   local.get $saved_arena
+   global.set 0
+   ```
+   prior to emitting the target `br` branch.
+4. **Loop Exit**:
+   When the loop condition evaluates to false / exits, the arena pointer is restored to ensure no leaked allocations remain past loop exit.
+
+##### Diagnostics (`cmd/ube/diagnostic.go`)
+
+Mapped `unscoped_loop_alloc` in `classifyMessage`:
+```go
+case strings.Contains(msg, "unscoped loop allocation") || strings.Contains(msg, "runaway bump") || strings.Contains(msg, "unscoped_loop_alloc"):
+    if m := reQuotedVar.FindStringSubmatch(msg); m != nil {
+        return "unscoped_loop_alloc", "var:" + m[1]
+    }
+    return "unscoped_loop_alloc", ""
+```
+
+##### Verification & Testing
+
+- **Compiler Unit Tests (`pkg/compiler/compiler_unit_test.go`)**:
+  - `TestParser_ArenaLoops`: Validates lexing, parsing, and typechecking for `arena for` and `arena while`.
+  - `TestTypechecker_ArenaLoopRejectsPromote`: Verifies compile-time error when calling `promote(...)` inside an arena loop.
+- **Diagnostic Unit Tests (`cmd/ube/diagnostic_test.go`)**:
+  - `TestClassifyUnscopedLoopAlloc`: Validates diagnostic code and variable field extraction.
+- **End-to-End Integration Tests (`tests/test_arena_loops.ube`)**:
+  - `test_arena_for_range`: Tests arena for with range iterations.
+  - `test_arena_for_slice`: Tests arena for over string slices.
+  - `test_arena_while`: Tests arena while with string interpolation per iteration.
+  - `test_arena_for_break`: Tests loop arena unwinding on early break.
+  - `test_arena_while_break_and_continue`: Tests loop arena unwinding across break and continue statements.
+  - `test_auto_arena_zero_escape`: Tests zero-escape auto-arena optimization for unannotated loops.
+
 ---
 
 ### 10. Generational Entity Pools
