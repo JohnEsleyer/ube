@@ -12,15 +12,34 @@ import (
 	"strings"
 )
 
+type EmitWasmConfig struct {
+	MemTrace bool
+}
+
+type TraceScopeInfo struct {
+	ID       int32
+	Name     string
+	File     string
+	Line     int
+	Kind     int32 // 0: func, 1: arena, 2: loop
+	ParentID int32
+}
+
 // EmitWasm compiles an AST program directly into WebAssembly binary bytecode (.wasm)
 // with zero external toolchains (no clang, no zig, no C headers).
 func EmitWasm(prog *Program) (wasmBytes []byte, err error) {
+	return EmitWasmWithConfig(prog, EmitWasmConfig{})
+}
+
+// EmitWasmWithConfig compiles an AST program with extra runtime configuration (e.g. --mem-trace).
+func EmitWasmWithConfig(prog *Program, cfg EmitWasmConfig) (wasmBytes []byte, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("internal compiler error (ICE): %v\nPlease report this issue", r)
 		}
 	}()
 	emitter := newWasmEmitter()
+	emitter.memTrace = cfg.MemTrace
 	return emitter.compile(prog)
 }
 
@@ -87,6 +106,10 @@ type wasmEmitter struct {
 	moduleAliases map[string]string
 	trueHeader    uint32
 	falseHeader   uint32
+	memTrace      bool
+	traceImports  map[string]uint32
+	nextScopeID   int32
+	TraceScopes   []TraceScopeInfo
 }
 
 func newWasmEmitter() *wasmEmitter {
@@ -102,8 +125,36 @@ func newWasmEmitter() *wasmEmitter {
 		traits:        make(map[string]*TraitDecl),
 		typeIDs:       make(map[string]int32),
 		moduleAliases: make(map[string]string),
+		traceImports:  make(map[string]uint32),
 		dataOffset:    staticDataOff,
+		nextScopeID:   1,
 	}
+}
+
+func (e *wasmEmitter) allocScopeID(name, file string, line int, kind int32, parentID int32) int32 {
+	id := e.nextScopeID
+	e.nextScopeID++
+	e.TraceScopes = append(e.TraceScopes, TraceScopeInfo{
+		ID:       id,
+		Name:     name,
+		File:     file,
+		Line:     line,
+		Kind:     kind,
+		ParentID: parentID,
+	})
+	return id
+}
+
+func (e *wasmEmitter) registerTraceImport(name string, params []byte, results []byte) uint32 {
+	tIdx := e.registerType(params, results)
+	idx := uint32(len(e.imports))
+	e.imports = append(e.imports, importMeta{
+		module:  "ube_trace",
+		name:    name,
+		typeIdx: tIdx,
+	})
+	e.traceImports[name] = idx
+	return idx
 }
 
 func (e *wasmEmitter) registerType(params []byte, results []byte) uint32 {
@@ -195,6 +246,17 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 	e.registerWasiImport("environ_sizes_get", []byte{valTypeI32, valTypeI32}, []byte{valTypeI32})
 	e.registerWasiImport("environ_get", []byte{valTypeI32, valTypeI32}, []byte{valTypeI32})
 	e.registerWasiImport("random_get", []byte{valTypeI32, valTypeI32}, []byte{valTypeI32})
+
+	if e.memTrace {
+		e.registerTraceImport("arena_enter", []byte{valTypeI32, valTypeI32}, []byte{})
+		e.registerTraceImport("arena_exit", []byte{valTypeI32}, []byte{})
+		e.registerTraceImport("arena_alloc", []byte{valTypeI32, valTypeI32}, []byte{})
+		e.registerTraceImport("arena_promote", []byte{valTypeI32}, []byte{})
+		e.registerTraceImport("slice_realloc", []byte{valTypeI32, valTypeI32, valTypeI32}, []byte{})
+		e.registerTraceImport("loop_iter", []byte{valTypeI32}, []byte{})
+		e.registerTraceImport("loop_enter", []byte{valTypeI32}, []byte{})
+		e.registerTraceImport("loop_exit", []byte{valTypeI32}, []byte{})
+	}
 
 	// Register user host imports (extern fn)
 	for _, decl := range prog.Decls {
@@ -441,6 +503,7 @@ type fnContext struct {
 	// start, so break = (labelDepth - top) + 1 and
 	// continue = (labelDepth - top).
 	loopBodyDepths []int
+	currentScopeID int32
 }
 
 func (ctx *fnContext) pushDeferScope() {
@@ -551,9 +614,30 @@ func (e *wasmEmitter) compileFunction(fn *FnDecl) ([]byte, error) {
 	}
 	ctx.numParams = paramIdx
 
+	var fnScopeID int32
+	if e.memTrace {
+		fnName := fn.Name
+		if fn.Receiver != nil {
+			fnName = fmt.Sprintf("(%s).%s", fn.Receiver.Type, fn.Name)
+		}
+		fnScopeID = e.allocScopeID(fnName, fn.At.File, fn.At.Line, 0, 0)
+		ctx.currentScopeID = fnScopeID
+	}
+
 	var bodyBuf bytes.Buffer
+	if e.memTrace {
+		emitI32Const(&bodyBuf, fnScopeID)
+		emitI32Const(&bodyBuf, 0)
+		emitCallIdx(&bodyBuf, e.traceImports["arena_enter"])
+	}
+
 	if err := ctx.compileBlock(&bodyBuf, fn.Body); err != nil {
 		return nil, err
+	}
+
+	if e.memTrace {
+		emitI32Const(&bodyBuf, fnScopeID)
+		emitCallIdx(&bodyBuf, e.traceImports["arena_exit"])
 	}
 
 	// compileBlock flushes the function body's defer scope on fall-through

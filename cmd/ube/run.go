@@ -13,10 +13,21 @@ import (
 
 func run(args []string) error {
 	target := "."
-	programArgs := args
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		target = args[0]
-		programArgs = args[1:]
+	var programArgs []string
+	memTrace := false
+	ai := false
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--mem-trace" || arg == "-mem-trace" {
+			memTrace = true
+		} else if arg == "--ai" {
+			ai = true
+		} else if target == "." && !strings.HasPrefix(arg, "-") {
+			target = arg
+		} else {
+			programArgs = append(programArgs, arg)
+		}
 	}
 
 	fileName := targetLabel(target)
@@ -37,7 +48,15 @@ func run(args []string) error {
 	wasmPath := base + ".wasm"
 	defer os.Remove(wasmPath)
 
-	wasmBytes, err := compiler.EmitWasm(ast)
+	var tracker *MemoryTracker
+	if memTrace {
+		tracker = newMemoryTracker()
+	}
+
+	cfg := compiler.EmitWasmConfig{
+		MemTrace: memTrace,
+	}
+	wasmBytes, err := compiler.EmitWasmWithConfig(ast, cfg)
 	if err != nil {
 		stopAnim()
 		return fmt.Errorf("failed to compile to WebAssembly: %w", err)
@@ -54,7 +73,11 @@ func run(args []string) error {
 	fmt.Printf("%s %s %s\n", paint("◆", colorPurpleBold), paint("Compiled", colorPurple), paint(fmt.Sprintf("%s (%s)", fileName, elapsed), colorDim))
 
 	// Run in-process via embedded Wasmtime (Cranelift JIT).
-	if runErr := runWasmtimeInProcess(wasmPath, programArgs); runErr != nil {
+	runErr := runWasmtimeInProcessWithTracker(wasmPath, programArgs, tracker)
+	if tracker != nil {
+		tracker.PrintReport(ai)
+	}
+	if runErr != nil {
 		// In-process execution failed; fall back to an external runtime or native binary.
 		if cmd, cmdErr := wasmRuntimeCommand(wasmPath, programArgs); cmdErr == nil {
 			cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr

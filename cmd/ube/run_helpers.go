@@ -18,6 +18,10 @@ func runWasmCapture(wasmPath string, args []string) (string, error) {
 // runWasmtimeInProcess executes the given wasm file in-process using the
 // embedded Wasmtime Cranelift JIT engine.
 func runWasmtimeInProcess(wasmPath string, args []string) error {
+	return runWasmtimeInProcessWithTracker(wasmPath, args, nil)
+}
+
+func runWasmtimeInProcessWithTracker(wasmPath string, args []string, tracker *MemoryTracker) error {
 	engine := wasmtime.NewEngine()
 	module, err := wasmtime.NewModuleFromFile(engine, wasmPath)
 	if err != nil {
@@ -27,6 +31,11 @@ func runWasmtimeInProcess(wasmPath string, args []string) error {
 	linker := wasmtime.NewLinker(engine)
 	if err := linker.DefineWasi(); err != nil {
 		return err
+	}
+	if tracker != nil {
+		if err := registerMemTraceLinker(linker, store, tracker); err != nil {
+			return err
+		}
 	}
 	wasiCfg := wasmtime.NewWasiConfig()
 	wasiCfg.SetArgv(append([]string{wasmPath}, args...))

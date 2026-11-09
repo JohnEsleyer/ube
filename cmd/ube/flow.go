@@ -3,15 +3,28 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/JohnEsleyer/ube/pkg/compiler"
 )
 
 func runFlow(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: ube flow <file.ube>")
+		return fmt.Errorf("usage: ube flow [--mem] <file.ube>")
 	}
-	file := args[0]
+	showMem := false
+	var file string
+	for _, arg := range args {
+		if arg == "--mem" || arg == "-mem" {
+			showMem = true
+		} else if file == "" && !strings.HasPrefix(arg, "-") {
+			file = arg
+		}
+	}
+	_ = showMem
+	if file == "" {
+		return fmt.Errorf("usage: ube flow [--mem] <file.ube>")
+	}
 	ast, _, err := loadAndCheck(file)
 	if err != nil {
 		return err
@@ -49,7 +62,7 @@ func printFnFlow(fn *compiler.FnDecl, fnMap map[string]*compiler.FnDecl, prefix 
 		case "spawn":
 			fmt.Printf("%s├── [async] spawn task\n", prefix)
 		case "arena":
-			fmt.Printf("%s├── [memory] arena { ... }\n", prefix)
+			fmt.Printf("%s├── [memory] arena { ... } (regional bump unwind)\n", prefix)
 		case "select":
 			fmt.Printf("%s├── [branch] select\n", prefix)
 		case "match":

@@ -866,6 +866,17 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		if err := ctx.compileExpr(buf, e.Value); err != nil {
 			return err
 		}
+		if ctx.emitter.memTrace {
+			sizeEst := int32(16)
+			if e.Type != nil {
+				sz := e.Type.ByteSize()
+				if sz > 0 {
+					sizeEst = int32(sz)
+				}
+			}
+			emitI32Const(buf, sizeEst)
+			emitCallIdx(buf, ctx.emitter.traceImports["arena_promote"])
+		}
 
 	case *ArenaExpr:
 		savedLocal := ctx.allocLocal(valTypeI32)
@@ -1256,6 +1267,18 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 					}
 					buf.WriteByte(0x21)
 					writeUleb128(buf, newSizeL)
+
+					if ctx.emitter.memTrace {
+						buf.WriteByte(0x20)
+						writeUleb128(buf, slLocal)
+						buf.WriteByte(0x28)
+						writeUleb128(buf, 2)
+						writeUleb128(buf, 8) // old cap
+						buf.WriteByte(0x20)
+						writeUleb128(buf, newCapL)
+						emitI32Const(buf, width)
+						emitCallIdx(buf, ctx.emitter.traceImports["slice_realloc"])
+					}
 
 					// newBuf = __arena_alloc_dyn(newSize)
 					ctx.emitAllocDyn(buf, newSizeL, newBufL)
@@ -2105,6 +2128,12 @@ func (ctx *fnContext) emitAlloc(buf *bytes.Buffer, size int32, resultLocal uint3
 	buf.WriteByte(0x6a)
 	buf.WriteByte(0x24)
 	writeUleb128(buf, 0)
+
+	if ctx.emitter.memTrace {
+		emitI32Const(buf, size)
+		emitI32Const(buf, 0)
+		emitCallIdx(buf, ctx.emitter.traceImports["arena_alloc"])
+	}
 }
 
 // emitAllocDyn is emitAlloc with a runtime size. sizeLocal must hold a
@@ -2130,6 +2159,13 @@ func (ctx *fnContext) emitAllocDyn(buf *bytes.Buffer, sizeLocal, resultLocal uin
 	buf.WriteByte(0x6a) // i32.add
 	buf.WriteByte(0x24) // global.set __arena_pointer
 	writeUleb128(buf, 0)
+
+	if ctx.emitter.memTrace {
+		buf.WriteByte(0x20)
+		writeUleb128(buf, sizeLocal)
+		emitI32Const(buf, 1) // 1 = dynamic slice buffer
+		emitCallIdx(buf, ctx.emitter.traceImports["arena_alloc"])
+	}
 }
 
 // emitMemoryCopy emits wasm memory.copy (bulk-memory, 0xfc 0x0a). Stack
@@ -2362,4 +2398,3 @@ func (ctx *fnContext) inferExprType(expr Expr) string {
 	}
 	return ""
 }
-

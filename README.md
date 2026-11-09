@@ -40,6 +40,7 @@
   - [14. Sandboxed Host Imports](#14-sandboxed-host-imports)
 - [Packages, Standard Library & Imports](#packages-standard-library--imports)
 - [Developer CLI Toolchain](#developer-cli-toolchain)
+- [Memory Profiling & Diagnostics (`--mem-trace`)](#memory-profiling--diagnostics---mem-trace)
 - [Working With LLMs](#working-with-llms)
 - [Editor Integration (VS Code & LSP)](#editor-integration-vs-code--lsp)
 - [Running the Test Suite](#running-the-test-suite)
@@ -752,17 +753,61 @@ fn main() {
 | Command | Example | Description |
 | :--- | :--- | :--- |
 | `ube build` | `ube build` / `ube build -o app.wasm` | Compiles the current package (or a directory/file target) into a standalone WebAssembly module. Directory targets default to `<dirname>.wasm`; file targets default to `<stem>.wasm`. |
-| `ube run` | `ube run` / `ube run path/to/pkg` | Compiles and executes a `package main` via the embedded Wasmtime runtime. Bare `ube <dir>` is shorthand for `ube run <dir>`. |
+| `ube run` | `ube run` / `ube run path/to/pkg` | Compiles and executes a `package main` via the embedded Wasmtime runtime. Bare `ube <dir>` is shorthand for `ube run <dir>`. Supports `--mem-trace` for lexical regional arena profiling. |
 | `ube check` | `ube check` / `ube check path/to/pkg` | Static audit of syntax, types, affine moves, package imports, and arena invariants (features resilient parser recovery). Defaults to the current directory. |
 | `ube check --ai` | `ube check --ai path/to/pkg` | Static audit with resilient recovery, outputting dense diagnostics across all errors. |
 | `ube test` | `ube test` / `ube test ./...` | Runs `test_*` functions per package directory, including all `_test.ube` files in that package. `./...` walks nested packages. |
 | `ube fmt` | `ube fmt -w .` | Canonical formatter with automatic struct field columnar alignment. |
 | `ube doc` | `ube doc main.ube [sym]` | Prints signatures, fields, and method documentation. |
-| `ube flow` | `ube flow main.ube` | Renders a visual call tree showing memory scopes, tasks, and callees. |
+| `ube flow` | `ube flow main.ube` | Renders a visual call tree showing memory scopes, tasks, and callees (supports `--mem`). |
 | `ube sig` | `ube sig` | Extracts a zero-body symbol map of the project. |
 | `ube build --ai` | `ube build --ai main.ube` | Compiles, but emits dense one-line diagnostics on error. |
 | `ube test --ai` | `ube test --ai tests/` | Runs tests, emitting dense one-line diagnostics for failing checks. |
 | `ube lsp` | `ube lsp` | Starts the Language Server Protocol for VS Code and Zed. |
+
+---
+
+## Memory Profiling & Diagnostics (`--mem-trace`)
+
+Ube's memory model relies on lexical regional bump arenas and generational entity pools rather than a GC or manual free. While safe from use-after-free and dangling pointers, bump-allocated regions can suffer from invisible performance pathologies: runaway bump loops without inner arena scopes, or dead buffer waste from slice resizing.
+
+The `--mem-trace` flag injects zero-overhead compiler instrumentation linked to host callbacks, auditing arena churn, slice growth, and promotions upon exit:
+
+```bash
+ube run --mem-trace main.ube
+```
+
+### Sample Audit Output
+
+```text
+=========================== UBE MEMORY AUDIT ===========================
+LINEAR MEMORY:
+  Base Static Data:         1.2 KB
+  Wasm Memory Pages:        3 pages (192 KB total committed)
+  Peak Linear Memory Used:  84.6 KB (44.0% of committed)
+
+REGIONAL ARENAS:
+  Scope                             Peak Used   Promoted  Reclaimed  Efficiency
+  -------------------------------------------------------------------------
+  main.ube:34 [fn process]            48.2 KB     4.1 KB    44.1 KB       91.5%
+    └─ :42 [arena scratch]            12.0 KB     1.2 KB    10.8 KB       90.0%
+  main.ube:68 [fn render]             22.4 KB        0 B    22.4 KB      100.0%
+
+  [!] WARNING: Runaway bump detected in loop at main.ube:51!
+      Allocated 32.4 KB across 1,000 iterations without an inner arena.
+      Suggestion: Wrap loop body in 'arena { ... }' or hoist allocations.
+
+SLICING & RESIZE WASTE:
+  Orphaned Buffer Waste:  18.4 KB (due to geometric capacity expansions)
+  Largest uncompacted realloc: capacity grown 64 -> 128 elements (256 B dead)
+========================================================================
+```
+
+Combining `--mem-trace` with `--ai` emits compact diagnostic streams for LLM agent loops:
+```text
+WARN|main.ube:51:1|runaway_arena_loop|allocated_bytes:331776|iterations:1000|hint:wrap loop body in arena block
+PERF|mem_trace|slice_geometric_waste|wasted_bytes:18840|hint:preallocate capacity
+```
 
 ---
 

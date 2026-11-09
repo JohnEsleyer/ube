@@ -316,6 +316,14 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		ctx.closeLabel(buf)
 
 	case *WhileStmt:
+		var loopID int32
+		prevScope := ctx.currentScopeID
+		if ctx.emitter.memTrace {
+			loopID = ctx.emitter.allocScopeID("while loop", s.At.File, s.At.Line, 2, prevScope)
+			emitI32Const(buf, loopID)
+			emitCallIdx(buf, ctx.emitter.traceImports["loop_enter"])
+		}
+
 		ctx.openLabel(buf, 0x02)
 		buf.WriteByte(valTypeVoid)
 		ctx.openLabel(buf, 0x03)
@@ -330,8 +338,18 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		buf.WriteByte(0x0d)
 		writeUleb128(buf, 1)
 
+		if ctx.emitter.memTrace {
+			emitI32Const(buf, loopID)
+			emitCallIdx(buf, ctx.emitter.traceImports["loop_iter"])
+			ctx.currentScopeID = loopID
+		}
+
 		if err := ctx.compileBlock(buf, s.Body); err != nil {
 			return err
+		}
+
+		if ctx.emitter.memTrace {
+			ctx.currentScopeID = prevScope
 		}
 
 		ctx.loopBodyDepths = ctx.loopBodyDepths[:len(ctx.loopBodyDepths)-1]
@@ -343,6 +361,11 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		ctx.closeLabel(buf)
 		ctx.closeLabel(buf)
 
+		if ctx.emitter.memTrace {
+			emitI32Const(buf, loopID)
+			emitCallIdx(buf, ctx.emitter.traceImports["loop_exit"])
+		}
+
 	case *ArenaStmt:
 		savedLocal := ctx.allocLocal(valTypeI32)
 		buf.WriteByte(0x23)
@@ -350,8 +373,24 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		buf.WriteByte(0x21)
 		writeUleb128(buf, savedLocal)
 
+		var scopeID int32
+		prevScope := ctx.currentScopeID
+		if ctx.emitter.memTrace {
+			scopeID = ctx.emitter.allocScopeID("arena scratch", s.At.File, s.At.Line, 1, prevScope)
+			ctx.currentScopeID = scopeID
+			emitI32Const(buf, scopeID)
+			emitI32Const(buf, 1)
+			emitCallIdx(buf, ctx.emitter.traceImports["arena_enter"])
+		}
+
 		if err := ctx.compileBlock(buf, s.Body); err != nil {
 			return err
+		}
+
+		if ctx.emitter.memTrace {
+			emitI32Const(buf, scopeID)
+			emitCallIdx(buf, ctx.emitter.traceImports["arena_exit"])
+			ctx.currentScopeID = prevScope
 		}
 
 		buf.WriteByte(0x20)
@@ -490,6 +529,14 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			ctx.locals[s.ItemName] = itemLocal
 			ctx.localTypes[s.ItemName] = s.ItemType
 
+			var loopID int32
+			prevScope := ctx.currentScopeID
+			if ctx.emitter.memTrace {
+				loopID = ctx.emitter.allocScopeID("for loop", s.At.File, s.At.Line, 2, prevScope)
+				emitI32Const(buf, loopID)
+				emitCallIdx(buf, ctx.emitter.traceImports["loop_enter"])
+			}
+
 			ctx.openLabel(buf, 0x02)
 			buf.WriteByte(valTypeVoid)
 			ctx.openLabel(buf, 0x03)
@@ -505,6 +552,12 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			buf.WriteByte(0x45)
 			buf.WriteByte(0x0d)
 			writeUleb128(buf, 1)
+
+			if ctx.emitter.memTrace {
+				emitI32Const(buf, loopID)
+				emitCallIdx(buf, ctx.emitter.traceImports["loop_iter"])
+				ctx.currentScopeID = loopID
+			}
 
 			buf.WriteByte(0x20)
 			writeUleb128(buf, dataLocal)
@@ -538,8 +591,17 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			buf.WriteByte(0x0c)
 			writeUleb128(buf, 0)
 
+			if ctx.emitter.memTrace {
+				ctx.currentScopeID = prevScope
+			}
+
 			ctx.closeLabel(buf)
 			ctx.closeLabel(buf)
+
+			if ctx.emitter.memTrace {
+				emitI32Const(buf, loopID)
+				emitCallIdx(buf, ctx.emitter.traceImports["loop_exit"])
+			}
 		}
 
 	case *IfLetStmt:
@@ -951,4 +1013,3 @@ func emitCompoundOp(buf *bytes.Buffer, op string, operandType string) error {
 	}
 	return nil
 }
-
