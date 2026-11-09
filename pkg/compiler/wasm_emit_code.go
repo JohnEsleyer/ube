@@ -132,6 +132,32 @@ func emitIRInstruction(buf *bytes.Buffer, ins IRInstruction) {
 		buf.WriteByte(0xfc)
 		writeUleb128(buf, 11)
 		writeUleb128(buf, 0)
+	case OpLoad8U:
+		buf.WriteByte(wasm.OpI32Load8U)
+		writeUleb128(buf, ins.Align)
+		writeUleb128(buf, ins.Offset)
+	case OpLoad8S:
+		buf.WriteByte(wasm.OpI32Load8S)
+		writeUleb128(buf, ins.Align)
+		writeUleb128(buf, ins.Offset)
+	case OpLoad16U:
+		buf.WriteByte(wasm.OpI32Load16U)
+		writeUleb128(buf, ins.Align)
+		writeUleb128(buf, ins.Offset)
+	case OpLoad16S:
+		buf.WriteByte(wasm.OpI32Load16S)
+		writeUleb128(buf, ins.Align)
+		writeUleb128(buf, ins.Offset)
+	case OpStore8:
+		buf.WriteByte(wasm.OpI32Store8)
+		writeUleb128(buf, ins.Align)
+		writeUleb128(buf, ins.Offset)
+	case OpStore16:
+		buf.WriteByte(wasm.OpI32Store16)
+		writeUleb128(buf, ins.Align)
+		writeUleb128(buf, ins.Offset)
+	case OpRawBytes:
+		buf.Write(ins.RawBytes)
 	case OpAdd:
 		switch ins.Type {
 		case wasm.ValI32:

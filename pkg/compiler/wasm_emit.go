@@ -201,6 +201,22 @@ func (e *wasmEmitter) internString(s string) uint32 {
 	return headerOffset
 }
 
+func typeToValType(t UbeType) wasm.ValType {
+	if t == nil {
+		return wasm.ValI32
+	}
+	switch t.String() {
+	case "i64", "u64":
+		return wasm.ValI64
+	case "f32":
+		return wasm.ValF32
+	case "f64":
+		return wasm.ValF64
+	default:
+		return wasm.ValI32
+	}
+}
+
 func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 	if prog != nil {
 		for alias, prefix := range prog.ModuleAliases {
@@ -504,6 +520,8 @@ type fnContext struct {
 	// continue = (labelDepth - top).
 	loopBodyDepths []int
 	currentScopeID int32
+	ir             *IRBuilder
+	localPool      *LocalPool
 }
 
 func (ctx *fnContext) pushDeferScope() {
@@ -601,18 +619,29 @@ func (e *wasmEmitter) compileFunction(fn *FnDecl) ([]byte, error) {
 		localTypes: make(map[string]UbeType),
 	}
 
+	var paramTypes []wasm.ValType
 	paramIdx := uint32(0)
 	if fn.Receiver != nil {
 		ctx.locals[fn.Receiver.Name] = paramIdx
 		ctx.localTypes[fn.Receiver.Name] = fn.Receiver.Type
+		paramTypes = append(paramTypes, typeToValType(fn.Receiver.Type))
 		paramIdx++
 	}
 	for _, param := range fn.Params {
 		ctx.locals[param.Name] = paramIdx
 		ctx.localTypes[param.Name] = param.Type
+		paramTypes = append(paramTypes, typeToValType(param.Type))
 		paramIdx++
 	}
 	ctx.numParams = paramIdx
+
+	ctx.localPool = NewLocalPool(paramTypes)
+	irFn := &IRFunction{
+		Name:    fn.Name,
+		Params:  paramTypes,
+		Results: nil,
+	}
+	ctx.ir = NewIRBuilder(irFn, ctx.localPool)
 
 	var fnScopeID int32
 	if e.memTrace {
@@ -664,6 +693,9 @@ func (e *wasmEmitter) compileFunction(fn *FnDecl) ([]byte, error) {
 func (ctx *fnContext) allocLocal(t byte) uint32 {
 	idx := ctx.numParams + uint32(len(ctx.allocTypes))
 	ctx.allocTypes = append(ctx.allocTypes, t)
+	if ctx.localPool != nil {
+		ctx.localPool.allLocals = append(ctx.localPool.allLocals, wasm.ValType(t))
+	}
 	return idx
 }
 

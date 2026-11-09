@@ -21,6 +21,13 @@ const (
 	OpStore
 	OpMemoryCopy
 	OpMemoryFill
+	OpLoad8U
+	OpLoad8S
+	OpLoad16U
+	OpLoad16S
+	OpStore8
+	OpStore16
+	OpRawBytes
 
 	// Arithmetic & Bitwise
 	OpAdd
@@ -114,6 +121,7 @@ type IRInstruction struct {
 	FuncIdx   uint32
 	Offset    uint32
 	Align     uint32
+	RawBytes  []byte
 }
 
 // IRFunction models a lowered function ready for local allocation and binary emission.
