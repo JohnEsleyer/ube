@@ -353,11 +353,9 @@ field's storage as receiver, so mutations land in the outer struct's inline
 structs both declare the same method name, the call is rejected as ambiguous —
 qualify the call (`player.Transform3D.translate(...)`) to disambiguate.
 
-**Known limitation:** string interpolation of `f32`/`f64` values currently
-truncates to the integer part. `f"{3.75}"` prints `3`, not `3.75`. The compiler
-emits `i32.trunc_f32_s` / `i32.trunc_f64_s` on the float and formats via
-`__i32_to_str`; a full decimal formatter is a planned addition. Use
-`println(some_i32)` for integer presentation until then.
+**Float presentation:** string interpolation of `f32`/`f64` values formats with
+full decimal precision, dispatched directly to `__f64_to_str` with IEEE-754
+support for `NaN`, `+Inf`, `-Inf`, and `-0.0` sign-bit preservation.
 
 ---
 

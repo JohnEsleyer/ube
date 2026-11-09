@@ -62,6 +62,42 @@ const (
 	OpCallIndirect
 	OpUnreachable
 	OpDrop
+
+	// Select & Testing
+	OpSelect
+	OpI32Eqz
+	OpI64Eqz
+
+	// Numeric Conversions & Casts
+	OpI32WrapI64
+	OpI64ExtendI32S
+	OpI64ExtendI32U
+	OpF32DemoteF64
+	OpF64PromoteF32
+	OpF32ConvertI32S
+	OpF32ConvertI32U
+	OpF32ConvertI64S
+	OpF32ConvertI64U
+	OpF64ConvertI32S
+	OpF64ConvertI32U
+	OpF64ConvertI64S
+	OpF64ConvertI64U
+	OpI32TruncF32S
+	OpI32TruncF32U
+	OpI32TruncF64S
+	OpI32TruncF64U
+	OpI64TruncF32S
+	OpI64TruncF32U
+	OpI64TruncF64S
+	OpI64TruncF64U
+	OpF32Abs
+	OpF64Abs
+	OpF32Neg
+	OpF64Neg
+	OpI32ReinterpretF32
+	OpF32ReinterpretI32
+	OpI64ReinterpretF64
+	OpF64ReinterpretI64
 )
 
 // IRInstruction represents an individual instruction within an IRFunction.

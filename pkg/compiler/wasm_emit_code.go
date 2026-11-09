@@ -352,5 +352,69 @@ func emitIRInstruction(buf *bytes.Buffer, ins IRInstruction) {
 		buf.WriteByte(wasm.OpUnreachable)
 	case OpDrop:
 		buf.WriteByte(wasm.OpDrop)
+	case OpSelect:
+		buf.WriteByte(wasm.OpSelect)
+	case OpI32Eqz:
+		buf.WriteByte(wasm.OpI32Eqz)
+	case OpI64Eqz:
+		buf.WriteByte(wasm.OpI64Eqz)
+	case OpI32WrapI64:
+		buf.WriteByte(wasm.OpI32WrapI64)
+	case OpI64ExtendI32S:
+		buf.WriteByte(wasm.OpI64ExtendI32S)
+	case OpI64ExtendI32U:
+		buf.WriteByte(wasm.OpI64ExtendI32U)
+	case OpF32DemoteF64:
+		buf.WriteByte(wasm.OpF32DemoteF64)
+	case OpF64PromoteF32:
+		buf.WriteByte(wasm.OpF64PromoteF32)
+	case OpF32ConvertI32S:
+		buf.WriteByte(wasm.OpF32ConvertI32S)
+	case OpF32ConvertI32U:
+		buf.WriteByte(wasm.OpF32ConvertI32U)
+	case OpF32ConvertI64S:
+		buf.WriteByte(wasm.OpF32ConvertI64S)
+	case OpF32ConvertI64U:
+		buf.WriteByte(wasm.OpF32ConvertI64U)
+	case OpF64ConvertI32S:
+		buf.WriteByte(wasm.OpF64ConvertI32S)
+	case OpF64ConvertI32U:
+		buf.WriteByte(wasm.OpF64ConvertI32U)
+	case OpF64ConvertI64S:
+		buf.WriteByte(wasm.OpF64ConvertI64S)
+	case OpF64ConvertI64U:
+		buf.WriteByte(wasm.OpF64ConvertI64U)
+	case OpI32TruncF32S:
+		buf.WriteByte(wasm.OpI32TruncF32S)
+	case OpI32TruncF32U:
+		buf.WriteByte(wasm.OpI32TruncF32U)
+	case OpI32TruncF64S:
+		buf.WriteByte(wasm.OpI32TruncF64S)
+	case OpI32TruncF64U:
+		buf.WriteByte(wasm.OpI32TruncF64U)
+	case OpI64TruncF32S:
+		buf.WriteByte(wasm.OpI64TruncF32S)
+	case OpI64TruncF32U:
+		buf.WriteByte(wasm.OpI64TruncF32U)
+	case OpI64TruncF64S:
+		buf.WriteByte(wasm.OpI64TruncF64S)
+	case OpI64TruncF64U:
+		buf.WriteByte(wasm.OpI64TruncF64U)
+	case OpF32Abs:
+		buf.WriteByte(wasm.OpF32Abs)
+	case OpF64Abs:
+		buf.WriteByte(wasm.OpF64Abs)
+	case OpF32Neg:
+		buf.WriteByte(wasm.OpF32Neg)
+	case OpF64Neg:
+		buf.WriteByte(wasm.OpF64Neg)
+	case OpI32ReinterpretF32:
+		buf.WriteByte(wasm.OpI32ReinterpretF32)
+	case OpF32ReinterpretI32:
+		buf.WriteByte(wasm.OpF32ReinterpretI32)
+	case OpI64ReinterpretF64:
+		buf.WriteByte(wasm.OpI64ReinterpretF64)
+	case OpF64ReinterpretI64:
+		buf.WriteByte(wasm.OpF64ReinterpretI64)
 	}
 }
