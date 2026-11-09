@@ -216,10 +216,11 @@ func (p *Parser) parseTraitDecl() *TraitDecl {
 		p.expect(TokenLParen, "Expected '(' for method parameters")
 		var params []FieldDecl
 		for !p.check(TokenRParen) && !p.check(TokenEOF) {
+			pMut, pView := p.parseParamModifiers("parameter")
 			pName := p.expect(TokenIdent, "Expected parameter name").Val
 			p.expect(TokenColon, "Expected ':'")
 			pType := p.parseType()
-			params = append(params, FieldDecl{Name: pName, Type: pType})
+			params = append(params, FieldDecl{Name: pName, Type: pType, IsMut: pMut, IsView: pView})
 			if p.check(TokenComma) {
 				p.advance()
 			}
@@ -275,13 +276,15 @@ func (p *Parser) parseStructDecl() *StructDecl {
 	for !p.check(TokenRBrace) && !p.check(TokenEOF) {
 		fPub := false
 		fMut := false
-		for p.check(TokenPub) || p.check(TokenMut) {
+		for p.check(TokenPub) || p.check(TokenMut) || p.check(TokenView) {
 			if p.check(TokenPub) {
 				p.advance()
 				fPub = true
 			} else if p.check(TokenMut) {
 				p.advance()
 				fMut = true
+			} else if p.check(TokenView) {
+				p.errorAt(p.peek(0).Loc, "'view' modifier is not allowed on struct fields")
 			}
 		}
 		fName := p.expect(TokenIdent, "Expected field name").Val
@@ -335,6 +338,23 @@ func (p *Parser) parseEnumDecl() *EnumDecl {
 	return &EnumDecl{At: loc, Name: name, Variants: variants}
 }
 
+// parseParamModifiers consumes an optional parameter modifier. Parameters and
+// receivers may be either `mut` or `view`, but never both.
+func (p *Parser) parseParamModifiers(kind string) (isMut, isView bool) {
+	if (p.check(TokenMut) && p.peek(1).Type == TokenView) || (p.check(TokenView) && p.peek(1).Type == TokenMut) {
+		p.errorAt(p.peek(0).Loc, kind+" cannot be both 'mut' and 'view'")
+	}
+	if p.check(TokenMut) {
+		p.advance()
+		return true, false
+	}
+	if p.check(TokenView) {
+		p.advance()
+		return false, true
+	}
+	return false, false
+}
+
 func (p *Parser) parseExternDecl() *ExternFnDecl {
 	loc := p.expect(TokenExtern, "Expected 'extern'").Loc
 	module := ""
@@ -347,15 +367,11 @@ func (p *Parser) parseExternDecl() *ExternFnDecl {
 
 	var params []FieldDecl
 	for !p.check(TokenRParen) && !p.check(TokenEOF) {
-		pMut := false
-		if p.check(TokenMut) {
-			p.advance()
-			pMut = true
-		}
+		pMut, pView := p.parseParamModifiers("parameter")
 		pName := p.expect(TokenIdent, "Expected parameter name").Val
 		p.expect(TokenColon, "Expected ':' after parameter name")
 		pType := p.parseType()
-		params = append(params, FieldDecl{Name: pName, Type: pType, IsMut: pMut})
+		params = append(params, FieldDecl{Name: pName, Type: pType, IsMut: pMut, IsView: pView})
 		if p.check(TokenComma) {
 			p.advance()
 		}
@@ -375,15 +391,11 @@ func (p *Parser) parseFnDecl() *FnDecl {
 	var receiver *FieldDecl
 	if p.check(TokenLParen) {
 		p.advance()
-		isMutRecv := false
-		if p.check(TokenMut) {
-			p.advance()
-			isMutRecv = true
-		}
+		isMutRecv, isViewRecv := p.parseParamModifiers("receiver")
 		rName := p.expect(TokenIdent, "Expected receiver variable name").Val
 		rType := p.parseType()
 		p.expect(TokenRParen, "Expected ')' closing receiver")
-		receiver = &FieldDecl{Name: rName, Type: rType, IsMut: isMutRecv}
+		receiver = &FieldDecl{Name: rName, Type: rType, IsMut: isMutRecv, IsView: isViewRecv}
 	}
 
 	name := p.expect(TokenIdent, "Expected function name").Val
@@ -413,15 +425,11 @@ func (p *Parser) parseFnDecl() *FnDecl {
 
 	var params []FieldDecl
 	for !p.check(TokenRParen) && !p.check(TokenEOF) {
-		pMut := false
-		if p.check(TokenMut) {
-			p.advance()
-			pMut = true
-		}
+		pMut, pView := p.parseParamModifiers("parameter")
 		pName := p.expect(TokenIdent, "Expected parameter name").Val
 		p.expect(TokenColon, "Expected ':'")
 		pType := p.parseType()
-		params = append(params, FieldDecl{Name: pName, Type: pType, IsMut: pMut})
+		params = append(params, FieldDecl{Name: pName, Type: pType, IsMut: pMut, IsView: pView})
 		if p.check(TokenComma) {
 			p.advance()
 		}

@@ -268,7 +268,13 @@ func formatTraitSign(t *compiler.TraitDecl) string {
 	for _, m := range t.Methods {
 		var params []string
 		for _, p := range m.Params {
-			params = append(params, fmt.Sprintf("%s: %s", p.Name, p.Type.String()))
+			prefix := ""
+			if p.IsMut {
+				prefix = "mut "
+			} else if p.IsView {
+				prefix = "view "
+			}
+			params = append(params, fmt.Sprintf("%s%s: %s", prefix, p.Name, p.Type.String()))
 		}
 		ret := ""
 		if m.RetType != nil {
@@ -283,20 +289,24 @@ func formatTraitSign(t *compiler.TraitDecl) string {
 func formatFnSign(fn *compiler.FnDecl) string {
 	receiver := ""
 	if fn.Receiver != nil {
-		mutPrefix := ""
+		prefix := ""
 		if fn.Receiver.IsMut {
-			mutPrefix = "mut "
+			prefix = "mut "
+		} else if fn.Receiver.IsView {
+			prefix = "view "
 		}
-		receiver = fmt.Sprintf("(%s%s %s) ", mutPrefix, fn.Receiver.Name, fn.Receiver.Type.String())
+		receiver = fmt.Sprintf("(%s%s %s) ", prefix, fn.Receiver.Name, fn.Receiver.Type.String())
 	}
 
 	var params []string
 	for _, p := range fn.Params {
-		mutPrefix := ""
+		prefix := ""
 		if p.IsMut {
-			mutPrefix = "mut "
+			prefix = "mut "
+		} else if p.IsView {
+			prefix = "view "
 		}
-		params = append(params, fmt.Sprintf("%s%s: %s", mutPrefix, p.Name, p.Type.String()))
+		params = append(params, fmt.Sprintf("%s%s: %s", prefix, p.Name, p.Type.String()))
 	}
 
 	ret := ""
@@ -310,7 +320,13 @@ func formatFnSign(fn *compiler.FnDecl) string {
 func formatExternFnSign(fn *compiler.ExternFnDecl) string {
 	var params []string
 	for _, p := range fn.Params {
-		params = append(params, fmt.Sprintf("%s: %s", p.Name, p.Type.String()))
+		prefix := ""
+		if p.IsMut {
+			prefix = "mut "
+		} else if p.IsView {
+			prefix = "view "
+		}
+		params = append(params, fmt.Sprintf("%s%s: %s", prefix, p.Name, p.Type.String()))
 	}
 	ret := ""
 	if fn.RetType != nil {

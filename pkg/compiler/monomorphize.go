@@ -627,10 +627,11 @@ func (m *Monomorphizer) specializeStruct(base string, args []UbeType, pending *[
 	fields := make([]FieldDecl, 0, len(tmpl.Fields))
 	for _, f := range tmpl.Fields {
 		fields = append(fields, FieldDecl{
-			Name:  f.Name,
-			Type:  substituteType(f.Type, subMap),
-			IsMut: f.IsMut,
-			IsPub: f.IsPub,
+			Name:   f.Name,
+			Type:   substituteType(f.Type, subMap),
+			IsMut:  f.IsMut,
+			IsView: f.IsView,
+			IsPub:  f.IsPub,
 		})
 	}
 
@@ -696,8 +697,10 @@ func (m *Monomorphizer) specializeFunc(name string, args []UbeType, pending *[]D
 	params := make([]FieldDecl, 0, len(tmpl.Params))
 	for _, p := range tmpl.Params {
 		params = append(params, FieldDecl{
-			Name: p.Name,
-			Type: substituteType(p.Type, subMap),
+			Name:   p.Name,
+			Type:   substituteType(p.Type, subMap),
+			IsMut:  p.IsMut,
+			IsView: p.IsView,
 		})
 	}
 
@@ -719,14 +722,17 @@ func (m *Monomorphizer) specializeMethod(tmpl *FnDecl, specializedStruct string,
 	params := make([]FieldDecl, 0, len(tmpl.Params))
 	for _, p := range tmpl.Params {
 		params = append(params, FieldDecl{
-			Name: p.Name,
-			Type: substituteType(p.Type, subMap),
+			Name:   p.Name,
+			Type:   substituteType(p.Type, subMap),
+			IsMut:  p.IsMut,
+			IsView: p.IsView,
 		})
 	}
 	receiver := &FieldDecl{
-		Name:  tmpl.Receiver.Name,
-		Type:  CustomType{Name: specializedStruct},
-		IsMut: tmpl.Receiver.IsMut,
+		Name:   tmpl.Receiver.Name,
+		Type:   CustomType{Name: specializedStruct},
+		IsMut:  tmpl.Receiver.IsMut,
+		IsView: tmpl.Receiver.IsView,
 	}
 	return &FnDecl{
 		At:       tmpl.At,

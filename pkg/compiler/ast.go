@@ -81,6 +81,7 @@ type FieldDecl struct {
 	Name      string
 	Type      UbeType
 	IsMut     bool
+	IsView    bool
 	IsPub     bool
 	Anonymous bool
 	Tag       string

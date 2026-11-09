@@ -74,11 +74,15 @@
         },
         {
           "name": "keyword.control.ube",
-          "match": "\\b(package|pub|fn|let|mut|struct|enum|match|if|else|while|for|in|return|break|continue|arena|promote|spawn|select|defer|or_else|extern|import|trait|as)\\b"
+          "match": "\\b(package|pub|fn|let|mut|view|struct|enum|match|if|else|while|for|in|return|break|continue|arena|promote|spawn|select|defer|or_else|extern|import|trait|as)\\b"
         },
         {
           "name": "keyword.declaration.ube",
-          "match": "\\b(package|let|mut|fn|struct|enum|trait|extern|import|as)\\b"
+          "match": "\\b(package|let|mut|view|fn|struct|enum|trait|extern|import|as)\\b"
+        },
+        {
+          "name": "storage.modifier.ube",
+          "match": "\\b(mut|pub|view)\\b"
         },
         {
           "name": "keyword.other.ube",
@@ -121,12 +125,13 @@
     "function_declaration": {
       "patterns": [
         {
-          "match": "\\b(fn)\\s+(?:\\((?:mut\\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\)\\s+)?([a-zA-Z_][a-zA-Z0-9_]*)",
+          "match": "\\b(fn)\\s+(?:\\((?:(mut|view)\\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\)\\s+)?([a-zA-Z_][a-zA-Z0-9_]*)",
           "captures": {
             "1": { "name": "keyword.declaration.ube" },
-            "2": { "name": "variable.parameter.receiver.ube" },
-            "3": { "name": "entity.name.type.ube" },
-            "4": { "name": "entity.name.function.ube" }
+            "2": { "name": "storage.modifier.ube" },
+            "3": { "name": "variable.parameter.receiver.ube" },
+            "4": { "name": "entity.name.type.ube" },
+            "5": { "name": "entity.name.function.ube" }
           }
         }
       ]

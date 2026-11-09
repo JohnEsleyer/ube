@@ -232,10 +232,16 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			return nil, err
 		}
 		valT = tc.resolveType(valT)
+		root := assignmentRoot(e.Value)
+		if root != "" {
+			if vInfo, found := env.LookupVar(root); found && vInfo.IsView {
+				return nil, fmt.Errorf("[%s] cannot move from view parameter '%s'", e.At, root)
+			}
+		}
 		if tc.isCopyType(valT) {
 			return nil, fmt.Errorf("[%s] cannot move value of copy type '%s'", e.At, valT)
 		}
-		root := variableRoot(e.Value)
+		root = variableRoot(e.Value)
 		if root == "" {
 			return nil, fmt.Errorf("[%s] 'move' requires a variable to move from", e.At)
 		}
@@ -251,6 +257,11 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 		return valT, nil
 
 	case *PromoteExpr:
+		if root := assignmentRoot(e.Value); root != "" {
+			if vi, found := env.LookupVar(root); found && vi.IsView {
+				return nil, fmt.Errorf("[%s] cannot promote view parameter '%s'", e.At, root)
+			}
+		}
 		t, err := tc.inferExpr(e.Value, env)
 		if err != nil {
 			return nil, err
@@ -324,6 +335,13 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			t, err := tc.inferExpr(elem, env)
 			if err != nil {
 				return nil, err
+			}
+			if root := assignmentRoot(elem); root != "" {
+				if vi, found := env.LookupVar(root); found && vi.IsView {
+					if !tc.isCopyType(t) || tc.hasLifetime(t) || variableRoot(elem) == root {
+						return nil, fmt.Errorf("[%s] cannot store view parameter '%s' into tuple element (views are second-class)", elem.Loc(), root)
+					}
+				}
 			}
 			if _, isMove := elem.(*MoveExpr); !isMove {
 				root := variableRoot(elem)
@@ -846,12 +864,20 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				}
 				if root := assignmentRoot(mem.Target); root != "" {
 					if info, found := env.LookupVar(root); found {
+						if info.IsView {
+							return nil, fmt.Errorf("[%s] cannot call mutating method 'push' on view '%s'", e.At, root)
+						}
 						if !info.IsMut {
 							return nil, fmt.Errorf("[%s] cannot call 'push' on immutable slice '%s'; declare it with 'let mut'", e.At, root)
 						}
 						if env.ScopeDepth > info.Depth {
 							return nil, fmt.Errorf("[%s] Safety Error: Outer slice mutation attempted within inner arena at line %d; use promote(...) to export data", e.At, e.At.Line)
 						}
+					}
+				}
+				if root := assignmentRoot(e.Args[0]); root != "" {
+					if vi, found := env.LookupVar(root); found && vi.IsView {
+						return nil, fmt.Errorf("[%s] cannot push view parameter '%s' into slice (views are second-class)", e.Args[0].Loc(), root)
 					}
 				}
 				tc.pinLiteral(e.Args[0], sl.Elem)
@@ -865,6 +891,11 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				if len(e.Args) != 0 {
 					return nil, fmt.Errorf("[%s] pop expects 0 arguments", e.At)
 				}
+				if root := assignmentRoot(mem.Target); root != "" {
+					if info, found := env.LookupVar(root); found && info.IsView {
+						return nil, fmt.Errorf("[%s] cannot call mutating method 'pop' on view '%s'", e.At, root)
+					}
+				}
 				return OptionalType{Inner: sl.Elem}, nil
 			}
 			if _, ok := tgtT.(SliceType); ok && mem.Member == "resize" {
@@ -872,8 +903,13 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					return nil, fmt.Errorf("[%s] resize expects 1 argument", e.At)
 				}
 				if root := assignmentRoot(mem.Target); root != "" {
-					if info, found := env.LookupVar(root); found && !info.IsMut {
-						return nil, fmt.Errorf("[%s] cannot call 'resize' on immutable slice '%s'", e.At, root)
+					if info, found := env.LookupVar(root); found {
+						if info.IsView {
+							return nil, fmt.Errorf("[%s] cannot call mutating method 'resize' on view '%s'", e.At, root)
+						}
+						if !info.IsMut {
+							return nil, fmt.Errorf("[%s] cannot call 'resize' on immutable slice '%s'", e.At, root)
+						}
 					}
 				}
 				tc.pinLiteral(e.Args[0], PrimitiveType{Name: "i32"})
@@ -891,8 +927,13 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					return nil, fmt.Errorf("[%s] clear expects 0 arguments", e.At)
 				}
 				if root := assignmentRoot(mem.Target); root != "" {
-					if info, found := env.LookupVar(root); found && !info.IsMut {
-						return nil, fmt.Errorf("[%s] Cannot call 'clear' on immutable slice '%s'", e.At, root)
+					if info, found := env.LookupVar(root); found {
+						if info.IsView {
+							return nil, fmt.Errorf("[%s] cannot call mutating method 'clear' on view '%s'", e.At, root)
+						}
+						if !info.IsMut {
+							return nil, fmt.Errorf("[%s] Cannot call 'clear' on immutable slice '%s'", e.At, root)
+						}
 					}
 				}
 				return PrimitiveType{Name: "void"}, nil
@@ -943,6 +984,11 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					if len(e.Args) != 1 {
 						return nil, fmt.Errorf("[%s] send expects 1 argument", e.At)
 					}
+					if root := assignmentRoot(e.Args[0]); root != "" {
+						if vi, found := env.LookupVar(root); found && vi.IsView {
+							return nil, fmt.Errorf("[%s] cannot send view parameter '%s' into channel", e.At, root)
+						}
+					}
 					tc.pinLiteral(e.Args[0], ch.Elem)
 					argT, err := tc.inferExpr(e.Args[0], env)
 					if err != nil {
@@ -985,6 +1031,11 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				if mem.Member == "spawn" {
 					if len(e.Args) != 1 {
 						return nil, fmt.Errorf("[%s] Pool.spawn expects one value", e.At)
+					}
+					if root := assignmentRoot(e.Args[0]); root != "" {
+						if vi, found := env.LookupVar(root); found && vi.IsView {
+							return nil, fmt.Errorf("[%s] cannot store view parameter '%s' into pool", e.At, root)
+						}
 					}
 					tc.pinLiteral(e.Args[0], p.Elem)
 					valueType, err := tc.inferExpr(e.Args[0], env)
@@ -1049,8 +1100,13 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 				e.ReceiverType = tgtT
 				if sig.ReceiverMut {
 					if root := assignmentRoot(mem.Target); root != "" {
-						if vInfo, found := env.LookupVar(root); found && !vInfo.IsMut {
-							return nil, fmt.Errorf("[%s] cannot call mutating method '%s' on immutable value '%s'", e.At, mem.Member, root)
+						if vInfo, found := env.LookupVar(root); found {
+							if vInfo.IsView {
+								return nil, fmt.Errorf("[%s] cannot call mutating method '%s' on view '%s'", e.At, mem.Member, root)
+							}
+							if !vInfo.IsMut {
+								return nil, fmt.Errorf("[%s] cannot call mutating method '%s' on immutable value '%s'", e.At, mem.Member, root)
+							}
 						}
 					}
 				}
@@ -1066,8 +1122,13 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 					e.ReceiverType = mem.TargetType
 					if sig.ReceiverMut {
 						if root := assignmentRoot(mem.Target); root != "" {
-							if vInfo, found := env.LookupVar(root); found && !vInfo.IsMut {
-								return nil, fmt.Errorf("[%s] cannot call mutating method '%s' on immutable value '%s'", e.At, mem.Member, root)
+							if vInfo, found := env.LookupVar(root); found {
+								if vInfo.IsView {
+									return nil, fmt.Errorf("[%s] cannot call mutating method '%s' on view '%s'", e.At, mem.Member, root)
+								}
+								if !vInfo.IsMut {
+									return nil, fmt.Errorf("[%s] cannot call mutating method '%s' on immutable value '%s'", e.At, mem.Member, root)
+								}
 							}
 						}
 					}
@@ -1262,6 +1323,13 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			if err != nil {
 				return nil, err
 			}
+			if root := assignmentRoot(el); root != "" {
+				if vi, found := env.LookupVar(root); found && vi.IsView {
+					if !tc.isCopyType(t) || tc.hasLifetime(t) || variableRoot(el) == root {
+						return nil, fmt.Errorf("[%s] cannot store view parameter '%s' into slice element (views are second-class)", el.Loc(), root)
+					}
+				}
+			}
 			if _, isMove := el.(*MoveExpr); !isMove {
 				root := variableRoot(el)
 				if root != "" && !tc.isCopyType(t) {
@@ -1290,6 +1358,13 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			t, err := tc.inferExpr(el, env)
 			if err != nil {
 				return nil, err
+			}
+			if root := assignmentRoot(el); root != "" {
+				if vi, found := env.LookupVar(root); found && vi.IsView {
+					if !tc.isCopyType(t) || tc.hasLifetime(t) || variableRoot(el) == root {
+						return nil, fmt.Errorf("[%s] cannot store view parameter '%s' into array element (views are second-class)", el.Loc(), root)
+					}
+				}
 			}
 			if _, isMove := el.(*MoveExpr); !isMove {
 				root := variableRoot(el)
@@ -1346,6 +1421,13 @@ func (tc *Typechecker) inferExpr(expr Expr, env *TypeEnvironment) (UbeType, erro
 			valT, err := tc.inferExpr(init.Val, env)
 			if err != nil {
 				return nil, err
+			}
+			if root := assignmentRoot(init.Val); root != "" {
+				if vi, found := env.LookupVar(root); found && vi.IsView {
+					if !tc.isCopyType(valT) || tc.hasLifetime(valT) || variableRoot(init.Val) == root {
+						return nil, fmt.Errorf("[%s] cannot store view parameter '%s' into struct field '%s' (views are second-class)", init.Val.Loc(), root, init.Name)
+					}
+				}
 			}
 			if _, isMove := init.Val.(*MoveExpr); !isMove {
 				root := variableRoot(init.Val)

@@ -33,6 +33,7 @@ const (
 	TokenArena    TokenType = "arena"
 	TokenPromote  TokenType = "promote"
 	TokenMove     TokenType = "move"
+	TokenView     TokenType = "view"
 	TokenSpawn    TokenType = "spawn"
 	TokenBreak    TokenType = "break"
 	TokenContinue TokenType = "continue"

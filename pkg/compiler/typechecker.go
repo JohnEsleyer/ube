@@ -10,6 +10,7 @@ import (
 type VarInfo struct {
 	Type       UbeType
 	IsMut      bool
+	IsView     bool
 	Depth      int
 	ValueDepth int
 	LoopDepth  int
@@ -17,12 +18,13 @@ type VarInfo struct {
 }
 
 type FuncSignature struct {
-	Params      []FieldDecl
-	RetType     UbeType
-	Escaping    []bool
-	ReceiverMut bool
-	IsPub       bool
-	Package     string
+	Params       []FieldDecl
+	RetType      UbeType
+	Escaping     []bool
+	ReceiverMut  bool
+	ReceiverView bool
+	IsPub        bool
+	Package      string
 }
 
 type StructMeta struct {
@@ -465,11 +467,12 @@ func (tc *Typechecker) Check(prog *Program) error {
 				fnKey = fmt.Sprintf("%s.%s", d.Receiver.Type, d.Name)
 			}
 			tc.Global.Funcs[fnKey] = FuncSignature{
-				Params:      d.Params,
-				RetType:     d.RetType,
-				ReceiverMut: d.Receiver != nil && d.Receiver.IsMut,
-				IsPub:       d.IsPub,
-				Package:     d.Package,
+				Params:       d.Params,
+				RetType:      d.RetType,
+				ReceiverMut:  d.Receiver != nil && d.Receiver.IsMut,
+				ReceiverView: d.Receiver != nil && d.Receiver.IsView,
+				IsPub:        d.IsPub,
+				Package:      d.Package,
 			}
 		case *ExternFnDecl:
 			for _, p := range d.Params {
@@ -497,10 +500,10 @@ func (tc *Typechecker) Check(prog *Program) error {
 			env.CurRet = fn.RetType
 			env.ScopeDepth = 0
 			if fn.Receiver != nil {
-				env.Vars[fn.Receiver.Name] = VarInfo{Type: fn.Receiver.Type, IsMut: fn.Receiver.IsMut, Depth: 0, ValueDepth: 0}
+				env.Vars[fn.Receiver.Name] = VarInfo{Type: fn.Receiver.Type, IsMut: fn.Receiver.IsMut, IsView: fn.Receiver.IsView, Depth: 0, ValueDepth: 0}
 			}
 			for _, p := range fn.Params {
-				env.Vars[p.Name] = VarInfo{Type: p.Type, IsMut: p.IsMut, Depth: 0, ValueDepth: 0}
+				env.Vars[p.Name] = VarInfo{Type: p.Type, IsMut: p.IsMut, IsView: p.IsView, Depth: 0, ValueDepth: 0}
 			}
 			// canonicalName reads tc.Global.CurModule; make it reflect the
 			// current function's module for the duration of this body check.

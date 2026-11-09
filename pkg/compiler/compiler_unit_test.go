@@ -324,3 +324,266 @@ fn main() {
 		t.Errorf("expected arena upward violation error, got: %v", err)
 	}
 }
+
+func checkViewSource(t *testing.T, source string) error {
+	t.Helper()
+	lexer := compiler.NewLexer("test.ube", source)
+	tokens, err := lexer.Tokenize()
+	if err != nil {
+		t.Fatalf("lex error: %v", err)
+	}
+	prog, err := compiler.NewParser(tokens).ParseProgram()
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+	return compiler.NewTypechecker().Check(prog)
+}
+
+func TestTypechecker_ViewPreservesCallerOwnership(t *testing.T) {
+	source := `
+package main
+
+fn inspect(view s: []string) -> i32 {
+    return s.len
+}
+
+fn main() {
+    let list = []string{"sys", "wasm"}
+    let count = inspect(list)
+    println(list[0])
+    println(count)
+}
+`
+	if err := checkViewSource(t, source); err != nil {
+		t.Fatalf("expected view parameter to preserve caller ownership, got error: %v", err)
+	}
+}
+
+func TestTypechecker_ViewRejectReturn(t *testing.T) {
+	source := `
+package main
+
+fn escape(view tokens: []string) -> []string {
+    return tokens
+}
+
+fn main() {}
+`
+	err := checkViewSource(t, source)
+	if err == nil {
+		t.Fatal("expected error returning view parameter, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot return view parameter 'tokens'") {
+		t.Errorf("expected 'cannot return view parameter' error, got: %v", err)
+	}
+}
+
+func TestTypechecker_ViewRejectStructField(t *testing.T) {
+	source := `
+package main
+
+struct Container {
+    items: []string
+}
+
+fn store_view(view tokens: []string) {
+    let c = Container{ items: tokens }
+}
+
+fn main() {}
+`
+	err := checkViewSource(t, source)
+	if err == nil {
+		t.Fatal("expected error storing view into struct field, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot store view parameter 'tokens' into struct field 'items'") {
+		t.Errorf("expected 'cannot store view parameter' error, got: %v", err)
+	}
+}
+
+func TestTypechecker_ViewRejectReassignment(t *testing.T) {
+	source := `
+package main
+
+fn reassign(view tokens: []string) {
+    tokens = []string{}
+}
+
+fn main() {}
+`
+	err := checkViewSource(t, source)
+	if err == nil {
+		t.Fatal("expected error reassigning view parameter, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot assign to immutable view 'tokens'") {
+		t.Errorf("expected 'cannot assign to immutable view' error, got: %v", err)
+	}
+}
+
+func TestTypechecker_ViewRejectMutMethod(t *testing.T) {
+	source := `
+package main
+
+fn mutate_view(view s: []i32) {
+    s.push(10)
+}
+
+fn main() {}
+`
+	err := checkViewSource(t, source)
+	if err == nil {
+		t.Fatal("expected error calling push on view slice, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot call mutating method 'push' on view 's'") {
+		t.Errorf("expected 'cannot call mutating method' error, got: %v", err)
+	}
+}
+
+func TestTypechecker_ViewRejectMove(t *testing.T) {
+	source := `
+package main
+
+fn move_view(view s: []string) {
+    let x = move s
+}
+
+fn main() {}
+`
+	err := checkViewSource(t, source)
+	if err == nil {
+		t.Fatal("expected error moving view parameter, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot move from view parameter 's'") {
+		t.Errorf("expected 'cannot move from view parameter' error, got: %v", err)
+	}
+}
+
+func TestTypechecker_ViewRejectCallerMove(t *testing.T) {
+	source := `
+package main
+
+fn inspect(view s: []string) -> i32 {
+    return s.len
+}
+
+fn main() {
+    let list = []string{"a"}
+    inspect(move list)
+}
+`
+	err := checkViewSource(t, source)
+	if err == nil {
+		t.Fatal("expected error passing move to view parameter, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot use 'move' when passing to view parameter 's'") {
+		t.Errorf("expected 'cannot use move when passing to view' error, got: %v", err)
+	}
+}
+
+func TestTypechecker_ViewRejectSpawn(t *testing.T) {
+	source := `
+package main
+
+fn worker(data: []string) {}
+
+fn spawn_view(view s: []string) {
+    spawn worker(s)
+}
+
+fn main() {}
+`
+	err := checkViewSource(t, source)
+	if err == nil {
+		t.Fatal("expected error capturing view in spawn task, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot capture view parameter 's' in spawn task") {
+		t.Errorf("expected 'cannot capture view parameter' error, got: %v", err)
+	}
+}
+
+func TestTypechecker_ViewNestedPropagation(t *testing.T) {
+	source := `
+package main
+
+fn helper(view data: []string) -> i32 {
+    return data.len
+}
+
+fn forward(view tokens: []string) -> i32 {
+    return helper(tokens)
+}
+
+fn main() {
+    let list = []string{"a", "b"}
+    println(forward(list))
+    println(list[0])
+}
+`
+	if err := checkViewSource(t, source); err != nil {
+		t.Fatalf("expected view forwarding to succeed, got: %v", err)
+	}
+}
+
+func TestTypechecker_ViewReceiver(t *testing.T) {
+	source := `
+package main
+
+struct Rect {
+    w: i32,
+    h: i32
+}
+
+fn (view r Rect) area() -> i32 {
+    return r.w * r.h
+}
+
+fn main() {
+    let r = Rect{ w: 6, h: 7 }
+    println(r.area())
+    println(r.w)
+}
+`
+	if err := checkViewSource(t, source); err != nil {
+		t.Fatalf("expected view receiver to succeed, got: %v", err)
+	}
+}
+
+func TestParser_ViewOnStructFieldRejected(t *testing.T) {
+	source := `
+package main
+
+struct Bad {
+    view item: string
+}
+
+fn main() {}
+`
+	lexer := compiler.NewLexer("test.ube", source)
+	tokens, _ := lexer.Tokenize()
+	_, err := compiler.NewParser(tokens).ParseProgram()
+	if err == nil {
+		t.Fatal("expected parse error for 'view' in struct field, got nil")
+	}
+	if !strings.Contains(err.Error(), "'view' modifier is not allowed on struct fields") {
+		t.Errorf("expected struct field view rejection, got: %v", err)
+	}
+}
+
+func TestParser_ViewMutMutuallyExclusive(t *testing.T) {
+	source := `
+package main
+
+fn bad(view mut s: []string) {}
+
+fn main() {}
+`
+	lexer := compiler.NewLexer("test.ube", source)
+	tokens, _ := lexer.Tokenize()
+	_, err := compiler.NewParser(tokens).ParseProgram()
+	if err == nil {
+		t.Fatal("expected parse error for 'view mut', got nil")
+	}
+	if !strings.Contains(err.Error(), "parameter cannot be both 'mut' and 'view'") {
+		t.Errorf("expected mutual exclusion error, got: %v", err)
+	}
+}

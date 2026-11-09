@@ -22,8 +22,13 @@ func (tc *Typechecker) checkCallArgsWithReceiver(receiver Expr, receiverMut bool
 		if rRoot != "" {
 			allRoots[rRoot] = true
 			if receiverMut {
-				if vi, found := env.LookupVar(rRoot); found && !vi.IsMut {
-					return fmt.Errorf("[%s] cannot call mutating method on immutable value '%s'", loc, rRoot)
+				if vi, found := env.LookupVar(rRoot); found {
+					if vi.IsView {
+						return fmt.Errorf("[%s] cannot call mutating method on view '%s'", loc, rRoot)
+					}
+					if !vi.IsMut {
+						return fmt.Errorf("[%s] cannot call mutating method on immutable value '%s'", loc, rRoot)
+					}
 				}
 				mutRoots[rRoot] = true
 			}
@@ -31,7 +36,16 @@ func (tc *Typechecker) checkCallArgsWithReceiver(receiver Expr, receiverMut bool
 	}
 
 	for i, arg := range args {
+		paramMut := params[i].IsMut
+		paramView := params[i].IsView
+
 		_, explicitMut := mutArgOperand(arg)
+		if explicitMut && paramView {
+			return fmt.Errorf("[%s] cannot pass 'mut' argument to view parameter '%s'", arg.Loc(), params[i].Name)
+		}
+		if _, isMove := arg.(*MoveExpr); isMove && paramView {
+			return fmt.Errorf("[%s] cannot use 'move' when passing to view parameter '%s'", arg.Loc(), params[i].Name)
+		}
 		if i < len(params) && params[i].Type != nil {
 			tc.pinLiteral(arg, params[i].Type)
 		}
@@ -39,11 +53,20 @@ func (tc *Typechecker) checkCallArgsWithReceiver(receiver Expr, receiverMut bool
 		if err != nil {
 			return err
 		}
-		paramMut := params[i].IsMut
 		if explicitMut && !paramMut {
 			return fmt.Errorf("[%s] argument is marked 'mut' but parameter '%s' is not mutable", arg.Loc(), params[i].Name)
 		}
 		root := assignmentRoot(arg)
+		if root != "" {
+			if vi, found := env.LookupVar(root); found && vi.IsView {
+				if paramMut {
+					return fmt.Errorf("[%s] cannot pass view '%s' as mutable parameter '%s'", arg.Loc(), root, params[i].Name)
+				}
+				if !paramView && !tc.isCopyType(actual) {
+					return fmt.Errorf("[%s] cannot pass view '%s' to non-view parameter '%s'", arg.Loc(), root, params[i].Name)
+				}
+			}
+		}
 		if paramMut {
 			if root != "" {
 				if vi, found := env.LookupVar(root); found && !vi.IsMut {
@@ -91,9 +114,9 @@ func (tc *Typechecker) checkCallArgsWithReceiver(receiver Expr, receiverMut bool
 		if err := tc.assertCompat(paramType, actual, arg.Loc()); err != nil {
 			return err
 		}
-		// Mutable parameters and non-escaping parameters are loans. Affine
-		// values are only consumed when the callee can retain them.
-		if !paramMut {
+		// Mutable parameters, view parameters, and non-escaping parameters are
+		// loans. Affine values are only consumed when the callee can retain them.
+		if !paramMut && !paramView {
 			escapes := i < len(escaping) && escaping[i]
 			if escapes {
 				if _, isMove := arg.(*MoveExpr); !isMove {
@@ -127,6 +150,12 @@ func (tc *Typechecker) structImplementsTrait(structName, traitName string) bool 
 		}
 		for i, p := range m.Params {
 			if sig.Params[i].Type.String() != p.Type.String() {
+				return false
+			}
+			if sig.Params[i].IsView != p.IsView {
+				return false
+			}
+			if sig.Params[i].IsMut != p.IsMut {
 				return false
 			}
 		}

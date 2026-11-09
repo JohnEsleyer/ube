@@ -71,6 +71,7 @@ func Hover(uri, source string, p lspPosition) any {
 		"str_ends_with":   "`fn str_ends_with(s: string, suffix: string) -> bool`\n*Checks if string ends with suffix.*",
 		"arena":           "`arena { ... }`\n*Lexical memory arena block. Reclaimed on block exit in one instruction.*",
 		"move":            "`move <var>`\n*Explicitly transfers ownership of a non-copy value, invalidating the source variable.*",
+		"view":            "`view <param>: <type>`\n*Non-escaping, read-only loan of a value. The caller retains ownership without moving.*",
 		"spawn":           "`spawn fn(args...)`\n*Schedules a concurrent Vine fiber onto the worker thread pool.*",
 		"package":         "`package <name>`\n*Declares the package this file belongs to. Every .ube file in a directory must declare the same package.*",
 		"pub":             "`pub`\n*Exports a declaration outside of its package.*",
@@ -164,7 +165,13 @@ func Hover(uri, source string, p lspPosition) any {
 					if d.Name == word {
 						var params []string
 						for _, param := range d.Params {
-							params = append(params, fmt.Sprintf("%s: %s", param.Name, param.Type))
+							prefix := ""
+							if param.IsMut {
+								prefix = "mut "
+							} else if param.IsView {
+								prefix = "view "
+							}
+							params = append(params, fmt.Sprintf("%s%s: %s", prefix, param.Name, param.Type))
 						}
 						ret := "void"
 						if d.RetType != nil {
@@ -172,7 +179,13 @@ func Hover(uri, source string, p lspPosition) any {
 						}
 						recv := ""
 						if d.Receiver != nil {
-							recv = fmt.Sprintf("(%s %s) ", d.Receiver.Name, d.Receiver.Type)
+							prefix := ""
+							if d.Receiver.IsMut {
+								prefix = "mut "
+							} else if d.Receiver.IsView {
+								prefix = "view "
+							}
+							recv = fmt.Sprintf("(%s%s %s) ", prefix, d.Receiver.Name, d.Receiver.Type)
 						}
 						sig := fmt.Sprintf("```ube\nfn %s%s(%s) -> %s\n```", recv, d.Name, strings.Join(params, ", "), ret)
 						return map[string]any{"contents": map[string]string{"kind": "markdown", "value": sig}}
@@ -219,7 +232,13 @@ func hoverFn(d *compiler.FnDecl, qualifier string) any {
 	}
 	var params []string
 	for _, param := range d.Params {
-		params = append(params, fmt.Sprintf("%s: %s", param.Name, param.Type))
+		prefix := ""
+		if param.IsMut {
+			prefix = "mut "
+		} else if param.IsView {
+			prefix = "view "
+		}
+		params = append(params, fmt.Sprintf("%s%s: %s", prefix, param.Name, param.Type))
 	}
 	ret := "void"
 	if d.RetType != nil {
@@ -227,7 +246,13 @@ func hoverFn(d *compiler.FnDecl, qualifier string) any {
 	}
 	recv := ""
 	if d.Receiver != nil {
-		recv = fmt.Sprintf("(%s %s) ", d.Receiver.Name, d.Receiver.Type)
+		prefix := ""
+		if d.Receiver.IsMut {
+			prefix = "mut "
+		} else if d.Receiver.IsView {
+			prefix = "view "
+		}
+		recv = fmt.Sprintf("(%s%s %s) ", prefix, d.Receiver.Name, d.Receiver.Type)
 	}
 	name := shortName(d.Name)
 	if qualifier != "" {
@@ -301,7 +326,13 @@ func hoverTrait(d *compiler.TraitDecl, qualifier string) any {
 	for _, m := range d.Methods {
 		var params []string
 		for _, p := range m.Params {
-			params = append(params, fmt.Sprintf("%s: %s", p.Name, p.Type))
+			prefix := ""
+			if p.IsMut {
+				prefix = "mut "
+			} else if p.IsView {
+				prefix = "view "
+			}
+			params = append(params, fmt.Sprintf("%s%s: %s", prefix, p.Name, p.Type))
 		}
 		ret := "void"
 		if m.RetType != nil {

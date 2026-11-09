@@ -641,6 +641,10 @@ func (tc *Typechecker) computeEscapingParams(prog *Program) {
 				continue
 			}
 			for i := range fn.Params {
+				if fn.Params[i].IsView {
+					sig.Escaping[i] = false
+					continue
+				}
 				if sig.Escaping[i] {
 					continue
 				}

@@ -7,8 +7,9 @@ import (
 )
 
 var (
-	reExpectedGot = regexp.MustCompile(`expected '([^']+)', got '([^']+)'`)
-	reQuotedVar   = regexp.MustCompile(`'([^']+)'`)
+	reExpectedGot      = regexp.MustCompile(`expected '([^']+)', got '([^']+)'`)
+	reQuotedVar        = regexp.MustCompile(`'([^']+)'`)
+	reViewParamMessage = regexp.MustCompile(`passing to view parameter '([^']+)'`)
 )
 
 // formatDiagnosticAI renders compiler errors as dense one-line-per-error
@@ -65,6 +66,36 @@ func classifyMessage(msg string) (class, fields string) {
 			return "use_after_move", "var:" + m[1]
 		}
 		return "use_after_move", ""
+	case strings.Contains(msg, "cannot return view parameter"):
+		if m := reQuotedVar.FindStringSubmatch(msg); m != nil {
+			return "escape_error", "view:" + m[1]
+		}
+		return "escape_error", ""
+	case strings.Contains(msg, "cannot store view parameter"):
+		if m := reQuotedVar.FindStringSubmatch(msg); m != nil {
+			return "second_class_violation", "view:" + m[1]
+		}
+		return "second_class_violation", ""
+	case strings.Contains(msg, "cannot use 'move' when passing to view"):
+		if m := reViewParamMessage.FindStringSubmatch(msg); m != nil {
+			return "invalid_move", "param:" + m[1]
+		}
+		return "invalid_move", ""
+	case strings.Contains(msg, "cannot move from view parameter"):
+		if m := reQuotedVar.FindStringSubmatch(msg); m != nil {
+			return "move_from_view", "var:" + m[1]
+		}
+		return "move_from_view", ""
+	case strings.Contains(msg, "cannot assign to immutable view"):
+		if m := reQuotedVar.FindStringSubmatch(msg); m != nil {
+			return "immutable_reassign", "var:" + m[1]
+		}
+		return "immutable_reassign", ""
+	case strings.Contains(msg, "cannot capture view parameter"):
+		if m := reQuotedVar.FindStringSubmatch(msg); m != nil {
+			return "second_class_violation", "view:" + m[1]
+		}
+		return "second_class_violation", ""
 	case strings.Contains(msg, "immutable"):
 		if m := reQuotedVar.FindStringSubmatch(msg); m != nil {
 			return "immutable_reassign", "var:" + m[1]

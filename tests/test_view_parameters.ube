@@ -1,0 +1,89 @@
+package main
+
+import "std/env"
+
+fn assert(cond: bool) {
+    if !cond {
+        env.exit(1)
+    }
+}
+
+fn count_items(view tokens: []string) -> i32 {
+    let mut total = 0
+    for tok in tokens {
+        if tok.len > 0 {
+            total += 1
+        }
+    }
+    return total
+}
+
+fn forward_count(view items: []string) -> i32 {
+    return count_items(items)
+}
+
+struct Rect {
+    w: i32,
+    h: i32
+}
+
+fn (view r Rect) area() -> i32 {
+    return r.w * r.h
+}
+
+struct Doc {
+    title: string,
+    tags:  []string
+}
+
+fn doc_summary(view d: Doc) -> i32 {
+    return d.title.len + d.tags.len
+}
+
+fn test_view_preserves_caller_ownership() {
+    let list = []string{"sys", "wasm", "ube"}
+    let count = count_items(list)
+    assert(count == 3)
+    assert(list.len == 3)
+    assert(list[0] == "sys")
+}
+
+fn test_view_nested_forwarding() {
+    let words = []string{"hello", "world"}
+    let total = forward_count(words)
+    assert(total == 2)
+    assert(words.len == 2)
+}
+
+fn test_view_indexing_and_iteration() {
+    let tokens = []string{"alpha", "beta", "gamma"}
+    assert(tokens[0] == "alpha")
+    let c = count_items(tokens)
+    assert(c == 3)
+    assert(tokens.len == 3)
+}
+
+fn test_view_receiver() {
+    let r = Rect{ w: 6, h: 7 }
+    let a = r.area()
+    assert(a == 42)
+    assert(r.w == 6)
+    assert(r.h == 7)
+}
+
+fn test_view_struct_argument() {
+    let d = Doc{ title: "Manual", tags: []string{"doc", "v1"} }
+    let s = doc_summary(d)
+    assert(s == 8)
+    assert(d.title == "Manual")
+    assert(d.tags.len == 2)
+}
+
+fn main() {
+    test_view_preserves_caller_ownership()
+    test_view_nested_forwarding()
+    test_view_indexing_and_iteration()
+    test_view_receiver()
+    test_view_struct_argument()
+    println("view parameters: all tests passed")
+}

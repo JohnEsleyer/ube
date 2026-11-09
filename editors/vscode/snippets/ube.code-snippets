@@ -26,6 +26,15 @@
     ],
     "description": "Receiver method definition"
   },
+  "Function (View Param)": {
+    "prefix": "fnview",
+    "body": [
+      "fn ${1:name}(view ${2:param}: ${3:[]string}) ${4:-> ${5:i32} }{",
+      "\t$0",
+      "}"
+    ],
+    "description": "Function definition with view parameter"
+  },
   "Struct": {
     "prefix": "struct",
     "body": [

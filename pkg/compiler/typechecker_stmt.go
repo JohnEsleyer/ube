@@ -54,6 +54,9 @@ func (tc *Typechecker) markMovedIfType(expr Expr, env *TypeEnvironment, shouldMo
 	if !found || !shouldMove(info.Type) {
 		return nil
 	}
+	if info.IsView {
+		return fmt.Errorf("[%s] cannot move from view parameter '%s'", expr.Loc(), root)
+	}
 	if env.LoopDepth > 0 && info.LoopDepth < env.LoopDepth {
 		return fmt.Errorf("[%s] cannot move variable '%s' inside a loop; it was declared outside the loop", expr.Loc(), root)
 	}
@@ -172,6 +175,15 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 				}
 			}
 		}
+		isViewVal := false
+		if root := assignmentRoot(s.Value); root != "" {
+			if vi, found := env.LookupVar(root); found && vi.IsView && (!tc.isCopyType(valT) || tc.hasLifetime(valT)) {
+				isViewVal = true
+			}
+		}
+		if isViewVal && s.Mut {
+			return fmt.Errorf("[%s] cannot create mutable binding '%s' from view", s.At, s.Name)
+		}
 		valT = valT.WithRegion(env.ScopeDepth)
 		if err := tc.markMovedIfAffine(s.Value, env); err != nil {
 			return err
@@ -179,7 +191,7 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		if tc.hasLifetime(valT) && tc.exprDepth(s.Value, env) > env.ScopeDepth {
 			return fmt.Errorf("[%s] Safety Error: value rooted at scope depth %d cannot escape into '%s' at depth %d", s.At, tc.exprDepth(s.Value, env), s.Name, env.ScopeDepth)
 		}
-		env.Vars[s.Name] = VarInfo{Type: valT, IsMut: s.Mut, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Value, env), LoopDepth: env.LoopDepth, Moved: false}
+		env.Vars[s.Name] = VarInfo{Type: valT, IsMut: s.Mut, IsView: isViewVal, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Value, env), LoopDepth: env.LoopDepth, Moved: false}
 	case *DeferStmt:
 		if _, ok := s.Call.(*CallExpr); !ok {
 			return fmt.Errorf("[%s] defer requires a function call", s.At)
@@ -188,6 +200,11 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		return err
 
 	case *AssignStmt:
+		if id := assignmentRoot(s.LHS); id != "" {
+			if vInfo, found := env.LookupVar(id); found && vInfo.IsView {
+				return fmt.Errorf("[%s] cannot assign to immutable view '%s'", s.At, id)
+			}
+		}
 		// If LHS is a plain identifier being reassigned, allow it even if previously moved
 		if id, ok := s.LHS.(*IdentExpr); ok {
 			if vInfo, found := env.LookupVar(id.Name); found && vInfo.Moved {
@@ -292,6 +309,11 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 	case *ReturnStmt:
 		expected := env.CurRet
 		if s.Value != nil {
+			if id, ok := s.Value.(*IdentExpr); ok {
+				if vi, found := env.LookupVar(id.Name); found && vi.IsView {
+					return fmt.Errorf("[%s] cannot return view parameter '%s' (views cannot escape the call frame)", s.At, id.Name)
+				}
+			}
 			if expected != nil {
 				tc.pinLiteral(s.Value, expected)
 			}
@@ -300,6 +322,13 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 				return err
 			}
 			s.ValueType = valT
+			if root := assignmentRoot(s.Value); root != "" {
+				if vi, found := env.LookupVar(root); found && vi.IsView {
+					if !tc.isCopyType(valT) || tc.hasLifetime(valT) {
+						return fmt.Errorf("[%s] cannot return view parameter '%s' (views cannot escape the call frame)", s.At, root)
+					}
+				}
+			}
 			if tc.hasLifetime(valT) && tc.exprDepth(s.Value, env) > 0 {
 				return fmt.Errorf("[%s] Safety Error: cannot return a reference rooted in this function's local scope", s.At)
 			}
@@ -493,7 +522,13 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		s.ItemType = elemT
 		loopEnv := childTypeEnvironment(env)
 		loopEnv.LoopDepth = env.LoopDepth + 1
-		loopEnv.Vars[s.ItemName] = VarInfo{Type: elemT, IsMut: false, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Iter, env), LoopDepth: loopEnv.LoopDepth}
+		isItemView := false
+		if iterRoot := assignmentRoot(s.Iter); iterRoot != "" {
+			if vi, found := env.LookupVar(iterRoot); found && vi.IsView && (!tc.isCopyType(elemT) || tc.hasLifetime(elemT)) {
+				isItemView = true
+			}
+		}
+		loopEnv.Vars[s.ItemName] = VarInfo{Type: elemT, IsMut: false, IsView: isItemView, Depth: env.ScopeDepth, ValueDepth: tc.exprDepth(s.Iter, env), LoopDepth: loopEnv.LoopDepth}
 		return tc.checkBlock(s.Body, loopEnv)
 
 	case *ArenaStmt:
@@ -508,6 +543,22 @@ func (tc *Typechecker) checkStmt(stmt Stmt, env *TypeEnvironment) error {
 		return nil
 
 	case *SpawnStmt:
+		if s.Call != nil {
+			if mem, ok := s.Call.Callee.(*MemberExpr); ok {
+				if root := assignmentRoot(mem.Target); root != "" {
+					if vi, found := env.LookupVar(root); found && vi.IsView {
+						return fmt.Errorf("[%s] cannot capture view parameter '%s' in spawn task", s.At, root)
+					}
+				}
+			}
+			for _, arg := range s.Call.Args {
+				if root := assignmentRoot(arg); root != "" {
+					if vi, found := env.LookupVar(root); found && vi.IsView {
+						return fmt.Errorf("[%s] cannot capture view parameter '%s' in spawn task", s.At, root)
+					}
+				}
+			}
+		}
 		_, err := tc.inferExpr(s.Call, env)
 		if err != nil {
 			return err

@@ -87,7 +87,13 @@ func SignatureHelp(source string, p lspPosition) any {
 				var params []paramInfo
 				var labels []string
 				for _, param := range fn.Params {
-					pStr := param.Name + ": " + param.Type.String()
+					prefix := ""
+					if param.IsMut {
+						prefix = "mut "
+					} else if param.IsView {
+						prefix = "view "
+					}
+					pStr := prefix + param.Name + ": " + param.Type.String()
 					params = append(params, paramInfo{Label: pStr})
 					labels = append(labels, pStr)
 				}
@@ -165,7 +171,13 @@ func SignatureHelp(source string, p lspPosition) any {
 					if fn, ok := decl.(*compiler.FnDecl); ok && fn.Name == fnName {
 						var paramLabels []string
 						for _, param := range fn.Params {
-							pStr := param.Name + ": " + param.Type.String()
+							prefix := ""
+							if param.IsMut {
+								prefix = "mut "
+							} else if param.IsView {
+								prefix = "view "
+							}
+							pStr := prefix + param.Name + ": " + param.Type.String()
 							params = append(params, paramInfo{Label: pStr})
 							paramLabels = append(paramLabels, pStr)
 						}

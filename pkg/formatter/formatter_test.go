@@ -77,6 +77,22 @@ fn calc() -> i32 {
 	}
 }
 
+func TestFormatter_ViewParameterSpacing(t *testing.T) {
+	input := `package main
+
+fn inspect(view s: []string) -> i32 {
+    return len(s)
+}`
+
+	got, err := formatter.Format("test.ube", input)
+	if err != nil {
+		t.Fatalf("unexpected formatting error: %v", err)
+	}
+	if !strings.Contains(got, "fn inspect(view s: []string) -> i32") {
+		t.Errorf("expected view parameter spacing to be preserved, got:\n%s", got)
+	}
+}
+
 func TestFormatter_SyntaxErrorRejection(t *testing.T) {
 	broken := `package main
 

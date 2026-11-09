@@ -110,10 +110,16 @@ func (p *Parser) parseSelectStmt() *SelectStmt {
 
 func (p *Parser) parseLetStmt() *LetStmt {
 	loc := p.expect(TokenLet, "Expected 'let'").Loc
+	if p.check(TokenView) {
+		p.errorAt(p.peek(0).Loc, "'view' modifier is only allowed on function parameters and receivers")
+	}
 	isMut := false
 	if p.check(TokenMut) {
 		p.advance()
 		isMut = true
+		if p.check(TokenView) {
+			p.errorAt(p.peek(0).Loc, "'view' modifier is only allowed on function parameters and receivers")
+		}
 	}
 	var name string
 	var names []string
