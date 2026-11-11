@@ -538,11 +538,12 @@ type fnContext struct {
 	// top of the stack is the label depth at the innermost loop body
 	// start, so break = (labelDepth - top) + 1 and
 	// continue = (labelDepth - top).
-	loopBodyDepths  []int
-	loopArenaLocals []uint32
-	currentScopeID  int32
-	ir              *IRBuilder
-	localPool       *LocalPool
+	loopBreakDepths    []int
+	loopContinueDepths []int
+	loopArenaLocals    []uint32
+	currentScopeID     int32
+	ir                 *IRBuilder
+	localPool          *LocalPool
 }
 
 func (ctx *fnContext) pushDeferScope() {

@@ -333,8 +333,11 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		ctx.loopArenaLocals = append(ctx.loopArenaLocals, savedArenaLocal)
 
 		ctx.openIRLabel(buf, 0x02)
+		breakDepth := ctx.labelDepth
 		ctx.openIRLabel(buf, 0x03)
-		ctx.loopBodyDepths = append(ctx.loopBodyDepths, ctx.labelDepth)
+		continueDepth := ctx.labelDepth
+		ctx.loopBreakDepths = append(ctx.loopBreakDepths, breakDepth)
+		ctx.loopContinueDepths = append(ctx.loopContinueDepths, continueDepth)
 		ctx.loopDeferDepths = append(ctx.loopDeferDepths, len(ctx.deferScopes))
 
 		if s.IsArena {
@@ -348,7 +351,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			return err
 		}
 		ctx.emitI32Eqz()
-		ctx.emitBrIf(1)
+		ctx.emitBrIf(uint32(ctx.labelDepth - breakDepth))
 		ctx.ir.FlushToBuffer(buf)
 
 		if ctx.emitter.memTrace {
@@ -372,11 +375,12 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			ctx.currentScopeID = prevScope
 		}
 
-		ctx.loopBodyDepths = ctx.loopBodyDepths[:len(ctx.loopBodyDepths)-1]
+		ctx.loopBreakDepths = ctx.loopBreakDepths[:len(ctx.loopBreakDepths)-1]
+		ctx.loopContinueDepths = ctx.loopContinueDepths[:len(ctx.loopContinueDepths)-1]
 		ctx.loopDeferDepths = ctx.loopDeferDepths[:len(ctx.loopDeferDepths)-1]
 		ctx.loopArenaLocals = ctx.loopArenaLocals[:len(ctx.loopArenaLocals)-1]
 
-		ctx.emitBr(0)
+		ctx.emitBr(uint32(ctx.labelDepth - continueDepth))
 		ctx.ir.FlushToBuffer(buf)
 
 		ctx.closeIRLabel(buf)
@@ -451,10 +455,10 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			}
 			ctx.loopArenaLocals = append(ctx.loopArenaLocals, savedArenaLocal)
 
-			ctx.openIRLabel(buf, 0x02)
-			ctx.openIRLabel(buf, 0x03)
-			ctx.loopBodyDepths = append(ctx.loopBodyDepths, ctx.labelDepth)
-			ctx.loopDeferDepths = append(ctx.loopDeferDepths, len(ctx.deferScopes))
+			ctx.openIRLabel(buf, 0x02) // outer block: break target
+			breakDepth := ctx.labelDepth
+			ctx.openIRLabel(buf, 0x03) // loop head
+			loopHeadDepth := ctx.labelDepth
 
 			if s.IsArena {
 				ctx.emitGetGlobal(0)
@@ -468,12 +472,26 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			ctx.emitGetLocal(endLocal)
 			ctx.ir.FlushToBuffer(buf)
 			buf.WriteByte(0x4e) // i32.ge_s: item >= end → exit loop
-			ctx.emitBrIf(1)
+			ctx.emitBrIf(uint32(ctx.labelDepth - breakDepth))
 			ctx.ir.FlushToBuffer(buf)
+
+			ctx.openIRLabel(buf, 0x02) // continue target: block around body
+			continueDepth := ctx.labelDepth
+
+			ctx.loopBreakDepths = append(ctx.loopBreakDepths, breakDepth)
+			ctx.loopContinueDepths = append(ctx.loopContinueDepths, continueDepth)
+			ctx.loopDeferDepths = append(ctx.loopDeferDepths, len(ctx.deferScopes))
 
 			if err := ctx.compileBlock(buf, s.Body); err != nil {
 				return err
 			}
+
+			ctx.loopBreakDepths = ctx.loopBreakDepths[:len(ctx.loopBreakDepths)-1]
+			ctx.loopContinueDepths = ctx.loopContinueDepths[:len(ctx.loopContinueDepths)-1]
+			ctx.loopDeferDepths = ctx.loopDeferDepths[:len(ctx.loopDeferDepths)-1]
+			ctx.loopArenaLocals = ctx.loopArenaLocals[:len(ctx.loopArenaLocals)-1]
+
+			ctx.closeIRLabel(buf) // close continue block
 
 			if s.IsArena {
 				ctx.emitGetLocal(savedArenaLocal)
@@ -481,10 +499,6 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				ctx.emitSetGlobal(0)
 				ctx.ir.FlushToBuffer(buf)
 			}
-
-			ctx.loopBodyDepths = ctx.loopBodyDepths[:len(ctx.loopBodyDepths)-1]
-			ctx.loopDeferDepths = ctx.loopDeferDepths[:len(ctx.loopDeferDepths)-1]
-			ctx.loopArenaLocals = ctx.loopArenaLocals[:len(ctx.loopArenaLocals)-1]
 
 			ctx.emitGetLocal(itemLocal)
 			ctx.ir.FlushToBuffer(buf)
@@ -494,11 +508,11 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			ctx.emitSetLocal(itemLocal)
 			ctx.ir.FlushToBuffer(buf)
 
-			ctx.emitBr(0)
+			ctx.emitBr(uint32(ctx.labelDepth - loopHeadDepth))
 			ctx.ir.FlushToBuffer(buf)
 
-			ctx.closeIRLabel(buf)
-			ctx.closeIRLabel(buf)
+			ctx.closeIRLabel(buf) // close loop head
+			ctx.closeIRLabel(buf) // close break target
 
 			if s.IsArena {
 				ctx.emitGetLocal(savedArenaLocal)
@@ -597,10 +611,10 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				emitCallIdx(buf, ctx.emitter.traceImports["loop_enter"])
 			}
 
-			ctx.openIRLabel(buf, 0x02)
-			ctx.openIRLabel(buf, 0x03)
-			ctx.loopBodyDepths = append(ctx.loopBodyDepths, ctx.labelDepth)
-			ctx.loopDeferDepths = append(ctx.loopDeferDepths, len(ctx.deferScopes))
+			ctx.openIRLabel(buf, 0x02) // outer block: break target
+			breakDepth := ctx.labelDepth
+			ctx.openIRLabel(buf, 0x03) // loop head
+			loopHeadDepth := ctx.labelDepth
 
 			if s.IsArena {
 				ctx.emitGetGlobal(0)
@@ -615,7 +629,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			ctx.ir.FlushToBuffer(buf)
 			buf.WriteByte(0x49)
 			ctx.emitI32Eqz()
-			ctx.emitBrIf(1)
+			ctx.emitBrIf(uint32(ctx.labelDepth - breakDepth))
 			ctx.ir.FlushToBuffer(buf)
 
 			if ctx.emitter.memTrace {
@@ -638,9 +652,23 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			ctx.emitSetLocal(itemLocal)
 			ctx.ir.FlushToBuffer(buf)
 
+			ctx.openIRLabel(buf, 0x02) // continue target: block around body
+			continueDepth := ctx.labelDepth
+
+			ctx.loopBreakDepths = append(ctx.loopBreakDepths, breakDepth)
+			ctx.loopContinueDepths = append(ctx.loopContinueDepths, continueDepth)
+			ctx.loopDeferDepths = append(ctx.loopDeferDepths, len(ctx.deferScopes))
+
 			if err := ctx.compileBlock(buf, s.Body); err != nil {
 				return err
 			}
+
+			ctx.loopBreakDepths = ctx.loopBreakDepths[:len(ctx.loopBreakDepths)-1]
+			ctx.loopContinueDepths = ctx.loopContinueDepths[:len(ctx.loopContinueDepths)-1]
+			ctx.loopDeferDepths = ctx.loopDeferDepths[:len(ctx.loopDeferDepths)-1]
+			ctx.loopArenaLocals = ctx.loopArenaLocals[:len(ctx.loopArenaLocals)-1]
+
+			ctx.closeIRLabel(buf) // close continue block
 
 			if s.IsArena {
 				ctx.emitGetLocal(savedArenaLocal)
@@ -648,10 +676,6 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				ctx.emitSetGlobal(0)
 				ctx.ir.FlushToBuffer(buf)
 			}
-
-			ctx.loopBodyDepths = ctx.loopBodyDepths[:len(ctx.loopBodyDepths)-1]
-			ctx.loopDeferDepths = ctx.loopDeferDepths[:len(ctx.loopDeferDepths)-1]
-			ctx.loopArenaLocals = ctx.loopArenaLocals[:len(ctx.loopArenaLocals)-1]
 
 			ctx.emitGetLocal(idxLocal)
 			ctx.ir.FlushToBuffer(buf)
@@ -661,15 +685,15 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			ctx.emitSetLocal(idxLocal)
 			ctx.ir.FlushToBuffer(buf)
 
-			ctx.emitBr(0)
+			ctx.emitBr(uint32(ctx.labelDepth - loopHeadDepth))
 			ctx.ir.FlushToBuffer(buf)
 
 			if ctx.emitter.memTrace {
 				ctx.currentScopeID = prevScope
 			}
 
-			ctx.closeIRLabel(buf)
-			ctx.closeIRLabel(buf)
+			ctx.closeIRLabel(buf) // close loop head
+			ctx.closeIRLabel(buf) // close break target
 
 			if s.IsArena {
 				ctx.emitGetLocal(savedArenaLocal)
@@ -762,8 +786,11 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		ctx.loopArenaLocals = append(ctx.loopArenaLocals, savedArenaLocal)
 
 		ctx.openIRLabel(buf, 0x02)
+		breakDepth := ctx.labelDepth
 		ctx.openIRLabel(buf, 0x03)
-		ctx.loopBodyDepths = append(ctx.loopBodyDepths, ctx.labelDepth)
+		continueDepth := ctx.labelDepth
+		ctx.loopBreakDepths = append(ctx.loopBreakDepths, breakDepth)
+		ctx.loopContinueDepths = append(ctx.loopContinueDepths, continueDepth)
 		ctx.loopDeferDepths = append(ctx.loopDeferDepths, len(ctx.deferScopes))
 
 		if s.IsArena {
@@ -786,7 +813,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		writeUleb128(buf, 2)
 		writeUleb128(buf, 0)
 		ctx.emitI32Eqz()
-		ctx.emitBrIf(1)
+		ctx.emitBrIf(uint32(ctx.labelDepth - breakDepth))
 		ctx.ir.FlushToBuffer(buf)
 
 		bindingType := s.VarType
@@ -835,11 +862,12 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			ctx.ir.FlushToBuffer(buf)
 		}
 
-		ctx.loopBodyDepths = ctx.loopBodyDepths[:len(ctx.loopBodyDepths)-1]
+		ctx.loopBreakDepths = ctx.loopBreakDepths[:len(ctx.loopBreakDepths)-1]
+		ctx.loopContinueDepths = ctx.loopContinueDepths[:len(ctx.loopContinueDepths)-1]
 		ctx.loopDeferDepths = ctx.loopDeferDepths[:len(ctx.loopDeferDepths)-1]
 		ctx.loopArenaLocals = ctx.loopArenaLocals[:len(ctx.loopArenaLocals)-1]
 
-		ctx.emitBr(0)
+		ctx.emitBr(uint32(ctx.labelDepth - continueDepth))
 		ctx.ir.FlushToBuffer(buf)
 
 		ctx.closeIRLabel(buf)
@@ -1037,7 +1065,7 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 		ctx.closeIRLabel(buf) // end outer block
 
 	case *LoopControlStmt:
-		if len(ctx.loopBodyDepths) == 0 {
+		if len(ctx.loopBreakDepths) == 0 {
 			return fmt.Errorf("%s: %s outside of any loop", s.Loc(), loopControlName(s.Continue))
 		}
 		if len(ctx.loopDeferDepths) > 0 {
@@ -1051,11 +1079,12 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 				ctx.ir.FlushToBuffer(buf)
 			}
 		}
-		depth := ctx.labelDepth - ctx.loopBodyDepths[len(ctx.loopBodyDepths)-1]
 		if s.Continue {
+			depth := ctx.labelDepth - ctx.loopContinueDepths[len(ctx.loopContinueDepths)-1]
 			ctx.emitBr(uint32(depth))
 		} else {
-			ctx.emitBr(uint32(depth + 1))
+			depth := ctx.labelDepth - ctx.loopBreakDepths[len(ctx.loopBreakDepths)-1]
+			ctx.emitBr(uint32(depth))
 		}
 		ctx.ir.FlushToBuffer(buf)
 	}

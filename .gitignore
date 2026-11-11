@@ -109,3 +109,6 @@ codebase.txt
 
 # Wrangler
 .
+
+# external libraries
+_external

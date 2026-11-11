@@ -17,15 +17,15 @@ max_file_size: 512000
 
 # Group mode mappings
 groups:
-  cli: full
-  compiler: full
+  cli: signatures
+  compiler: signatures
   wasm_binary: signatures
-  lsp: full
+  lsp: signatures
   formatter: signatures
   wasm_sandbox: full
   tests: signatures
   docs: full
-  editors: full
+  editors: signatures
 
 dirs:
   # CLI Entrypoints & Commands
@@ -87,7 +87,7 @@ dirs:
 
   # Language Integration Test Suite
   tests:
-    enabled: true
+    enabled: false
     group: tests
     extensions:
       - ube
@@ -104,5 +104,5 @@ dirs:
   
   # Editor
   editors:
-    enabled: true
+    enabled: false
     group: editors

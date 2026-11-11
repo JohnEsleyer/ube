@@ -682,13 +682,19 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 		writeUleb128(buf, baseLocal)
 
 	case *SliceInitExpr:
+		width := int32(4)
+		storeOp := byte(0x36)
+		storeAlign := uint32(2)
+		if e.Elem != nil {
+			width, _, storeOp, storeAlign = sliceElemInfo(e.Elem)
+		}
 		elemCount := len(e.Elements)
 		capCount := elemCount
 		if capCount < 4 {
 			capCount = 4
 		}
 		dataLocal := ctx.allocLocal(valTypeI32)
-		ctx.emitAlloc(buf, int32(capCount*4), dataLocal)
+		ctx.emitAlloc(buf, int32(capCount)*width, dataLocal)
 
 		for i, el := range e.Elements {
 			buf.WriteByte(0x20)
@@ -696,9 +702,9 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			if err := ctx.compileExpr(buf, el); err != nil {
 				return err
 			}
-			buf.WriteByte(0x36)
-			writeUleb128(buf, 2)
-			writeUleb128(buf, uint32(i*4))
+			buf.WriteByte(storeOp)
+			writeUleb128(buf, storeAlign)
+			writeUleb128(buf, uint32(int32(i)*width))
 		}
 
 		headerLocal := ctx.allocLocal(valTypeI32)
@@ -1540,9 +1546,10 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 				case "pop":
 					width := int32(4)
 					loadOp := byte(0x28)
+					storeOp := byte(0x36)
 					loadAlign := uint32(2)
 					if st, isSlice := mem.TargetType.(SliceType); isSlice {
-						width, loadOp, _, loadAlign = sliceElemInfo(st.Elem)
+						width, loadOp, storeOp, loadAlign = sliceElemInfo(st.Elem)
 					}
 
 					slLocal := ctx.allocLocal(valTypeI32)
@@ -1552,8 +1559,12 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 					buf.WriteByte(0x21)
 					writeUleb128(buf, slLocal)
 
+					optSize := int32(8)
+					if width > 4 {
+						optSize = 16
+					}
 					optHdr := ctx.allocLocal(valTypeI32)
-					ctx.emitAlloc(buf, 8, optHdr)
+					ctx.emitAlloc(buf, optSize, optHdr)
 
 					// if header.len == 0 { optHdr[0] = 0 } else { ... }
 					buf.WriteByte(0x20)
@@ -1622,8 +1633,8 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 					buf.WriteByte(loadOp)
 					writeUleb128(buf, loadAlign)
 					writeUleb128(buf, 0)
-					buf.WriteByte(0x36)
-					writeUleb128(buf, 2)
+					buf.WriteByte(storeOp)
+					writeUleb128(buf, loadAlign)
 					writeUleb128(buf, 4)
 
 					buf.WriteByte(0x0b) // end if
