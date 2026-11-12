@@ -566,32 +566,14 @@ func (ctx *fnContext) compileStmt(buf *bytes.Buffer, stmt Stmt) error {
 			ctx.ir.FlushToBuffer(buf)
 
 			// Element width and load opcode depend on the slice/array
-			// element type. []u8 (and string) iterate byte-wise, while
-			// []i64/f64 need 8-byte loads.
+			// element type via sliceElemInfo.
 			elemWidth := int32(4)
 			loadOp := byte(0x28) // i32.load
 			loadAlign := uint32(2)
 			itemWasm := byte(valTypeI32)
 			if s.ItemType != nil {
-				switch s.ItemType.String() {
-				case "u8", "i8", "bool":
-					elemWidth = 1
-					loadOp = 0x2d // i32.load8_u
-					loadAlign = 0
-				case "i64", "u64":
-					elemWidth = 8
-					loadOp = 0x29 // i64.load
-					loadAlign = 3
-					itemWasm = valTypeI64
-				case "f64":
-					elemWidth = 8
-					loadOp = 0x2b // f64.load
-					loadAlign = 3
-					itemWasm = valTypeF64
-				case "f32":
-					loadOp = 0x2a // f32.load
-					itemWasm = valTypeF32
-				}
+				elemWidth, loadOp, _, loadAlign = sliceElemInfo(s.ItemType)
+				itemWasm = wasmTypeOrDefault(s.ItemType)
 			}
 			itemLocal := ctx.allocLocal(itemWasm)
 			ctx.locals[s.ItemName] = itemLocal
