@@ -66,9 +66,6 @@ const (
 	secCode     = byte(10)
 	secData     = byte(11)
 
-	scratchCiovec = 0  // Offset 0..7: ciovec { ptr: i32, len: i32 }
-	scratchNwrite = 8  // Offset 8..11: nwritten i32
-	scratchItoa   = 16 // Offset 16..47: itoa string buffer
 	staticDataOff = 64 // Offset 64..: static string literals and headers
 )
 
@@ -85,32 +82,30 @@ type importMeta struct {
 }
 
 type wasmEmitter struct {
-	types          [][]byte
-	typeMap        map[string]uint32
-	imports        []importMeta
-	funcs          []uint32
-	codeBodies     [][]byte
-	data           []byte
-	dataOffset     uint32
-	fnIndices      map[string]uint32
-	methodIndices  map[string]uint32
-	fnReturns      map[string]UbeType
-	wasiImports    map[string]uint32
-	fdWriteIdx     uint32
-	clockTimeIdx   uint32
-	structs        map[string]structMeta
-	structFields   map[string][]FieldDecl
-	enums          map[string][]VariantDecl
-	traits         map[string]*TraitDecl
-	typeIDs        map[string]int32
-	moduleAliases  map[string]string
-	trueHeader     uint32
-	falseHeader    uint32
-	memTrace       bool
-	traceImports   map[string]uint32
-	nextScopeID    int32
-	TraceScopes    []TraceScopeInfo
-	cabiReallocIdx uint32
+	types         [][]byte
+	typeMap       map[string]uint32
+	imports       []importMeta
+	funcs         []uint32
+	codeBodies    [][]byte
+	data          []byte
+	dataOffset    uint32
+	fnIndices     map[string]uint32
+	methodIndices map[string]uint32
+	fnReturns     map[string]UbeType
+	hostLayer     HostLayer
+	abiLayer      AbiLayer
+	structs       map[string]structMeta
+	structFields  map[string][]FieldDecl
+	enums         map[string][]VariantDecl
+	traits        map[string]*TraitDecl
+	typeIDs       map[string]int32
+	moduleAliases map[string]string
+	trueHeader    uint32
+	falseHeader   uint32
+	memTrace      bool
+	traceImports  map[string]uint32
+	nextScopeID   int32
+	TraceScopes   []TraceScopeInfo
 }
 
 func newWasmEmitter() *wasmEmitter {
@@ -119,7 +114,6 @@ func newWasmEmitter() *wasmEmitter {
 		fnIndices:     make(map[string]uint32),
 		methodIndices: make(map[string]uint32),
 		fnReturns:     make(map[string]UbeType),
-		wasiImports:   make(map[string]uint32),
 		structs:       make(map[string]structMeta),
 		structFields:  make(map[string][]FieldDecl),
 		enums:         make(map[string][]VariantDecl),
@@ -225,44 +219,17 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 		}
 	}
 
-	// 1. Register WASI snapshot preview1 imports
-	fdWriteType := e.registerType([]byte{valTypeI32, valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
-	e.fdWriteIdx = 0
-	e.imports = append(e.imports, importMeta{
-		module:  "wasi_snapshot_preview1",
-		name:    "fd_write",
-		typeIdx: fdWriteType,
-	})
-
-	clockTimeType := e.registerType([]byte{valTypeI32, valTypeI64, valTypeI32}, []byte{valTypeI32})
-	e.clockTimeIdx = 1
-	e.imports = append(e.imports, importMeta{
-		module:  "wasi_snapshot_preview1",
-		name:    "clock_time_get",
-		typeIdx: clockTimeType,
-	})
-	e.wasiImports["fd_write"] = e.fdWriteIdx
-	e.wasiImports["clock_time_get"] = e.clockTimeIdx
-
-	// Additional WASI preview1 imports used by std/fs and std/io. Registering
-	// them up-front keeps the emitter's raw syscall intrinsics simple.
-	e.registerWasiImport("fd_read", []byte{valTypeI32, valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
-	e.registerWasiImport("fd_close", []byte{valTypeI32}, []byte{valTypeI32})
-	e.registerWasiImport("fd_sync", []byte{valTypeI32}, []byte{valTypeI32})
-	e.registerWasiImport("fd_seek", []byte{valTypeI32, valTypeI64, valTypeI32, valTypeI32}, []byte{valTypeI32})
-	e.registerWasiImport("fd_filestat_get", []byte{valTypeI32, valTypeI32}, []byte{valTypeI32})
-	e.registerWasiImport("path_open", []byte{valTypeI32, valTypeI32, valTypeI32, valTypeI32, valTypeI32, valTypeI64, valTypeI64, valTypeI32, valTypeI32}, []byte{valTypeI32})
-	e.registerWasiImport("path_create_directory", []byte{valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
-	e.registerWasiImport("path_unlink_file", []byte{valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
-	e.registerWasiImport("path_remove_directory", []byte{valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
-	e.registerWasiImport("path_filestat_get", []byte{valTypeI32, valTypeI32, valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})
-	e.registerWasiImport("proc_exit", []byte{valTypeI32}, []byte{})
-	// Process/environment primitives used by std/env and std/random.
-	e.registerWasiImport("args_sizes_get", []byte{valTypeI32, valTypeI32}, []byte{valTypeI32})
-	e.registerWasiImport("args_get", []byte{valTypeI32, valTypeI32}, []byte{valTypeI32})
-	e.registerWasiImport("environ_sizes_get", []byte{valTypeI32, valTypeI32}, []byte{valTypeI32})
-	e.registerWasiImport("environ_get", []byte{valTypeI32, valTypeI32}, []byte{valTypeI32})
-	e.registerWasiImport("random_get", []byte{valTypeI32, valTypeI32}, []byte{valTypeI32})
+	// 1. Register target imports via the registered host layer. The core
+	// emitter is target-agnostic: WASI Preview 1 syscalls (and any other
+	// host ABI) are contributed by pkg/targets/* layers.
+	host := activeHostLayer()
+	if host == nil {
+		return nil, fmt.Errorf(
+			"no host syscall layer registered for WebAssembly emission; " +
+				"import a target backend such as _ \"github.com/JohnEsleyer/ube/pkg/targets/wasi1\"")
+	}
+	e.hostLayer = host
+	host.RegisterImports(e)
 
 	if e.memTrace {
 		e.registerTraceImport("arena_enter", []byte{valTypeI32, valTypeI32}, []byte{})
@@ -282,12 +249,12 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 			if modName == "" {
 				modName = "env"
 			}
-			if modName == "wasi_snapshot_preview1" {
-				if idx, exists := e.wasiImports[ext.Name]; exists {
-					e.fnIndices[ext.Name] = idx
-					e.fnReturns[ext.Name] = ext.RetType
-					continue
-				}
+			// Deduplicate against imports already registered by the active
+			// target layers (e.g. wasi_snapshot_preview1 syscalls).
+			if idx, exists := e.ImportIndexOf(modName, ext.Name); exists {
+				e.fnIndices[ext.Name] = idx
+				e.fnReturns[ext.Name] = ext.RetType
+				continue
 			}
 			var params []byte
 			for _, p := range ext.Params {
@@ -404,43 +371,49 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 		}
 	}
 
-	// Register helper function indices
-	printIntIdx := funcOffset + uint32(len(fnDecls))
-	e.fnIndices["__print_i32"] = printIntIdx
+	// Assemble the helper pipeline: shared target-agnostic helpers first,
+	// then the target layers' contributions (print runtime, ABI helpers).
+	layerHelpers := []HelperSpec{
+		{Name: "__str_concat", Params: []byte{valTypeI32, valTypeI32}, Results: []byte{valTypeI32}},
+		{Name: "__str_eq", Params: []byte{valTypeI32, valTypeI32}, Results: []byte{valTypeI32}},
+		{Name: "__i32_to_str", Params: []byte{valTypeI32}, Results: []byte{valTypeI32}},
+		{Name: "__i64_to_str", Params: []byte{valTypeI64}, Results: []byte{valTypeI32}},
+		{Name: "__f64_to_str", Params: []byte{valTypeF64}, Results: []byte{valTypeI32}},
+	}
+	sharedBodies := map[string]func() []byte{
+		"__str_concat": e.buildStrConcatFunc,
+		"__str_eq":     e.buildStrEqFunc,
+		"__i32_to_str": e.buildIntToStrFunc,
+		"__i64_to_str": e.buildInt64ToStrFunc,
+		"__f64_to_str": e.buildF64ToStrFunc,
+	}
+	// ABI helpers (Canonical ABI) then host helpers (print runtime).
+	if abi := activeAbiLayer(); abi != nil {
+		e.abiLayer = abi
+		layerHelpers = append(layerHelpers, abi.Helpers()...)
+	}
+	layerHelpers = append(layerHelpers, host.Helpers()...)
 
-	printInt64Idx := printIntIdx + 1
-	e.fnIndices["__print_i64"] = printInt64Idx
+	// Register helper indices in order. Function-section type entries are
+	// appended below in the same order as the code bodies (user functions,
+	// then helpers, then _start).
+	helperIdx := funcOffset + uint32(len(fnDecls))
+	for _, spec := range layerHelpers {
+		e.fnIndices[spec.Name] = helperIdx
+		helperIdx++
+	}
 
-	printStrIdx := printInt64Idx + 1
-	e.fnIndices["__print_str"] = printStrIdx
-
-	printBoolIdx := printStrIdx + 1
-	e.fnIndices["__print_bool"] = printBoolIdx
-
-	strConcatIdx := printBoolIdx + 1
-	e.fnIndices["__str_concat"] = strConcatIdx
-
-	strEqIdx := strConcatIdx + 1
-	e.fnIndices["__str_eq"] = strEqIdx
-
-	intToStrIdx := strEqIdx + 1
-	e.fnIndices["__i32_to_str"] = intToStrIdx
-
-	int64ToStrIdx := intToStrIdx + 1
-	e.fnIndices["__i64_to_str"] = int64ToStrIdx
-
-	f64ToStrIdx := int64ToStrIdx + 1
-	e.fnIndices["__f64_to_str"] = f64ToStrIdx
-
-	printF64Idx := f64ToStrIdx + 1
-	e.fnIndices["__print_f64"] = printF64Idx
-
-	startIdx := printF64Idx + 1
+	// _start runs last: the module entrypoint exporting the WASI command ABI.
+	startIdx := helperIdx
 	e.fnIndices["_start"] = startIdx
 
-	cabiReallocIdx := startIdx + 1
-	e.cabiReallocIdx = cabiReallocIdx
-	e.fnIndices["cabi_realloc"] = cabiReallocIdx
+	// Validate the print helper ABI contract between the core emitter and
+	// the host layer.
+	for _, name := range RequiredPrintHelpers {
+		if _, ok := e.fnIndices[name]; !ok {
+			return nil, fmt.Errorf("host layer %q does not provide required helper %s", host.Name(), name)
+		}
+	}
 
 	// Register types for defined functions
 	for _, fn := range fnDecls {
@@ -458,19 +431,11 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 		e.funcs = append(e.funcs, e.registerType(params, results))
 	}
 
-	// Helper types:
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{}))                                   // __print_i32
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI64, valTypeI32}, []byte{}))                                   // __print_i64
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32, valTypeI32}, []byte{}))                       // __print_str
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{}))                                   // __print_bool
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{valTypeI32}))                         // __str_concat
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32}, []byte{valTypeI32}))                         // __str_eq
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32}, []byte{valTypeI32}))                                     // __i32_to_str
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI64}, []byte{valTypeI32}))                                     // __i64_to_str
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeF64}, []byte{valTypeI32}))                                     // __f64_to_str
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeF64, valTypeI32}, []byte{}))                                   // __print_f64
-	e.funcs = append(e.funcs, e.registerType([]byte{}, []byte{}))                                                         // _start
-	e.funcs = append(e.funcs, e.registerType([]byte{valTypeI32, valTypeI32, valTypeI32, valTypeI32}, []byte{valTypeI32})) // cabi_realloc
+	// Helper types, in code-body order.
+	for _, spec := range layerHelpers {
+		e.funcs = append(e.funcs, e.registerType(spec.Params, spec.Results))
+	}
+	e.funcs = append(e.funcs, e.registerType([]byte{}, []byte{})) // _start
 
 	// Compile user function bodies
 	for _, fn := range fnDecls {
@@ -481,19 +446,26 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 		e.codeBodies = append(e.codeBodies, body)
 	}
 
-	// Compile built-in helper bodies
-	e.codeBodies = append(e.codeBodies, e.buildPrintIntFunc())
-	e.codeBodies = append(e.codeBodies, e.buildPrintInt64Func())
-	e.codeBodies = append(e.codeBodies, e.buildPrintStrFunc())
-	e.codeBodies = append(e.codeBodies, e.buildPrintBoolFunc())
-	e.codeBodies = append(e.codeBodies, e.buildStrConcatFunc())
-	e.codeBodies = append(e.codeBodies, e.buildStrEqFunc())
-	e.codeBodies = append(e.codeBodies, e.buildIntToStrFunc())
-	e.codeBodies = append(e.codeBodies, e.buildInt64ToStrFunc())
-	e.codeBodies = append(e.codeBodies, e.buildF64ToStrFunc())
-	e.codeBodies = append(e.codeBodies, e.buildPrintF64Func())
+	// Compile helper bodies: shared helpers, then layer-contributed helpers
+	// (cabi_realloc from the ABI layer, print runtime from the host layer).
+	for _, spec := range layerHelpers {
+		if build, ok := sharedBodies[spec.Name]; ok {
+			e.codeBodies = append(e.codeBodies, build())
+			continue
+		}
+		if e.abiLayer != nil {
+			if body := e.abiLayer.BuildHelper(e, spec.Name); body != nil {
+				e.codeBodies = append(e.codeBodies, body)
+				continue
+			}
+		}
+		if body := host.BuildHelper(e, spec.Name); body != nil {
+			e.codeBodies = append(e.codeBodies, body)
+			continue
+		}
+		return nil, fmt.Errorf("helper %s has no body from the shared emitter or the target layers", spec.Name)
+	}
 	e.codeBodies = append(e.codeBodies, e.buildStartFunc(e.fnIndices["main"]))
-	e.codeBodies = append(e.codeBodies, e.buildCabiReallocFunc())
 
 	coreBytes, err := e.assembleBinary()
 	if err != nil {
@@ -807,7 +779,17 @@ func (e *wasmEmitter) assembleBinary() ([]byte, error) {
 	writeSection(&out, secGlobal, globSec.Bytes())
 
 	var expSec bytes.Buffer
-	writeUleb128(&expSec, 3)
+	// ABI layer exports (cabi_realloc etc.) come from the target.
+	abiExportIdx := map[string]uint32{}
+	if e.abiLayer != nil {
+		for _, exp := range e.abiLayer.Exports() {
+			if idx, ok := e.fnIndices[exp.Helper]; ok {
+				abiExportIdx[exp.Export] = idx
+			}
+		}
+	}
+	totalExports := 2 + len(abiExportIdx) // memory, _start, abi exports
+	writeUleb128(&expSec, uint32(totalExports))
 
 	writeString(&expSec, "memory")
 	expSec.WriteByte(0x02)
@@ -817,9 +799,17 @@ func (e *wasmEmitter) assembleBinary() ([]byte, error) {
 	expSec.WriteByte(0x00)
 	writeUleb128(&expSec, e.fnIndices["_start"])
 
-	writeString(&expSec, "cabi_realloc")
-	expSec.WriteByte(0x00)
-	writeUleb128(&expSec, e.cabiReallocIdx)
+	// Deterministic order: sort ABI export names.
+	abiNames := make([]string, 0, len(abiExportIdx))
+	for name := range abiExportIdx {
+		abiNames = append(abiNames, name)
+	}
+	sort.Strings(abiNames)
+	for _, name := range abiNames {
+		writeString(&expSec, name)
+		expSec.WriteByte(0x00)
+		writeUleb128(&expSec, abiExportIdx[name])
+	}
 	writeSection(&out, secExport, expSec.Bytes())
 
 	var codeSec bytes.Buffer

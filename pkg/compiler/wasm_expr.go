@@ -2086,21 +2086,6 @@ func (ctx *fnContext) compileExpr(buf *bytes.Buffer, expr Expr) error {
 			if name == "print" || name == "println" {
 				return ctx.compilePrint(buf, e.Args, name == "println")
 			}
-			if name == "time_now_ms" {
-				buf.WriteByte(0x41)
-				writeSleb128(buf, 0)
-				buf.WriteByte(0x42)
-				writeSleb128(buf, 1000)
-				buf.WriteByte(0x41)
-				writeSleb128(buf, scratchNwrite)
-				buf.WriteByte(0x10)
-				writeUleb128(buf, ctx.emitter.clockTimeIdx)
-				buf.WriteByte(0x1a)
-
-				buf.WriteByte(0x41)
-				writeSleb128(buf, 100)
-				return nil
-			}
 
 			fnIdx, exists := ctx.emitter.fnIndices[name]
 			if !exists {

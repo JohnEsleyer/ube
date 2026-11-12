@@ -7,6 +7,9 @@ import (
 	"testing"
 
 	"github.com/JohnEsleyer/ube/pkg/compiler"
+	// Register the WASI Preview 1/0.2 backend layers for emission.
+	_ "github.com/JohnEsleyer/ube/pkg/targets/wasi1"
+	_ "github.com/JohnEsleyer/ube/pkg/targets/wasi2"
 )
 
 func writeUbeFile(t *testing.T, dir, rel, source string) string {
