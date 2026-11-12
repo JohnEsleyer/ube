@@ -1,0 +1,41 @@
+package wasi
+
+// File: std/wasi2/wasi/wasi.ube
+
+// std/wasi2/wasi - WASI 0.2 (Preview 2) component-model bindings.
+//
+// This is the lowest-level standard library layer for the wasi2 target. The
+// compiler routes 'std/wasi' here when building with --target=wasi2; the WASI
+// Preview 1 (0.1) counterpart lives in std/wasi1/wasi.
+//
+// Handles are obtained through the wasi:cli component interfaces and are
+// resolved by the host component environment at instantiation time. Unlike
+// the Preview 1 bindings, these are descriptor-style handles, not POSIX file
+// descriptors, and stream operations go through wasi:io/streams.
+
+// Component-model stream status codes.
+pub fn WASI_02_STREAM_SUCCESS() -> i32 { return 0 }
+pub fn WASI_02_STREAM_CLOSED() -> i32 { return 1 }
+pub fn WASI_02_STREAM_LAST_OPERATION_FAILED() -> i32 { return 2 }
+
+// Component-model error codes surfaced by the CLI world.
+pub fn WASI_02_SUCCESS() -> i32 { return 0 }
+
+// Raw component-model handle accessors. The core module imports these from
+// the wasi:cli namespaces; the component wrapper lifts them into the WASI
+// 0.2 world during instantiation.
+extern "wasi:cli/stdin@0.2.0" fn get_stdin() -> i32
+extern "wasi:cli/stdout@0.2.0" fn get_stdout() -> i32
+extern "wasi:cli/stderr@0.2.0" fn get_stderr() -> i32
+
+pub fn wasi_stdin() -> i32 {
+    return get_stdin()
+}
+
+pub fn wasi_stdout() -> i32 {
+    return get_stdout()
+}
+
+pub fn wasi_stderr() -> i32 {
+    return get_stderr()
+}

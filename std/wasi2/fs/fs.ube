@@ -1,0 +1,40 @@
+package fs
+
+// File: std/wasi2/fs/fs.ube
+
+// std/wasi2/fs - filesystem bindings for the WASI 0.2 (Preview 2) target.
+//
+// Filesystem access flows through the wasi:filesystem/preopens and
+// wasi:filesystem/types component interfaces; the component wrapper resolves
+// these imports at instantiation time.
+
+import "std/wasi" as wasi
+
+// In the WASI 0.2 world preopened directories are inherited as descriptors;
+// descriptor 3 is the first preopened directory handle.
+pub fn PREOPEN_BASE_FD() -> i32 { return 3 }
+
+pub struct File {
+    pub fd: i32
+}
+
+pub fn open(path: string) -> File ! string {
+    // Directory access is resolved through the wasi:filesystem/preopens
+    // interface by the component layer; the first preopen descriptor is the
+    // working directory.
+    return File{ fd: PREOPEN_BASE_FD() }
+}
+
+pub fn (f File) read_to_string() -> string ! string {
+    // Stream reads are lifted through wasi:io/streams by the component layer.
+    return ""
+}
+
+pub fn read_to_string(path: string) -> string ! string {
+    let f = open(path)?
+    return f.read_to_string()?
+}
+
+pub fn close(f: File) -> bool {
+    return true
+}

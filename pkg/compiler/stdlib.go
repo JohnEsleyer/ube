@@ -16,11 +16,48 @@ type sourceFile struct {
 	source string
 }
 
+// stdlibRoutes maps a requested standard library package key to the package
+// key that actually provides it for the active compilation target. It is how
+// target-sensitive packages (std/wasi, std/fs, std/io) resolve to the WASI
+// Preview 1 tree (std/wasi1) or the WASI 0.2 component-model tree (std/wasi2)
+// without target-specific logic leaking into the frontend.
+//
+// The default routes pick the WASI Preview 1 tree so that tools which do not
+// select a target (check, fmt, lsp, tests) keep resolving the classic
+// packages. CLI builds call SetStdlibRoutes with the selected backend's
+// StdlibOverlay() before loading any package.
+var stdlibRoutes = map[string]string{
+	"wasi": "wasi1/wasi",
+	"fs":   "wasi1/fs",
+}
+
+// SetStdlibRoutes installs the target overlay used for standard library
+// resolution. Nil/empty entries are ignored so partial overlays are safe.
+func SetStdlibRoutes(routes map[string]string) {
+	for key, target := range routes {
+		if key != "" && target != "" {
+			stdlibRoutes[key] = target
+		}
+	}
+}
+
+// resolveStdKey applies the active target routes to a package key.
+func resolveStdKey(key string) string {
+	if mapped, ok := stdlibRoutes[key]; ok {
+		return mapped
+	}
+	return key
+}
+
 // stdlibPackageSources returns all .ube files for a standard library package.
 // An on-disk directory wins so local development can override the embedded
 // standard library; otherwise the embedded FS is used.
 func stdlibPackageSources(key string, entryDir string) ([]sourceFile, error) {
 	cleanKey := strings.TrimSuffix(key, ".ube")
+	// Route target-sensitive packages (std/wasi, std/fs, std/io) to the
+	// active target's standard library tree before resolving from disk or
+	// from the embedded FS.
+	cleanKey = resolveStdKey(cleanKey)
 
 	var roots []string
 	roots = append(roots, ".")

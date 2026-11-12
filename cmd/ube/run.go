@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/JohnEsleyer/ube/pkg/compiler"
+	"github.com/JohnEsleyer/ube/pkg/targets"
 )
 
 func run(args []string) error {
@@ -58,6 +58,9 @@ func run(args []string) error {
 	stopAnim := startSpinner("compiling " + fileName + "...")
 	start := time.Now()
 
+	backend := getBackend(runTarget)
+	applyStdlibOverlay(backend)
+
 	ast, _, err := loadAndCheck(target)
 	if err != nil {
 		stopAnim()
@@ -77,11 +80,7 @@ func run(args []string) error {
 		tracker = newMemoryTracker()
 	}
 
-	cfg := compiler.EmitWasmConfig{
-		MemTrace: memTrace,
-		Target:   runTarget,
-	}
-	wasmBytes, err := compiler.EmitWasmWithConfig(ast, cfg)
+	wasmBytes, err := backend.Compile(ast, targets.TargetConfig{MemTrace: memTrace})
 	if err != nil {
 		stopAnim()
 		return fmt.Errorf("failed to compile to WebAssembly: %w", err)

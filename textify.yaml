@@ -16,9 +16,18 @@ max_file_size: 512000
 #   - compiler
 
 # Group mode mappings
+# Target-partitioned groups let developers and AI agents extract exactly one
+# compilation stack:
+#   textify start --group=wasi1  -> WASI Preview 1 backend + stdlib only
+#   textify start --group=wasi2  -> WASI 0.2 component-model backend + stdlib only
+#   textify start --group=frontend -> target-agnostic compiler frontend + CLI
 groups:
   cli: signatures
   compiler: signatures
+  frontend: full
+  wasi1: full
+  wasi2: full
+  common_std: signatures
   wasm_binary: signatures
   lsp: signatures
   formatter: signatures
@@ -31,16 +40,17 @@ dirs:
   # CLI Entrypoints & Commands
   cmd/ube:
     enabled: true
-    group: cli
+    group: frontend
     extensions:
       - go
       - txt
       - md
 
-  # Core Compiler Engine (Frontend, Typechecker, Monomorphizer, Wasm Emitter)
+  # Core Compiler Engine (Frontend, Typechecker, Monomorphizer, IR)
+  # Target-agnostic: emits core WebAssembly modules only, no WASI specifics.
   pkg/compiler:
     enabled: true
-    group: compiler
+    group: frontend
     extensions:
       - go
       - ube
@@ -50,9 +60,52 @@ dirs:
   # Low-Level WebAssembly Binary Encoder & LEB128 Buffers
   pkg/wasm:
     enabled: true
-    group: wasm_binary
+    group: frontend
     extensions:
       - go
+      - txt
+      - md
+
+  # Target Backend Contract (Backend interface + TargetConfig)
+  pkg/targets:
+    enabled: true
+    group: frontend
+    extensions:
+      - go
+      - txt
+      - md
+
+  # WASI Preview 1 (0.1) Target Backend & Stdlib
+  pkg/targets/wasi1:
+    enabled: true
+    group: wasi1
+    extensions:
+      - go
+      - txt
+      - md
+
+  std/wasi1:
+    enabled: true
+    group: wasi1
+    extensions:
+      - ube
+      - txt
+      - md
+
+  # WASI 0.2 (Preview 2) Component-Model Target Backend & Stdlib
+  pkg/targets/wasi2:
+    enabled: true
+    group: wasi2
+    extensions:
+      - go
+      - txt
+      - md
+
+  std/wasi2:
+    enabled: true
+    group: wasi2
+    extensions:
+      - ube
       - txt
       - md
 

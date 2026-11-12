@@ -1,10 +1,11 @@
 package fs
 
-// File: std/fs/fs.ube
+// File: std/wasi1/fs/fs.ube
 
-// std/fs - filesystem and path utilities for Ube.
+// std/wasi1/fs - filesystem and path utilities for Ube on the WASI Preview 1
+// (0.1) target.
 //
-// File I/O is backed by WASI preview1. The raw syscalls live in std/wasi;
+// File I/O is backed by WASI preview1. The raw syscalls live in std/wasi1/wasi;
 // this module provides a safe, ergonomic, zero-copy streaming API on top.
 //
 // All paths are resolved relative to the runtime's preopened working

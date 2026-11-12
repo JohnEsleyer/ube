@@ -14,7 +14,6 @@ import (
 
 type EmitWasmConfig struct {
 	MemTrace bool
-	Target   string // "wasi1" (default) or "wasi2"
 }
 
 type TraceScopeInfo struct {
@@ -41,9 +40,6 @@ func EmitWasmWithConfig(prog *Program, cfg EmitWasmConfig) (wasmBytes []byte, er
 	}()
 	emitter := newWasmEmitter()
 	emitter.memTrace = cfg.MemTrace
-	if cfg.Target != "" {
-		emitter.target = cfg.Target
-	}
 	return emitter.compile(prog)
 }
 
@@ -114,7 +110,6 @@ type wasmEmitter struct {
 	traceImports   map[string]uint32
 	nextScopeID    int32
 	TraceScopes    []TraceScopeInfo
-	target         string
 	cabiReallocIdx uint32
 }
 
@@ -134,7 +129,6 @@ func newWasmEmitter() *wasmEmitter {
 		traceImports:  make(map[string]uint32),
 		dataOffset:    staticDataOff,
 		nextScopeID:   1,
-		target:        "wasi1",
 	}
 }
 
@@ -504,9 +498,6 @@ func (e *wasmEmitter) compile(prog *Program) ([]byte, error) {
 	coreBytes, err := e.assembleBinary()
 	if err != nil {
 		return nil, err
-	}
-	if e.target == "wasi2" {
-		return wrapCoreModuleIntoComponent(coreBytes)
 	}
 	return coreBytes, nil
 }

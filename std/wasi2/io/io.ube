@@ -1,0 +1,47 @@
+package io
+
+// File: std/wasi2/io/io.ube
+
+// std/wasi2/io - stream-based I/O for the WASI 0.2 (Preview 2) target.
+//
+// Input and output are modeled as component-model streams (wasi:io/streams)
+// rather than POSIX file descriptors. Handles are acquired from the
+// wasi:cli world via std/wasi2/wasi.
+
+import "std/wasi" as wasi
+
+pub struct InputStream {
+    pub handle: i32
+}
+
+pub struct OutputStream {
+    pub handle: i32
+}
+
+pub fn stdin() -> InputStream {
+    return InputStream{ handle: wasi.wasi_stdin() }
+}
+
+pub fn stdout() -> OutputStream {
+    return OutputStream{ handle: wasi.wasi_stdout() }
+}
+
+pub fn stderr() -> OutputStream {
+    return OutputStream{ handle: wasi.wasi_stderr() }
+}
+
+pub fn (s InputStream) handle() -> i32 {
+    return s.handle
+}
+
+pub fn (s OutputStream) handle() -> i32 {
+    return s.handle
+}
+
+pub fn (s InputStream) is_closed(status: i32) -> bool {
+    return status == wasi.WASI_02_STREAM_CLOSED()
+}
+
+pub fn (s OutputStream) is_closed(status: i32) -> bool {
+    return status == wasi.WASI_02_STREAM_CLOSED()
+}

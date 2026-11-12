@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/JohnEsleyer/ube/pkg/compiler"
+	"github.com/JohnEsleyer/ube/pkg/targets"
 )
 
 var buildOptLevel string
@@ -42,6 +42,9 @@ func build(args []string) error {
 	stopAnim := startSpinner("compiling " + fileName + "...")
 	start := time.Now()
 
+	backend := getBackend(buildTarget)
+	applyStdlibOverlay(backend)
+
 	ast, _, err := loadAndCheck(file)
 	if err != nil {
 		stopAnim()
@@ -55,10 +58,9 @@ func build(args []string) error {
 		return err
 	}
 
-	cfg := compiler.EmitWasmConfig{
-		Target: buildTarget,
-	}
-	wasmBytes, err := compiler.EmitWasmWithConfig(ast, cfg)
+	wasmBytes, err := backend.Compile(ast, targets.TargetConfig{
+		OptLevel: buildOptLevel,
+	})
 	if err != nil {
 		stopAnim()
 		return fmt.Errorf("failed to compile to WebAssembly: %w", err)

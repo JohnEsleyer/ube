@@ -2,7 +2,10 @@ package wasi
 
 // File: std/wasi/wasi.ube
 
-// std/wasi - raw WASI preview1 bindings and safe byte/runtime bridges.
+// std/wasi1/wasi - raw WASI Preview 1 (0.1) bindings and safe byte/runtime
+// bridges. This package is only resolved when compiling with
+// --target=wasi1; the WASI 0.2 component-model counterpart lives in
+// std/wasi2/wasi.
 //
 // This is the lowest-level standard library layer. Application code should
 // prefer std/io and std/fs; these helpers exist so those modules can talk to
@@ -17,10 +20,6 @@ pub fn wasi_stdin() -> i32 { return 0 }
 pub fn wasi_stdout() -> i32 { return 1 }
 pub fn wasi_stderr() -> i32 { return 2 }
 pub fn wasi_esuccess() -> i32 { return 0 }
-
-// WASI 0.2 Component Model stream status codes
-pub fn WASI_02_STREAM_SUCCESS() -> i32 { return 0 }
-pub fn WASI_02_STREAM_CLOSED() -> i32  { return 1 }
 
 // Preopened working directory file descriptor in WASI runtimes.
 pub fn WASI_AT_FDCWD() -> i32 { return 3 }
