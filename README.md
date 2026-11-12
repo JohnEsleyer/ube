@@ -840,8 +840,8 @@ fn main() {
 | `std/bytes` | `ByteBuffer` with `write_u8`, `write_bytes`, `get`, `to_slice`. |
 | `std/collections` | Generic `Stack[T]` (with `next()` iterator) and `SimpleMap[K, V]`. |
 | `std/io` | `Reader`/`Writer`/`Seeker`/`Flusher` traits; `Stdin`, `Stdout`, `Stderr`, `File`, `BytesReader`, `StringReader`, `BufReader`, `BufWriter`, `BytesWriter`. |
-| `std/fs` | `Path`, `OpenOptions`, `File`, `Metadata`, `DirEntry`; read/write/create/remove helpers. |
-| `std/wasi` | Raw preview-1 WASI imports and fd/errno constants. |
+| `std/fs` | `Path`, `OpenOptions`, `File`, `Metadata`, `DirEntry`; read/write/create/remove helpers. Target-routed: resolves to `std/wasi1/fs` or `std/wasi2/fs` per build target. |
+| `std/wasi` | Raw WASI bindings and fd/errno constants. Target-routed: resolves to `std/wasi1/wasi` (Preview 1 syscalls, default) or `std/wasi2/wasi` (WASI 0.2 component-model bindings). |
 
 ---
 
@@ -849,8 +849,8 @@ fn main() {
 
 | Command | Example | Description |
 | :--- | :--- | :--- |
-| `ube build` | `ube build` / `ube build -o app.wasm` | Compiles the current package (or a directory/file target) into a standalone WebAssembly module. Directory targets default to `<dirname>.wasm`; file targets default to `<stem>.wasm`. |
-| `ube run` | `ube run` / `ube run path/to/pkg` | Compiles and executes a `package main` via the embedded Wasmtime runtime. Bare `ube <dir>` is shorthand for `ube run <dir>`. Supports `--mem-trace` for lexical regional arena profiling. |
+| `ube build` | `ube build` / `ube build -o app.wasm` | Compiles the current package (or a directory/file target) into a standalone WebAssembly module. Directory targets default to `<dirname>.wasm`; file targets default to `<stem>.wasm`. Use `--target=wasi1` (default) for WASI Preview 1 or `--target=wasi2` (aliases `--wasi2`, `--target=component`) for a WASI 0.2 component-model module (validate with `wasm-tools validate`). |
+| `ube run` | `ube run` / `ube run path/to/pkg` | Compiles and executes a `package main` via the embedded Wasmtime runtime. Bare `ube <dir>` is shorthand for `ube run <dir>`. Supports `--target=wasi1` / `--target=wasi2` and `--mem-trace` for lexical regional arena profiling. |
 | `ube check` | `ube check` / `ube check path/to/pkg` | Static audit of syntax, types, affine moves, package imports, and arena invariants (features resilient parser recovery). Defaults to the current directory. |
 | `ube check --ai` | `ube check --ai path/to/pkg` | Static audit with resilient recovery, outputting dense diagnostics across all errors. |
 | `ube test` | `ube test` / `ube test ./...` | Runs `test_*` functions per package directory, including all `_test.ube` files in that package. `./...` walks nested packages. |
