@@ -1,3 +1,5 @@
+// File: pkg/targets/wasi2/cabi.go
+
 package wasi2
 
 // cabi.go defines the Canonical ABI contract the wasi2 core module must

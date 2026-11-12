@@ -1,32 +1,35 @@
 package wasi
 
 // File: std/wasi2/wasi/wasi.ube
-
-// std/wasi2/wasi - WASI 0.2 (Preview 2) component-model bindings.
 //
-// This is the lowest-level standard library layer for the wasi2 target. The
-// compiler routes 'std/wasi' here when building with --target=wasi2; the WASI
-// Preview 1 (0.1) counterpart lives in std/wasi1/wasi.
-//
-// Handles are obtained through the wasi:cli component interfaces and are
-// resolved by the host component environment at instantiation time. Unlike
-// the Preview 1 bindings, these are descriptor-style handles, not POSIX file
-// descriptors, and stream operations go through wasi:io/streams.
+// std/wasi2/wasi - Direct WASI 0.2 (Preview 2) Component Model WIT bindings.
+// Lowered directly without preview1 syscall compatibility shims.
 
-// Component-model stream status codes.
+// Stream status codes
 pub fn WASI_02_STREAM_SUCCESS() -> i32 { return 0 }
 pub fn WASI_02_STREAM_CLOSED() -> i32 { return 1 }
 pub fn WASI_02_STREAM_LAST_OPERATION_FAILED() -> i32 { return 2 }
 
-// Component-model error codes surfaced by the CLI world.
 pub fn WASI_02_SUCCESS() -> i32 { return 0 }
 
-// Raw component-model handle accessors. The core module imports these from
-// the wasi:cli namespaces; the component wrapper lifts them into the WASI
-// 0.2 world during instantiation.
+// Direct WIT Component Model Host Imports
 extern "wasi:cli/stdin@0.2.0" fn get_stdin() -> i32
 extern "wasi:cli/stdout@0.2.0" fn get_stdout() -> i32
 extern "wasi:cli/stderr@0.2.0" fn get_stderr() -> i32
+extern "wasi:cli/exit@0.2.0" fn exit(status: i32)
+
+extern "wasi:io/streams@0.2.0" fn blocking_write_and_flush(handle: i32, ptr: i32, len: i32, ret_ptr: i32)
+extern "wasi:io/streams@0.2.0" fn blocking_read(handle: i32, max_len: i64, ret_ptr: i32)
+extern "wasi:io/streams@0.2.0" fn resource_drop_output_stream(handle: i32)
+extern "wasi:io/streams@0.2.0" fn resource_drop_input_stream(handle: i32)
+
+extern "wasi:clocks/monotonic-clock@0.2.0" fn now() -> i64
+extern "wasi:clocks/wall-clock@0.2.0" fn wall_now(ret_ptr: i32)
+extern "wasi:random/random@0.2.0" fn get_random_bytes(len: i64, ret_ptr: i32)
+
+extern "wasi:filesystem/preopens@0.2.0" fn get_directories(ret_ptr: i32)
+extern "wasi:filesystem/types@0.2.0" fn read_via_stream(desc: i32, offset: i64) -> i32
+extern "wasi:filesystem/types@0.2.0" fn write_via_stream(desc: i32, offset: i64) -> i32
 
 pub fn wasi_stdin() -> i32 {
     return get_stdin()
@@ -38,4 +41,36 @@ pub fn wasi_stdout() -> i32 {
 
 pub fn wasi_stderr() -> i32 {
     return get_stderr()
+}
+
+pub fn wasi_exit(status: i32) {
+    exit(status)
+}
+
+pub fn blocking_write_and_flush(handle: i32, ptr: i32, len: i32, ret_ptr: i32) {
+    blocking_write_and_flush(handle, ptr, len, ret_ptr)
+}
+
+pub fn blocking_read(handle: i32, max_len: i64, ret_ptr: i32) {
+    blocking_read(handle, max_len, ret_ptr)
+}
+
+pub fn resource_drop_output_stream(handle: i32) {
+    resource_drop_output_stream(handle)
+}
+
+pub fn resource_drop_input_stream(handle: i32) {
+    resource_drop_input_stream(handle)
+}
+
+pub fn clock_now() -> i64 {
+    return now()
+}
+
+pub fn read_via_stream(desc: i32, offset: i64) -> i32 {
+    return read_via_stream(desc, offset)
+}
+
+pub fn write_via_stream(desc: i32, offset: i64) -> i32 {
+    return write_via_stream(desc, offset)
 }

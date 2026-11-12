@@ -23,8 +23,8 @@ max_file_size: 512000
 #   textify start --group=frontend -> target-agnostic compiler frontend + CLI
 groups:
   cli: signatures
-  compiler: signatures
-  frontend: full
+  compiler: fll
+  frontend: signatures
   wasi1: full
   wasi2: full
   common_std: signatures
@@ -129,7 +129,7 @@ dirs:
 
   # WebAssembly Isolated Sandbox & Reference Laboratory
   _wasm_sandbox:
-    enabled: true
+    enabled: false
     group: wasm_sandbox
     extensions:
       - ube
@@ -149,8 +149,10 @@ dirs:
 
   # Architecture Specifications, Post-Mortems & Plans
   _dev:
-    enabled: false
+    enabled: true
     group: docs
+    include:
+      - /docs
     extensions:
       - txt
       - md
@@ -159,3 +161,4 @@ dirs:
   editors:
     enabled: false
     group: editors
+    extensions:

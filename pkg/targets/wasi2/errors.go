@@ -1,3 +1,6 @@
+// File: pkg/targets/wasi2/error.go
+
+
 package wasi2
 
 import "errors"

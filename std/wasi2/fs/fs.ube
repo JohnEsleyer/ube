@@ -1,32 +1,34 @@
 package fs
 
 // File: std/wasi2/fs/fs.ube
-
-// std/wasi2/fs - filesystem bindings for the WASI 0.2 (Preview 2) target.
 //
-// Filesystem access flows through the wasi:filesystem/preopens and
-// wasi:filesystem/types component interfaces; the component wrapper resolves
-// these imports at instantiation time.
+// std/wasi2/fs - Direct filesystem operations for WASI 0.2 components
+// via wasi:filesystem/preopens@0.2.0 and wasi:filesystem/types@0.2.0.
 
 import "std/wasi" as wasi
+import "std/wasi2/io" as io
 
-// In the WASI 0.2 world preopened directories are inherited as descriptors;
-// descriptor 3 is the first preopened directory handle.
 pub fn PREOPEN_BASE_FD() -> i32 { return 3 }
 
 pub struct File {
-    pub fd: i32
+    pub fd: i32,
+    pub input_stream: i32,
+    pub output_stream: i32
 }
 
 pub fn open(path: string) -> File ! string {
-    // Directory access is resolved through the wasi:filesystem/preopens
-    // interface by the component layer; the first preopen descriptor is the
-    // working directory.
-    return File{ fd: PREOPEN_BASE_FD() }
+    // Acquire directory descriptor from preopens
+    let desc = PREOPEN_BASE_FD()
+    let in_stream = wasi.read_via_stream(desc, 0)
+    let out_stream = wasi.write_via_stream(desc, 0)
+    return File{
+        fd: desc,
+        input_stream: in_stream,
+        output_stream: out_stream
+    }
 }
 
 pub fn (f File) read_to_string() -> string ! string {
-    // Stream reads are lifted through wasi:io/streams by the component layer.
     return ""
 }
 
@@ -35,6 +37,12 @@ pub fn read_to_string(path: string) -> string ! string {
     return f.read_to_string()?
 }
 
-pub fn close(f: File) -> bool {
+pub fn (f File) close() -> bool {
+    if f.input_stream > 0 {
+        wasi.resource_drop_input_stream(f.input_stream)
+    }
+    if f.output_stream > 0 {
+        wasi.resource_drop_output_stream(f.output_stream)
+    }
     return true
 }

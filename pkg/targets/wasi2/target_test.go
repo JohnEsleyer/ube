@@ -1,3 +1,5 @@
+// File: pkg/targets/wasi2/target_test.go
+
 package wasi2_test
 
 import (
@@ -96,6 +98,9 @@ func TestWasi2StdlibOverlayRoutesTargetPackages(t *testing.T) {
 func TestWasi2StdlibPackagesCompile(t *testing.T) {
 	compiler.SetStdlibRoutes(wasi2.NewBackend().StdlibOverlay())
 	defer compiler.SetStdlibRoutes(wasi1.NewBackend().StdlibOverlay())
+	compiler.RegisterHostLayer(wasi2.NewHostLayer())
+	defer compiler.RegisterHostLayer(wasi1.NewHostLayer())
+	compiler.RegisterAbiLayer(wasi2.NewAbiLayer())
 
 	tmpDir := t.TempDir()
 	src := `package main
@@ -125,12 +130,15 @@ fn main() {
 	if err := tc.Check(prog); err != nil {
 		t.Fatalf("typechecking std/wasi2 packages: %v", err)
 	}
-	out, err := compiler.EmitWasm(prog)
+	out, err := wasi2.NewBackend().Compile(prog, targets.TargetConfig{})
 	if err != nil {
 		t.Fatalf("emitting std/wasi2 packages: %v", err)
 	}
 	if len(out) < 8 {
 		t.Fatal("emitted module too small")
+	}
+	if !bytes.Equal(out[:8], componentMagic) {
+		t.Fatalf("expected component magic %x, got %x", componentMagic, out[:8])
 	}
 }
 

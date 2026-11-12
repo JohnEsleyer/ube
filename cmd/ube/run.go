@@ -8,7 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JohnEsleyer/ube/pkg/compiler"
 	"github.com/JohnEsleyer/ube/pkg/targets"
+	"github.com/JohnEsleyer/ube/pkg/targets/wasi1"
+	"github.com/JohnEsleyer/ube/pkg/targets/wasi2"
 )
 
 func run(args []string) error {
@@ -60,6 +63,13 @@ func run(args []string) error {
 
 	backend := getBackend(runTarget)
 	applyStdlibOverlay(backend)
+
+	if runTarget == "wasi2" {
+		compiler.RegisterHostLayer(wasi2.NewHostLayer())
+		compiler.RegisterAbiLayer(wasi2.NewAbiLayer())
+	} else {
+		compiler.RegisterHostLayer(wasi1.NewHostLayer())
+	}
 
 	ast, _, err := loadAndCheck(target)
 	if err != nil {

@@ -1,3 +1,5 @@
+// File: pkg/targets/wasi2/target.go
+
 package wasi2
 
 import (
@@ -18,10 +20,14 @@ func (b *Wasi2Backend) Name() string {
 	return targets.TargetWasi02
 }
 
-// Compile lowers the checked program to a core WebAssembly module (with
-// Canonical ABI cabi_realloc support) and wraps it into a WASI 0.2
-// Component Model binary.
+// Compile lowers the checked program to a core WebAssembly module with
+// direct WIT component imports, cabi_realloc export, and wraps it into a
+// WebAssembly Component Model binary.
 func (b *Wasi2Backend) Compile(prog *compiler.Program, cfg targets.TargetConfig) ([]byte, error) {
+	// Activate WASI 0.2 Host and ABI layers
+	compiler.RegisterHostLayer(NewHostLayer())
+	compiler.RegisterAbiLayer(NewAbiLayer())
+
 	coreBytes, err := compiler.EmitWasmWithConfig(prog, compiler.EmitWasmConfig{
 		MemTrace: cfg.MemTrace,
 	})

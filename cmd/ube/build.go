@@ -7,7 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JohnEsleyer/ube/pkg/compiler"
 	"github.com/JohnEsleyer/ube/pkg/targets"
+	"github.com/JohnEsleyer/ube/pkg/targets/wasi1"
+	"github.com/JohnEsleyer/ube/pkg/targets/wasi2"
 )
 
 var buildOptLevel string
@@ -44,6 +47,13 @@ func build(args []string) error {
 
 	backend := getBackend(buildTarget)
 	applyStdlibOverlay(backend)
+
+	if buildTarget == "wasi2" {
+		compiler.RegisterHostLayer(wasi2.NewHostLayer())
+		compiler.RegisterAbiLayer(wasi2.NewAbiLayer())
+	} else {
+		compiler.RegisterHostLayer(wasi1.NewHostLayer())
+	}
 
 	ast, _, err := loadAndCheck(file)
 	if err != nil {

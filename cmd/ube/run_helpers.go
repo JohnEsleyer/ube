@@ -139,6 +139,10 @@ func wasiExitStatus(err error) (int, bool) {
 // wasmRuntimeCommand returns an external Wasm runtime command if one is
 // available on the host.
 func wasmRuntimeCommand(wasmPath string, args []string) (*exec.Cmd, error) {
+	if wasmtime, err := exec.LookPath("wasmtime"); err == nil {
+		cmdArgs := append([]string{"run", "--wasm", "component-model=y", wasmPath}, args...)
+		return exec.Command(wasmtime, cmdArgs...), nil
+	}
 	for _, runtime := range []string{"wasmtime", "wasmer"} {
 		if path, err := exec.LookPath(runtime); err == nil {
 			return exec.Command(path, append([]string{wasmPath}, args...)...), nil
