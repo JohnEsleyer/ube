@@ -259,7 +259,9 @@ func (ctx *fnContext) callReturnsValue(call *CallExpr) bool {
 	}
 	if id, ok := call.Callee.(*IdentExpr); ok {
 		switch id.Name {
-		case "println", "print", "sleep_ms", "exit_process":
+		case "println", "print", "sleep_ms", "exit_process",
+			"wasi2_exit", "wasi2_stream_drop_input_raw",
+			"wasi2_stream_drop_output_raw", "wasi2_desc_drop_raw":
 			return false
 		}
 		if ret, ok := ctx.emitter.fnReturns[id.Name]; ok {

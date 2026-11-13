@@ -140,7 +140,7 @@ func wasiExitStatus(err error) (int, bool) {
 // available on the host.
 func wasmRuntimeCommand(wasmPath string, args []string) (*exec.Cmd, error) {
 	if wasmtime, err := exec.LookPath("wasmtime"); err == nil {
-		cmdArgs := append([]string{"run", "--wasm", "component-model=y", wasmPath}, args...)
+		cmdArgs := append([]string{"run", "--dir=.", "--wasm", "component-model=y", wasmPath}, args...)
 		return exec.Command(wasmtime, cmdArgs...), nil
 	}
 	for _, runtime := range []string{"wasmtime", "wasmer"} {

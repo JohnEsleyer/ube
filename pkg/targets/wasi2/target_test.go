@@ -5,7 +5,9 @@ package wasi2_test
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/JohnEsleyer/ube/pkg/compiler"
@@ -20,15 +22,15 @@ var componentMagic = []byte{0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00}
 // coreMagic is the core WebAssembly module prefix (\0asm + version 1).
 var coreMagic = []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
 
-func helloProgram(t *testing.T) *compiler.Program {
+func compileWasi2Source(t *testing.T, src string) []byte {
 	t.Helper()
-	tmpDir := t.TempDir()
-	src := `package main
+	compiler.SetStdlibRoutes(wasi2.NewBackend().StdlibOverlay())
+	defer compiler.SetStdlibRoutes(wasi1.NewBackend().StdlibOverlay())
+	compiler.RegisterHostLayer(wasi2.NewHostLayer())
+	defer compiler.RegisterHostLayer(wasi1.NewHostLayer())
+	compiler.RegisterAbiLayer(wasi2.NewAbiLayer())
 
-fn main() {
-	println("hello wasi2")
-}
-`
+	tmpDir := t.TempDir()
 	mainFile := filepath.Join(tmpDir, "main.ube")
 	if err := os.WriteFile(mainFile, []byte(src), 0644); err != nil {
 		t.Fatal(err)
@@ -41,7 +43,21 @@ fn main() {
 	if err := tc.Check(prog); err != nil {
 		t.Fatalf("typecheck: %v", err)
 	}
-	return prog
+	out, err := wasi2.NewBackend().Compile(prog, targets.TargetConfig{})
+	if err != nil {
+		t.Fatalf("wasi2 compile: %v", err)
+	}
+	if wasmTools, err := exec.LookPath("wasm-tools"); err == nil {
+		compPath := filepath.Join(tmpDir, "out.wasm")
+		if err := os.WriteFile(compPath, out, 0644); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(wasmTools, "validate", "--features", "component-model", compPath)
+		if valOut, valErr := cmd.CombinedOutput(); valErr != nil {
+			t.Fatalf("wasm-tools validate failed: %v\n%s", valErr, string(valOut))
+		}
+	}
+	return out
 }
 
 func TestWasi2BackendName(t *testing.T) {
@@ -51,21 +67,23 @@ func TestWasi2BackendName(t *testing.T) {
 }
 
 func TestWasi2CompileProducesComponentBinary(t *testing.T) {
-	prog := helloProgram(t)
-	out, err := wasi2.NewBackend().Compile(prog, targets.TargetConfig{})
-	if err != nil {
-		t.Fatalf("wasi2 compile: %v", err)
-	}
+	out := compileWasi2Source(t, `package main
+
+fn main() {
+	println("hello wasi2")
+}
+`)
 	if len(out) < 8 {
 		t.Fatalf("component binary too small: %d bytes", len(out))
 	}
 	if !bytes.Equal(out[:8], componentMagic) {
 		t.Fatalf("expected component magic %x, got %x", componentMagic, out[:8])
 	}
-	// The core module must be embedded as the component's core module
-	// section: the wrapper emits section id 1 with the core binary inside.
 	if !bytes.Contains(out, coreMagic) {
 		t.Fatal("component binary does not embed a core WebAssembly module")
+	}
+	if !bytes.Contains(out, []byte("wasi:cli/run@0.2.0")) {
+		t.Fatal("component binary does not export wasi:cli/run@0.2.0")
 	}
 }
 
@@ -93,52 +111,82 @@ func TestWasi2StdlibOverlayRoutesTargetPackages(t *testing.T) {
 	}
 }
 
-// TestWasi2StdlibPackagesCompile verifies the std/wasi2 tree typechecks and
-// emits cleanly when the wasi2 overlay is active.
 func TestWasi2StdlibPackagesCompile(t *testing.T) {
-	compiler.SetStdlibRoutes(wasi2.NewBackend().StdlibOverlay())
-	defer compiler.SetStdlibRoutes(wasi1.NewBackend().StdlibOverlay())
-	compiler.RegisterHostLayer(wasi2.NewHostLayer())
-	defer compiler.RegisterHostLayer(wasi1.NewHostLayer())
-	compiler.RegisterAbiLayer(wasi2.NewAbiLayer())
-
-	tmpDir := t.TempDir()
-	src := `package main
+	out := compileWasi2Source(t, `package main
 
 import "std/wasi" as wasi
 import "std/fs" as fs
 import "std/io" as io
+import "std/time" as time
+import "std/env" as env
+import "std/random" as random
 
 fn main() {
 	let handle = wasi.wasi_stdout()
 	let preopen = fs.PREOPEN_BASE_FD()
 	let stream = io.stdout()
 	let closed = stream.is_closed(wasi.WASI_02_STREAM_CLOSED())
-	println(handle + preopen)
+	stream.close()
+	wasi.resource_drop_output_stream(handle)
+
+	let out = io.io_stdout()
+	let _io = out.write_line("io works") or_else 0
+	let _time = time.unix_now()
+	let _env = env.args()
+	let _rand = random.entropy_u64()
+	let p = fs.path_join("dir", "file.txt")
+	println(preopen)
 	println(closed)
+	println(p)
 }
-`
-	mainFile := filepath.Join(tmpDir, "main.ube")
-	if err := os.WriteFile(mainFile, []byte(src), 0644); err != nil {
-		t.Fatal(err)
-	}
-	prog, err := compiler.NewModuleLoader().Load(mainFile)
-	if err != nil {
-		t.Fatalf("loading std/wasi2 packages: %v", err)
-	}
-	tc := compiler.NewTypechecker()
-	if err := tc.Check(prog); err != nil {
-		t.Fatalf("typechecking std/wasi2 packages: %v", err)
-	}
-	out, err := wasi2.NewBackend().Compile(prog, targets.TargetConfig{})
-	if err != nil {
-		t.Fatalf("emitting std/wasi2 packages: %v", err)
-	}
-	if len(out) < 8 {
-		t.Fatal("emitted module too small")
-	}
+`)
 	if !bytes.Equal(out[:8], componentMagic) {
 		t.Fatalf("expected component magic %x, got %x", componentMagic, out[:8])
+	}
+}
+
+func TestWasi2MainResultErrorPrintCompiles(t *testing.T) {
+	out := compileWasi2Source(t, `package main
+
+fn main() -> i32 ! string {
+	return error("boom")
+}
+`)
+	if !bytes.Equal(out[:8], componentMagic) {
+		t.Fatalf("expected component magic %x, got %x", componentMagic, out[:8])
+	}
+}
+
+func TestWasi2ExecuteWithWasmtimeIfAvailable(t *testing.T) {
+	wasmtimeBin, err := exec.LookPath("wasmtime")
+	if err != nil {
+		t.Skip("wasmtime not installed on PATH; skipping execution check")
+	}
+	out := compileWasi2Source(t, `package main
+
+import "std/fs" as fs
+
+fn main() -> i32 ! string {
+	fs.write_string("wasi2_test.txt", "hello component")?
+	let got = fs.read_to_string("wasi2_test.txt")?
+	fs.remove_file("wasi2_test.txt")?
+	println(got)
+	return 0
+}
+`)
+	tmpDir := t.TempDir()
+	compPath := filepath.Join(tmpDir, "app.wasm")
+	if err := os.WriteFile(compPath, out, 0644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(wasmtimeBin, "run", "--dir="+tmpDir, "--wasm", "component-model=y", compPath)
+	cmd.Dir = tmpDir
+	runOut, runErr := cmd.CombinedOutput()
+	if runErr != nil {
+		t.Fatalf("wasmtime run failed: %v\n%s", runErr, string(runOut))
+	}
+	if !strings.Contains(string(runOut), "hello component") {
+		t.Fatalf("expected 'hello component' in output, got %q", string(runOut))
 	}
 }
 

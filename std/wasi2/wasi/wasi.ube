@@ -2,8 +2,9 @@ package wasi
 
 // File: std/wasi2/wasi/wasi.ube
 //
-// std/wasi2/wasi - Direct WASI 0.2 (Preview 2) Component Model WIT bindings.
-// Lowered directly without preview1 syscall compatibility shims.
+// std/wasi2/wasi - Direct WASI 0.2 (Preview 2) Component Model bindings.
+// Lowered directly to wasi:*@0.2.0 interfaces via compiler intrinsics without
+// Preview 1 compatibility shims.
 
 // Stream status codes
 pub fn WASI_02_STREAM_SUCCESS() -> i32 { return 0 }
@@ -12,65 +13,161 @@ pub fn WASI_02_STREAM_LAST_OPERATION_FAILED() -> i32 { return 2 }
 
 pub fn WASI_02_SUCCESS() -> i32 { return 0 }
 
-// Direct WIT Component Model Host Imports
-extern "wasi:cli/stdin@0.2.0" fn get_stdin() -> i32
-extern "wasi:cli/stdout@0.2.0" fn get_stdout() -> i32
-extern "wasi:cli/stderr@0.2.0" fn get_stderr() -> i32
-extern "wasi:cli/exit@0.2.0" fn exit(status: i32)
+// Standard descriptor constants (used by std/io Stdin/Stdout/Stderr)
+pub fn WASI_STDIN() -> i32 { return 0 }
+pub fn WASI_STDOUT() -> i32 { return 1 }
+pub fn WASI_STDERR() -> i32 { return 2 }
+pub fn WASI_ESUCCESS() -> i32 { return 0 }
 
-extern "wasi:io/streams@0.2.0" fn blocking_write_and_flush(handle: i32, ptr: i32, len: i32, ret_ptr: i32)
-extern "wasi:io/streams@0.2.0" fn blocking_read(handle: i32, max_len: i64, ret_ptr: i32)
-extern "wasi:io/streams@0.2.0" fn resource_drop_output_stream(handle: i32)
-extern "wasi:io/streams@0.2.0" fn resource_drop_input_stream(handle: i32)
+pub fn WASI_SEEK_SET() -> i32 { return 0 }
+pub fn WASI_SEEK_CUR() -> i32 { return 1 }
+pub fn WASI_SEEK_END() -> i32 { return 2 }
 
-extern "wasi:clocks/monotonic-clock@0.2.0" fn now() -> i64
-extern "wasi:clocks/wall-clock@0.2.0" fn wall_now(ret_ptr: i32)
-extern "wasi:random/random@0.2.0" fn get_random_bytes(len: i64, ret_ptr: i32)
+// WASI 0.2 wasi:filesystem/types open-flags bitmask
+pub fn WASI_O_CREAT() -> i32     { return 1 }
+pub fn WASI_O_DIRECTORY() -> i32 { return 2 }
+pub fn WASI_O_EXCL() -> i32      { return 4 }
+pub fn WASI_O_TRUNC() -> i32     { return 8 }
 
-extern "wasi:filesystem/preopens@0.2.0" fn get_directories(ret_ptr: i32)
-extern "wasi:filesystem/types@0.2.0" fn read_via_stream(desc: i32, offset: i64) -> i32
-extern "wasi:filesystem/types@0.2.0" fn write_via_stream(desc: i32, offset: i64) -> i32
+// WASI 0.2 wasi:filesystem/types path-flags bitmask
+pub fn WASI_PATH_SYMLINK_FOLLOW() -> i32 { return 1 }
+
+// WASI 0.2 wasi:filesystem/types descriptor-flags bitmask
+pub fn WASI_DESC_READ() -> i32  { return 1 }
+pub fn WASI_DESC_WRITE() -> i32 { return 2 }
 
 pub fn wasi_stdin() -> i32 {
-    return get_stdin()
+	return wasi2_stdin()
 }
 
 pub fn wasi_stdout() -> i32 {
-    return get_stdout()
+	return wasi2_stdout()
 }
 
 pub fn wasi_stderr() -> i32 {
-    return get_stderr()
+	return wasi2_stderr()
 }
 
 pub fn wasi_exit(status: i32) {
-    exit(status)
+	wasi2_exit(status)
 }
 
-pub fn blocking_write_and_flush(handle: i32, ptr: i32, len: i32, ret_ptr: i32) {
-    blocking_write_and_flush(handle, ptr, len, ret_ptr)
+pub fn stream_write_bytes(handle: i32, data: []u8) -> i32 {
+	return wasi2_stream_write_raw(handle, data)
 }
 
-pub fn blocking_read(handle: i32, max_len: i64, ret_ptr: i32) {
-    blocking_read(handle, max_len, ret_ptr)
+pub fn stream_read_bytes(handle: i32, mut buf: []u8) -> i32 {
+	return wasi2_stream_read_raw(handle, mut buf)
 }
 
 pub fn resource_drop_output_stream(handle: i32) {
-    resource_drop_output_stream(handle)
+	wasi2_stream_drop_output_raw(handle)
 }
 
 pub fn resource_drop_input_stream(handle: i32) {
-    resource_drop_input_stream(handle)
+	wasi2_stream_drop_input_raw(handle)
 }
 
 pub fn clock_now() -> i64 {
-    return now()
+	return wasi2_clock_now()
 }
 
 pub fn read_via_stream(desc: i32, offset: i64) -> i32 {
-    return read_via_stream(desc, offset)
+	return wasi2_read_via_stream_raw(desc, offset)
 }
 
 pub fn write_via_stream(desc: i32, offset: i64) -> i32 {
-    return write_via_stream(desc, offset)
+	return wasi2_write_via_stream_raw(desc, offset)
+}
+
+pub fn preopen_dir() -> i32 {
+	return wasi2_preopen_dir_raw()
+}
+
+pub fn open_at_raw(dir_fd: i32, path: string, path_flags: i32, open_flags: i32, desc_flags: i32) -> i32 {
+	return wasi2_open_at_raw(dir_fd, path, path_flags, open_flags, desc_flags)
+}
+
+pub fn desc_read_raw(fd: i32, mut buf: []u8, offset: i64) -> i32 {
+	return wasi2_desc_read_raw(fd, mut buf, offset)
+}
+
+pub fn desc_write_raw(fd: i32, data: []u8, offset: i64) -> i32 {
+	return wasi2_desc_write_raw(fd, data, offset)
+}
+
+pub fn desc_stat_raw(fd: i32, mut out: [4]i64) -> i32 {
+	return wasi2_desc_stat_raw(fd, mut out)
+}
+
+pub fn path_stat_raw(dir_fd: i32, path: string, mut out: [4]i64) -> i32 {
+	return wasi2_path_stat_raw(dir_fd, path, mut out)
+}
+
+pub fn desc_sync_raw(fd: i32) -> i32 {
+	return wasi2_desc_sync_raw(fd)
+}
+
+pub fn desc_drop_raw(fd: i32) {
+	wasi2_desc_drop_raw(fd)
+}
+
+pub fn create_dir_at_raw(dir_fd: i32, path: string) -> i32 {
+	return wasi2_create_dir_at_raw(dir_fd, path)
+}
+
+pub fn unlink_at_raw(dir_fd: i32, path: string) -> i32 {
+	return wasi2_unlink_at_raw(dir_fd, path)
+}
+
+pub fn remove_dir_at_raw(dir_fd: i32, path: string) -> i32 {
+	return wasi2_remove_dir_at_raw(dir_fd, path)
+}
+
+// -------------------------------------------------------------
+// Safe bridges compatible with shared std/io
+// -------------------------------------------------------------
+
+fn error_code_message(code: i32) -> string {
+	return f"WASI 0.2 error (code: {code})"
+}
+
+pub fn fd_write_bytes(fd: i32, data: []u8) -> i32 ! string {
+	let n = wasi_fd_write_raw(fd, data)
+	if n < 0 {
+		return error(error_code_message(-n - 1))
+	}
+	return n
+}
+
+pub fn fd_read_bytes(fd: i32, mut buf: []u8) -> i32 ! string {
+	let n = wasi_fd_read_raw(fd, mut buf)
+	if n < 0 {
+		return error(error_code_message(-n - 1))
+	}
+	return n
+}
+
+pub fn fd_read_raw(fd: i32, mut buf: []u8) -> i32 {
+	return wasi_fd_read_raw(fd, mut buf)
+}
+
+pub fn fd_write_raw(fd: i32, data: []u8) -> i32 {
+	return wasi_fd_write_raw(fd, data)
+}
+
+pub fn fd_write_string_raw(fd: i32, s: string) -> i32 {
+	return wasi_fd_write_string_raw(fd, s)
+}
+
+pub fn fd_close_raw(fd: i32) -> i32 {
+	wasi2_desc_drop_raw(fd)
+	return 0
+}
+
+pub fn fd_sync_raw(fd: i32) -> i32 {
+	if fd == 1 || fd == 2 || fd == 0 {
+		return 0
+	}
+	return wasi2_desc_sync_raw(fd)
 }

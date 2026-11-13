@@ -225,6 +225,57 @@ func NewTypechecker() *Typechecker {
 		RetType: i32,
 	}
 
+	i64SliceStat := ArrayType{Elem: i64, Size: 4}
+	tc.Global.Funcs["wasi2_stdin"] = FuncSignature{RetType: i32}
+	tc.Global.Funcs["wasi2_stdout"] = FuncSignature{RetType: i32}
+	tc.Global.Funcs["wasi2_stderr"] = FuncSignature{RetType: i32}
+	tc.Global.Funcs["wasi2_exit"] = FuncSignature{Params: []FieldDecl{{Name: "status", Type: i32}}, RetType: void}
+	tc.Global.Funcs["wasi2_stream_write_raw"] = FuncSignature{
+		Params:  []FieldDecl{{Name: "handle", Type: i32}, {Name: "data", Type: u8Slice}},
+		RetType: i32,
+	}
+	tc.Global.Funcs["wasi2_stream_read_raw"] = FuncSignature{
+		Params:  []FieldDecl{{Name: "handle", Type: i32}, {Name: "buf", Type: u8Slice, IsMut: true}},
+		RetType: i32,
+	}
+	tc.Global.Funcs["wasi2_stream_drop_input_raw"] = FuncSignature{Params: []FieldDecl{{Name: "handle", Type: i32}}, RetType: void}
+	tc.Global.Funcs["wasi2_stream_drop_output_raw"] = FuncSignature{Params: []FieldDecl{{Name: "handle", Type: i32}}, RetType: void}
+	tc.Global.Funcs["wasi2_clock_now"] = FuncSignature{RetType: i64}
+	tc.Global.Funcs["wasi2_preopen_dir_raw"] = FuncSignature{RetType: i32}
+	tc.Global.Funcs["wasi2_open_at_raw"] = FuncSignature{
+		Params: []FieldDecl{
+			{Name: "dir_fd", Type: i32},
+			{Name: "path", Type: str},
+			{Name: "path_flags", Type: i32},
+			{Name: "open_flags", Type: i32},
+			{Name: "desc_flags", Type: i32},
+		},
+		RetType: i32,
+	}
+	tc.Global.Funcs["wasi2_desc_read_raw"] = FuncSignature{
+		Params:  []FieldDecl{{Name: "fd", Type: i32}, {Name: "buf", Type: u8Slice, IsMut: true}, {Name: "offset", Type: i64}},
+		RetType: i32,
+	}
+	tc.Global.Funcs["wasi2_desc_write_raw"] = FuncSignature{
+		Params:  []FieldDecl{{Name: "fd", Type: i32}, {Name: "data", Type: u8Slice}, {Name: "offset", Type: i64}},
+		RetType: i32,
+	}
+	tc.Global.Funcs["wasi2_desc_stat_raw"] = FuncSignature{
+		Params:  []FieldDecl{{Name: "fd", Type: i32}, {Name: "out", Type: i64SliceStat, IsMut: true}},
+		RetType: i32,
+	}
+	tc.Global.Funcs["wasi2_path_stat_raw"] = FuncSignature{
+		Params:  []FieldDecl{{Name: "dir_fd", Type: i32}, {Name: "path", Type: str}, {Name: "out", Type: i64SliceStat, IsMut: true}},
+		RetType: i32,
+	}
+	tc.Global.Funcs["wasi2_desc_sync_raw"] = FuncSignature{Params: []FieldDecl{{Name: "fd", Type: i32}}, RetType: i32}
+	tc.Global.Funcs["wasi2_desc_drop_raw"] = FuncSignature{Params: []FieldDecl{{Name: "fd", Type: i32}}, RetType: void}
+	tc.Global.Funcs["wasi2_create_dir_at_raw"] = FuncSignature{Params: []FieldDecl{{Name: "dir_fd", Type: i32}, {Name: "path", Type: str}}, RetType: i32}
+	tc.Global.Funcs["wasi2_unlink_at_raw"] = FuncSignature{Params: []FieldDecl{{Name: "dir_fd", Type: i32}, {Name: "path", Type: str}}, RetType: i32}
+	tc.Global.Funcs["wasi2_remove_dir_at_raw"] = FuncSignature{Params: []FieldDecl{{Name: "dir_fd", Type: i32}, {Name: "path", Type: str}}, RetType: i32}
+	tc.Global.Funcs["wasi2_read_via_stream_raw"] = FuncSignature{Params: []FieldDecl{{Name: "fd", Type: i32}, {Name: "offset", Type: i64}}, RetType: i32}
+	tc.Global.Funcs["wasi2_write_via_stream_raw"] = FuncSignature{Params: []FieldDecl{{Name: "fd", Type: i32}, {Name: "offset", Type: i64}}, RetType: i32}
+
 	tc.Global.Funcs["format"] = FuncSignature{RetType: str}
 	tc.Global.Funcs["StringBuilder.append"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}}, RetType: void}
 	tc.Global.Funcs["StringBuilder.append_str"] = FuncSignature{Params: []FieldDecl{{Name: "s", Type: str}}, RetType: void}
